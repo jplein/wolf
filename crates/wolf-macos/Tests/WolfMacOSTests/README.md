@@ -47,21 +47,21 @@ Purpose: Hosts a view for view tests, renders it and samples what it drew, asser
 
 #### `LiveCore.swift`
 
-Purpose: Starts a real core over the staged Neovim for the view tests that need one. It asserts nothing, though it fails the calling test when the core cannot start.
+Purpose: Starts a real core over the staged Neovim for the view tests that need one. It asserts nothing.
 
 **Public API**
 
 - `LiveCore.start(initLua:)` — a core at 80 × 24 in a fresh working directory, attached, with `metrics` measured from the loaded config; `nil` with the test failed otherwise. `initLua` replaces the staged `init.lua`, such as a copy beside a vendored tree it self-locates.
 - `stagedInitLua()` — the staged `init.lua`, to copy; `nil` with the test failed when it does not resolve.
 - `stageFonts()` — registers the fonts for a coreless test.
-- `runfile(_:)` — the existing path a runfiles-relative variable names, resolved as `LiveCore` resolves its own; `nil` when unset or missing.
+- `runfile(_:)` — the existing path a runfiles-relative variable names; `nil` when unset or missing.
 - `openTerminal(_:)` — a session in Neovim's current window, as the bridge's `open_terminal` runs a command.
-- `waitFor(timeout:_:)` — spins the main run loop, so wakes reach the main queue while the test waits.
+- `waitFor(timeout:_:)` — spins the main run loop, so wakes reach the main queue while the test waits. `spin(timeout:until:)` and `scratchDirectory()` serve a test whose cores `TabCore.start` makes.
 - `shutdown()` — for the end of every test.
 
 **Decisions**
 
-- The environment is prepared once per process, before any core or config read: `WOLF_NVIM_BIN` from the staged tree, fresh `WOLF_STATE_DIR` and `WOLF_CONFIG_DIR`, so no test touches the user's state or preferences, `SHELL=/bin/sh`, so the drawer and a typed `:terminal` run a known shell, and the staged fonts registered. Once, because `setenv` races a concurrent `getenv`.
+- The environment is prepared once per process, before any core or config read: `WOLF_NVIM_BIN` from the staged tree, `WOLF_INIT_LUA` from the staged `init.lua`, fresh `WOLF_STATE_DIR` and `WOLF_CONFIG_DIR`, so no test touches the user's state or preferences, `SHELL=/bin/sh`, so the drawer and a typed `:terminal` run a known shell, and the staged fonts registered. Once, because `setenv` races a concurrent `getenv`.
 - A staged tree that does not resolve fails the test, naming the variable, rather than skipping: this target always stages Neovim and the fonts.
 
 #### `TerminalViewFixture.swift`
@@ -76,7 +76,6 @@ Purpose: A `PaneContainerView` over a [`LiveCore`](#livecoreswift), hosted offsc
 - `isInDrawerStrip(_:)` — whether a view lies in the container's lower half. The drawer's rect is private, and at `windowSize` its strip, a third of the height, lies wholly there.
 - `runLine`, `terminalChord`, `neovimChord`, `typeEx` — input to a session or to Neovim.
 - `markEditor()` — fills Neovim's current buffer with rows whose `line_hl_group` paints `mark` across the window's grid. `markedPixels(in:of:_:)` counts those pixels in a rect, and `markThreshold` is four cells' area.
-- `hostContainer(tabpage:)` — a second container over another tabpage, in its own offscreen window. Wake it only while its tabpage is current, as the app wakes only its current view.
 
 **Decisions** — the mark is a highlight group of its own, not `Normal`, because core pushes Neovim's default colours into every session, so a `Normal` mark would also match a terminal view.
 
@@ -109,6 +108,12 @@ Purpose: The vendored Lighthouse's expected colours, for the tests that render u
 **Covers** — [`OffscreenRenderer`](#offscreenrendererswift) reading a plain view's sRGB crimson, pure blue and dark grey stripes back within 0.01 at every pixel sampled inside each stripe. No core and no Neovim.
 
 **Gotchas** — compare in sRGB, through `colorDistance` or after `usingColorSpace(.sRGB)`. A raw component read of `colorAt`'s calibrated-tagged sample shows the stored bytes, so it would hide the misread this test exists to catch.
+
+#### `TabCoreTests.swift`
+
+**Covers** — `TabCore` over the staged Neovim and `init.lua`, each core started through `TabCore.start` as the app starts a tab. Two tabs on one directory run two Neovim processes under distinct wake tokens, each resolving to itself in `WindowRegistry`. Shutting one down unregisters it and leaves the other editing. SIGKILLing one tab's Neovim restarts that tab alone: its view records the crash overlay, a reset and the restart notice, and its file reopens, while the other tab keeps its process, its unsaved edit and a view that recorded nothing.
+
+**Gotchas** — no wake callback is installed, so each test drives `onWake()` itself while it spins the main run loop, which runs the deferred automatic restart. A recording `TabCoreView` stands in for `WolfWindowController`, which cannot be built offscreen, so the real view's reset and terminal restore reach no test here.
 
 #### `TerminalClosePaneTests.swift`
 
@@ -160,7 +165,7 @@ Purpose: The vendored Lighthouse's expected colours, for the tests that render u
 
 #### `TerminalDrawerResizeTests.swift`
 
-**Covers** — a drag on the drawer's top edge over a live core: the drawer view moving and growing before any wake, then its session's rows, the shell's `stty size` and the editor grid above following. The dragged share survives closing and reopening the drawer, and a second container over a new tabpage opens its drawer at the default third.
+**Covers** — a drag on the drawer's top edge over a live core: the drawer view moving and growing before any wake, then its session's rows, the shell's `stty size` and the editor grid above following. The dragged share survives closing and reopening the drawer, and a second fixture, with its own core as a new tab has, opens its drawer at the default third.
 
 **Gotchas**
 
@@ -194,7 +199,7 @@ A split, a close and the shell exiting each unzoom, and so does Toggle Terminal,
 
 #### `TerminalNeighbourPaneTests.swift`
 
-**Covers** — the Neovim panes staying painted while a terminal view is open and after it hides or closes, in the drawer, in a split beside an editor pane, and in a split in a new tab, with the first tab checked again after switching back to it.
+**Covers** — the Neovim panes staying painted while a terminal view is open and after it hides or closes, in the drawer and in a split beside an editor pane.
 
 **Gotchas**
 
@@ -209,7 +214,7 @@ A split, a close and the shell exiting each unzoom, and so does Toggle Terminal,
 - `<C-w>h` in a terminal pane focusing the editor beside it, `<C-w>l` there focusing the pane again, and `<C-w>v` in the pane splitting it onto a new, focused session.
 - `capturedTerminals()` naming the tree's terminal leaf, not the drawer's session, and the drawer open. After a Neovim kill and restart, `requestTerminalRestore` putting that session back as a terminal leaf beside the editor and reopening the drawer on its own session, both with their output.
 
-**Gotchas** — the test calls `capturedTerminals()` and `requestTerminalRestore` itself, so `Project.respawnNeovim`'s loop around them and `leafContents()`'s terminal arm reach no test here; they are manual-smoke, as [`LivenessSeamTests.swift`](../WolfKeyMapTests/README.md#livenessseamtestsswift) and [`SessionSeamTests.swift`](../WolfKeyMapTests/README.md#sessionseamtestsswift) record.
+**Gotchas** — the test calls `capturedTerminals()` and `requestTerminalRestore` itself. `TabCore.respawnNeovim` calls them only on a recording view, in [`TabCoreTests`](#tabcoretestsswift), so its hand-off to a real container is manual-smoke, and so is `leafContents()`'s terminal arm, as [`SessionSeamTests.swift`](../WolfKeyMapTests/README.md#sessionseamtestsswift) records.
 
 #### `TerminalPaneRenderTests.swift`
 
@@ -292,7 +297,7 @@ Purpose: Checks the toolbar's sidebar control in a production `MainWindow`, neve
 
 **Gotchas**
 
-- `WolfWindowController` cannot be built offscreen: its `build()` needs a `Project` started against `AppDelegate`, and orders its window front. The tests enter at the `MainWindow` members it forwards to, so the forwarders and the `CommandDispatcher` arms are compile-verified only.
+- `WolfWindowController` cannot be built offscreen: its `build()` needs a started `TabCore`, and orders its window front. The tests enter at the `MainWindow` members it forwards to, so the forwarders and the `CommandDispatcher` arms are compile-verified only.
 - A click is `selectedSegment` set, then `sendAction`, as a `.selectOne` click does.
 - Selection is read with `isSelected(forSegment:)`, because `selectedSegment` keeps its old value after a segment is deselected.
 - Search seeding and field focus touch private `SearchView` state, so they are manual-smoke.

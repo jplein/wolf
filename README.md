@@ -2,7 +2,7 @@
 
 Wolf is a Markdown editor based on [Neovim](https://github.com/neovim/neovim).
 
-Each editor window embeds one captive Neovim per project. If that Neovim crashes or stops responding, the window does not freeze silently: Wolf detects the failure (a three-state Alive / NotResponding / Dead liveness model), tells you, and restarts the captive Neovim in place — reopening the files that were open and recovering unsaved edits via Neovim's built-in swap files.
+On macOS each tab embeds its own captive Neovim, and on Linux each window embeds one. If that Neovim crashes or stops responding, its tab or window does not freeze silently: Wolf detects the failure (a three-state Alive / NotResponding / Dead liveness model), tells you, and restarts the captive Neovim in place — reopening the files that were open and recovering unsaved edits via Neovim's built-in swap files.
 
 **Both front-ends surface this**, as a crash/stall overlay with a "Restart Neovim" button, and both halves of it — a Neovim that died and one that stopped responding — are reachable on each. One Linux-specific limit is worth stating plainly rather than in the small print: the Linux app restores only the set of open files, so a crash while the window was split comes back as a single pane. See [Architecture](specs/architecture.md) for the full model and its known limits.
 

@@ -214,7 +214,7 @@ The toolkit-neutral input vocabulary and its translation into Neovim keystroke n
 
 - Shift contract: for `Key::Char` the front-end delivers the already-shifted glyph and leaves `shift` false; `S-` is emitted only for named keys, where Neovim gives it meaning.
 - `MouseEvent` and `ScrollEvent` target a grid, with grid-local row and column: under `ext_multigrid` a pane has its own grid, and grid 0 is the global one.
-- `Chdir` applies `:tcd`, not `:cd`, which would move every view: each view is one nvim tabpage.
+- `Chdir` applies `:tcd`, not `:cd`, which would move every tab of a front-end whose tabs are tabpages of one Neovim ([Input: events](../../../specs/architecture.md#input-events-front-end--core)).
 - `Resize` never resizes a local grid: the authoritative size arrives back as `grid_resize`.
 - `is_typing` is an exhaustive match, so each new variant must be classed as typing or state, deciding whether it survives a restart ([`api.rs`](#apirs)). So is `is_fast_input` ([`pump.rs`](#pumprs)).
 - `SaveAs` carries `force`, applied as `saveas!`, for a caller whose dialog already confirmed the overwrite: plain `saveas` fails `E13: File exists`, and the input pump degrades that to a warning nobody sees. Forcing unconditionally would clobber for a front-end that confirms nothing.

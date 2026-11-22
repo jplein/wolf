@@ -16,7 +16,7 @@ The macOS front-end: a native AppKit application (Swift) that renders the embedd
 
 ## Entry point
 
-`Sources/WolfMain/main.swift` calls `WolfApplication.run()`, which builds the shared `NSApplication`, installs `AppDelegate`, and runs. `AppDelegate` is the coordinator over the crate's projects and views; see [wolf-macos-decisions.md](../../notes/wolf-macos-decisions.md) for that model.
+`Sources/WolfMain/main.swift` calls `WolfApplication.run()`, which builds the shared `NSApplication`, installs `AppDelegate`, and runs. `AppDelegate` is the coordinator over the crate's tabs, each running its own captive Neovim; see [wolf-macos-decisions.md](../../notes/wolf-macos-decisions.md#one-neovim-per-tab) for that model.
 
 ## Building
 
@@ -68,8 +68,8 @@ The `.app` is self-contained, so a double-clicked bundle runs with no shell envi
 | `nvim/`, `init.lua` | [`//bazel/nvim`](../../bazel/nvim/README.md), [`//runtime/nvim`](../../runtime/nvim/README.md) | `wolf-core`, which launches nvim with `-u init.lua` |
 | `orlando/` | [`//bazel/orlando`](../../bazel/orlando/README.md) | `init.lua`, which self-locates and sources it |
 | `lighthouse/` | [`//bazel/lighthouse`](../../bazel/lighthouse/README.md) | `init.lua`, which activates it as the colorscheme |
-| `rg/` | [`//bazel/rg`](../../bazel/rg/README.md) | `wolf-core`'s content search, through the `WOLF_RG_BIN` that `Project.swift` defaults to it |
-| `terminfo/` | [`//bazel/ghostty-vt`](../../bazel/ghostty-vt/README.md) | `wolf-core`'s terminal sessions, through the `WOLF_TERMINFO_DIR` that `Project.swift` defaults to it |
+| `rg/` | [`//bazel/rg`](../../bazel/rg/README.md) | `wolf-core`'s content search, through the `WOLF_RG_BIN` that `TabCore.swift` defaults to it |
+| `terminfo/` | [`//bazel/ghostty-vt`](../../bazel/ghostty-vt/README.md) | `wolf-core`'s terminal sessions, through the `WOLF_TERMINFO_DIR` that `TabCore.swift` defaults to it |
 | `fonts/` | [`//bazel/jetbrains-mono`](../../bazel/jetbrains-mono/README.md), [`//bazel/ia-writer-mono`](../../bazel/ia-writer-mono/README.md), [`//bazel/nerd-fonts-symbols`](../../bazel/nerd-fonts-symbols/README.md) | Swift: `FontRegistration.swift` CoreText-registers every face at launch |
 | `Wolf.icon/` | `Wolf.icon.json` plus the masters in [`resources/icons/`](../../resources/icons/README.md) | macOS |
 

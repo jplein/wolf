@@ -43,17 +43,19 @@ Swift sends a structured `FfiKeyEvent`; `wolf-core` owns nvim notation. Do not a
 
 ## Threading
 
-`wolf-core` runs tokio on its own threads and fires a wake on `flush` and on each terminal session's frame publish. The wake is the registered `extern "C"` callback (see [`wolf-ffi`](../crates/wolf-ffi/README.md)); `WakeBridge` hops it onto the AppKit main thread and hands it to the token's project, whose current view runs `onRenderWake` and repaints.
+`wolf-core` runs tokio on its own threads and fires a wake on `flush` and on each terminal session's frame publish. The wake is the registered `extern "C"` callback (see [`wolf-ffi`](../crates/wolf-ffi/README.md)); `WakeBridge` hops it onto the AppKit main thread and hands it to the token's `TabCore`, whose view runs `onRenderWake` and repaints.
 
 `WolfCoreHandle` is not `Send` and is used only on the main thread. Frame-stats state is main-thread-only too, enforced by a debug-only `dispatchPrecondition`.
 
-## One Neovim per project
+## One Neovim per tab
 
-A `Project` is one captive Neovim shared by N views. Each view is a top-level `NSWindow` bound to one nvim tabpage; only the focused view live-updates, and the others hold their last painted frame until refocused.
+[The model and its cost](../specs/application-state.md#8-one-neovim-per-tab) are the spec's. On macOS every tab owns a `TabCore`: one captive Neovim, its wake token and its crash restart, serving that tab's view alone. It starts when the tab is created or restored, background tabs included, and shuts down in the tab's teardown. Per-tab Neovims avoid the edge cases of one shared by several views: `:cd` moving every view of a directory, one crash or stall taking them all down, and a background view freezing on its last frame.
 
-Wakes route through a per-project `wakeToken` looked up in `WindowRegistry`, which fans the wake out to that project's current view. That indirection is why two projects never clobber each other's redraws. Closing a view runs `:tabclose` on its tabpage; the project's Neovim shuts down only when its last view closes.
+Wakes route through the core's `wakeToken`, looked up in `WindowRegistry`, because one process-global callback per channel serves every core. That indirection is why two tabs never clobber each other's redraws. `TabCore` reaches its tab through the `TabCoreView` protocol, so a live test can stand a recording view in for `WolfWindowController`, which cannot be built offscreen.
 
-Each view's working directory is its tabpage's `:tcd`, so it is per-view rather than per-process.
+`Chdir` keeps `:tcd`, which moves a one-tabpage Neovim's tab alone ([Input: events](../specs/architecture.md#input-events-front-end--core)). Core keeps it because it also serves a front-end whose tabs are tabpages of one Neovim, where `:cd` would move every tab.
+
+A tab is focused while the app is active and the tab's window is main, by [`TabFocusSeam`](../crates/wolf-macos/Sources/WolfKeyMap/README.md#tabfocusseamswift). Each change reports a loss to the previous tab's Neovim and a gain to the next one's, and a gain fires `FocusGained`, whose `:checktime` reloads a file another tab saved. Main rather than key, because a picker panel takes key and cannot become main: key-based focus would report a loss and a gain around every picker use, and each gain also rescans the file tree.
 
 ## State is a tree, and the front-end owns every write
 
@@ -61,7 +63,7 @@ Window frames, ordered tabs, each tab's working directory, sidebar visibility, a
 
 Every Alive core wake requests a commit, alongside the geometry, sidebar, cwd and tab-group triggers. Opening, splitting or closing a pane fires nothing else, and a force quit or crash skips the terminate commit, so without it those files are lost. The request is throttled rather than debounced, so continuous wakes cannot starve the commit, and committing an identical tree is a no-op, so the frequent commits cause no disk churn.
 
-**Each view contributes only a tab it can read whole, and otherwise its cache.** Leaves are read by window handle from `previews` and `win_buffers`, which span every tabpage; `pane_status_for_grid` joins the current-tabpage `windows` map, so it would persist a background view's files as `""`. A view whose cwd or any leaf is not yet reported refuses, and contributes its last tab, which starts as the restored one. The launch commit runs before any pane binds, and a background view does not rebuild until it is visited, so a partial tab there would replace the saved files with nothing.
+**Each view contributes only a tab it can read whole, and otherwise its cache.** Leaves are read by window handle from `previews` and `win_buffers`. A view whose cwd or any leaf is not yet reported refuses, and contributes its last tab, which starts as the restored one. The launch commit runs before any pane binds, so a partial tab there would replace the saved files with nothing.
 
 Two restored views never gather and go on contributing their seed. One whose rebuild failed shows a fallback pane rather than its saved split. One restored to the empty state because its saved folder was missing keeps that folder until the user opens another, so remounting a volume brings the session back.
 
@@ -69,11 +71,11 @@ Two restored views never gather and go on contributing their seed. One whose reb
 
 A tab closed alone ends its close burst on the next turn, so it drops, and a later close of the last tab keeps only that tab. That AppKit closes a tab group's windows within one turn is a premise no automated test measures. Any other close commits without the closing view, and a close during termination commits nothing over the terminate commit. A walk with no live view or no window commits nothing at all, because it would erase the session.
 
-Saved tabs that no view took at launch, because a core, tabpage or view build failed, are never retried in that session. They are carried into every commit so the next launch tries them again.
+Saved tabs that no view took at launch, because their core failed to start, are never retried in that session. They are carried into every commit so the next launch tries them again.
 
 Only directories the user actually opened persist. The passive launch working directory is deliberately not written and not recorded in the recent-directories list, which is what keeps Open Recent clean. A frame restores only when it still intersects a live screen, and a tab's working directory only when it is still a directory; an empty or deleted one restores to the empty state rather than falling back to the process working directory.
 
-Project identity is not persisted. Restore groups the saved tree by working directory, so a project whose views moved to different directories is split, and same-directory tabs from different runtime instances are merged. Every restored project is uniform-directory.
+Restore starts one Neovim per saved tab, in window then tab order, at the tab's saved directory, or at home when that is empty or gone. Nothing groups tabs by directory, so several tabs on one directory each come back with their own Neovim.
 
 ## One flat pane view, not nested split views
 
@@ -137,23 +139,23 @@ Any drawing subview of `PaneContainerView` must clip to its bounds or fill only 
 
 Input methods reach a terminal pane through `NSTextInputClient`, and only a terminal pane: Neovim panes keep `KeyComposer` unchanged. A key goes through `interpretKeyEvents` unless it is a Ctrl, Cmd or option-as-alt chord or a named key, and a commit of one printable ASCII character is sent as a key, so core's `<C-w>` router still sees it. The rules are [`TerminalInputSeam`](../crates/wolf-macos/Sources/WolfKeyMap/Terminal/README.md#terminalinputseamswift)'s.
 
-Only the project's current view sizes a session, checked as `active_tabpage()` against the view's own tabpage, and within it [`TerminalGeometry.sizer`](../crates/wolf-macos/Sources/WolfKeyMap/Terminal/README.md#terminalgeometryswift) picks the active pane, then the last sizer. Together they make the spec's most recently focused pane the sizer; without the view check, a background view would fight the current one.
+Among a view's panes showing a session, [`TerminalGeometry.sizer`](../crates/wolf-macos/Sources/WolfKeyMap/Terminal/README.md#terminalgeometryswift) picks the active pane, then the last sizer, which makes the spec's most recently focused pane the sizer.
 
 The size takes `fullWidth(forWin:)` rather than `fullWidth(forGrid:)`, because the pane's grid may still be pending. A size is resent when it or the frame's size differs from what was sent, but an exited session applies no resize, so its frame size is never compared.
 
 A session holds focus while its pane is the active pane of the key window, and `syncTerminalFocus` reports the loss before the gain. It runs on every active-pane change, every wake and both key-window edges, and app deactivation resigns the key window. The loss matters beyond mode 1004: core rescans the project on it, so a restart reports it too.
 
-The same call sets each `TerminalPaneView`'s `focused`, which picks the cursor's shape under [the render contract](../specs/terminal-panes.md#the-render-contract). The painter decides rather than core, because focus belongs to a pane and a frame to a session: the drawer's session shows in every view of its project, so a style set in the frame would paint every view's drawer as focused. The container also knows its active pane at once, where core would learn it a wake late and publish a frame although no cell changed.
+The same call sets each `TerminalPaneView`'s `focused`, which picks the cursor's shape under [the render contract](../specs/terminal-panes.md#the-render-contract). The painter decides rather than core, because focus belongs to a pane and a frame to a session, and the container knows its active pane at once, where core would learn it a wake late and publish a frame although no cell changed.
 
 Close Pane closes the drawer although the drawer is outside `tree`, and refuses the tree's last leaf even beside the drawer: Neovim counts the drawer's window, so `:close` there would leave the drawer as the tabpage's only window, which the pane tree cannot hold. `closeActivePane()` sends `focus_win` for the active pane's window before `close_pane()`, both on core's ordered input channel, so `:close` closes the pane `canClosePane` read even while a focus move is in flight. `WolfWindowController.closePane()` goes through it, so a dispatched Close Pane is refused wherever the menu item is disabled.
 
 `splitActivePane(_:)` sends `focus_win` before its split for the same reason, so Split Horizontal and Split Vertical split the pane this view shows as active.
 
-After a crash-restart, `Project.respawnNeovim` captures each view's terminal-pane sessions and drawer state before `handle.restart()`, and hands each view its own [`terminalRestore`](../crates/wolf-macos/Sources/WolfKeyMap/README.md#livenessseamswift) steps. A view runs them once, from a render wake after `ensureInitialPane` has bound its first pane, while its tabpage is current and no layout rebuild waits ([why](crates/wolf-macos/Sources/WolfMacOS/PaneContainerView.swift.md#terminal-restore)). `rebind(tabpageHandle:)` clears a request made before it.
+After a crash-restart, `TabCore.respawnNeovim` captures the tab's terminal-pane sessions and drawer state before `handle.restart()`, and hands the view its [`terminalRestore`](../crates/wolf-macos/Sources/WolfKeyMap/README.md#livenessseamswift) steps. The view runs them once, from a render wake after `ensureInitialPane` has bound its first pane and no layout rebuild waits ([why](crates/wolf-macos/Sources/WolfMacOS/PaneContainerView.swift.md#terminal-restore)). `resetAfterRestart()` clears a request made before it.
 
 The drawer's top edge is no `PaneTree` divider, so the container hit-tests it at `DrawerLayout.editorHeight` itself, with the tree dividers' tolerance and cursor. A drag sets the share the drawer takes, which a `nil` from `draggedWeight` leaves as it is.
 
-That share is the container's, held outside `tree`, so it never reaches `paneLayout` or `state.json`, as [Session restore](../specs/terminal-panes.md#session-restore) requires, and a new view starts at `DrawerLayout.defaultWeight`. Closing the drawer and a Neovim restart keep it: `rebind(tabpageHandle:)` leaves it alone, because the share belongs to the window, not to Neovim. A drawer drag ends without `onLayoutChanged`, since nothing it changes is persisted.
+That share is the container's, held outside `tree`, so it never reaches `paneLayout` or `state.json`, as [Session restore](../specs/terminal-panes.md#session-restore) requires, and a new view starts at `DrawerLayout.defaultWeight`. Closing the drawer and a Neovim restart keep it: `resetAfterRestart()` leaves it alone, because the share belongs to the window, not to Neovim. A drawer drag ends without `onLayoutChanged`, since nothing it changes is persisted.
 
 ## Zoom Pane
 
@@ -175,7 +177,7 @@ Toggle Terminal applies `.toggleTerminal(drawer:)` and then always toggles the d
 
 The save path marks the zoomed leaf through `zoomedPaneId`, `SessionSeam.gatherTab` and `PaneLayoutCodec.encode`. The drawer is no layout leaf, so a zoomed drawer persists unzoomed. The restore re-zooms in `rebuildLayout(from:node:)`, applying `.restore` to the leaf at `zoomedLeafIndex` after a successful zip and making it active; the handle-count fallback returns first, so it restores unzoomed, and `.restore` refuses a lone pane, which has nothing to hide. The restore is safe under the trust above only because the rebuild leaves Neovim's current window on that leaf ([why](wolf-core-decisions.md#the-persisted-zoom-mark)).
 
-A crash-restart unzooms, because it rebuilds no saved leaf: `rebind(tabpageHandle:)` drops the tree and the zoom, each live split session comes back as a `Split` intent, and the drawer through `toggle_terminal()`'s `DrawerOpen`, both of which unzoom. A launch rebuild still pending at the restart is the exception: `pendingLayoutRebuild` survives `rebind`, so that rebuild re-zooms its leaf as a launch does.
+A crash-restart unzooms, because it rebuilds no saved leaf: `resetAfterRestart()` drops the tree and the zoom, each live split session comes back as a `Split` intent, and the drawer through `toggle_terminal()`'s `DrawerOpen`, both of which unzoom. A launch rebuild still pending at the restart is the exception: `pendingLayoutRebuild` survives the reset, so that rebuild re-zooms its leaf as a launch does.
 
 ## Nerd Font icons
 
@@ -188,14 +190,13 @@ The Mono face is the one cascaded because it is drawn unscaled, and every Mono g
 ## Present limitations
 
 - Only windows opened via the overridden split commands (`<C-w>s`/`v`, `:split`/`:vsplit`, Split Horizontal and Split Vertical) become panes. Help, quickfix, preview, and `:diffsplit` windows do not, and floating or external windows are ignored.
-- A visible non-current window of a project can blank during a live resize until it is refocused. `wantsLayer` mitigates this but does not eliminate it.
 - The grid is capped at a hard-coded 90 columns and centered in a wider pane, with the margins painted in the grid's own background. Making the cap configurable is a possible enhancement.
 - Scrollbar thumbs are non-interactive; thumb-drag is deferred.
 - Markdown preview ships one theme. Cursor-follow anchors to the containing block's top inside a fenced code block, an HTML block or a table, and inside a paragraph hard-wrapped across several short source lines; an image's alt text collapses to a single anchor just after the image. The marker rules are in [the preview position-marker contract](wolf-core-decisions.md).
 - A symbols-face icon draws unscaled, about one em wide, over part of the cell after it, rather than fitted to its own cell as Ghostty fits it.
 - In a terminal pane, the cursor and blinking text draw steady, and double, dotted and dashed underlines draw as the single straight line.
 - Appearance flows one way only: colorscheme to app chrome works, OS theme to Neovim theming does not.
-- A Neovim crash restart reopens each view's open files into one pane, so its splits collapse, and the next commit records that. Restoring the pane topology across a restart would change the restart model.
+- A Neovim crash restart reopens the tab's open files into one pane, so its splits collapse, and the next commit records that. Restoring the pane topology across a restart would change the restart model.
 - Only what a pane shows persists: `state.json` carries buffer paths only as layout leaves, so a file the user switched away from in its pane is not reopened at launch.
 - Per-pane navigation history is not persisted across launches, and is not cursor-position history — Neovim's own jumplist (`<C-o>` / `<C-i>`) is untouched. Navigating back to a file deleted from disk opens an empty `[New]` buffer, exactly as `:e missing.md` would.
 

@@ -1,8 +1,8 @@
 # wolf-macos/Sources/WolfMacOS
 
-The AppKit application: windows, views, menus, and the coordinator that owns projects and views. It holds only what genuinely needs a window; the decisions it acts on live in the pure [`WolfKeyMap/`](../WolfKeyMap/README.md) seam.
+The AppKit application: windows, views, menus, and the coordinator that owns the tabs, each with its own captive Neovim. It holds only what genuinely needs a window; the decisions it acts on live in the pure [`WolfKeyMap/`](../WolfKeyMap/README.md) seam.
 
-What a view here draws is testable offscreen through [`WolfMacOSTests`](../../Tests/WolfMacOSTests/README.md); event handling, focus and menus have no automated coverage. See [wolf-macos-decisions.md](../../../../notes/wolf-macos-decisions.md) for that posture and for the project, threading, and persistence models these files implement.
+What a view here draws is testable offscreen through [`WolfMacOSTests`](../../Tests/WolfMacOSTests/README.md); event handling, focus and menus have no automated coverage. See [wolf-macos-decisions.md](../../../../notes/wolf-macos-decisions.md) for that posture and for the per-tab Neovim, threading, and persistence models these files implement.
 
 ## Subdirectories
 
@@ -15,12 +15,13 @@ Each compiles into this module and has its own README with the entries for its f
 
 #### `AppDelegate.swift`
 
-Purpose: The application coordinator: launch setup, the live `WolfWindowController` (one per tab) and `Project` collections, window/tab restore and persistence, and the dynamic menus.
+Purpose: The application coordinator: launch setup, the live `WolfWindowController`s (one per tab), window/tab restore and persistence, tab focus, and the dynamic menus.
 
 **Public API**
 
-- `makeNewWindow(originatingCwd:)` — a fresh project in the empty state; the unused argument serves `CommandDispatcher`'s shared call site.
-- `makeNewTab(from:)` — adds a tabpage to the key controller's project, starting no core.
+- `makeNewWindow(originatingCwd:)` — an empty-state tab in its own window; the argument serves `CommandDispatcher`'s shared call site.
+- `makeNewTab(from:)` — a tab in `key`'s group, its Neovim launched at `key`'s folder or at home.
+- `refreshTabFocus()` — sends each [`TabFocusSeam`](../WolfKeyMap/README.md#tabfocusseamswift) edge to its tab's core.
 - `scheduleStateSnapshot()` / `snapshotNow()` — throttled versus immediate whole-tree commit to `state.json` ([write model](../../../../notes/wolf-macos-decisions.md#state-is-a-tree-and-the-front-end-owns-every-write)).
 - `closeCommit(for:)` — a closing view's commit; the last live view's commits at once the tree read at its burst's first close, keeping its window's tabs.
 - `otherWindows(excluding:)`, `controllerForCwd(_:)`, `raiseWindow(tabId:)` — the palette's candidates and raise target.
@@ -31,7 +32,7 @@ Purpose: The application coordinator: launch setup, the live `WolfWindowControll
 
 - Launch order is fonts, config, metrics: measuring needs the config's font settings, and the bundled families must reach CoreText first.
 - `appearanceObservation` must stay stored: a deallocated `NSKeyValueObservation` invalidates itself, silently ending auto-mode appearance tracking.
-- Both app focus edges reach nvim: `FocusGained` fires only on a real unfocused-to-focused transition, so without the resign-side `false` the `WolfAutoRead` `:checktime` reload fires once.
+- Tab focus follows main ([why](../../../../notes/wolf-macos-decisions.md#one-neovim-per-tab)). Its loss rides `didResignActive`, where `NSApp.isActive` reads `false`.
 - The About panel's credits discharge the fonts' and libraries' attribution: Linux's preamble, then `wolf_ffi_font_license_notices()` and `wolf_ffi_library_license_notices()` verbatim. Their `.foregroundColor` stays `labelColor`, since uncoloured credits render black in dark mode.
 
 **Gotchas**
@@ -324,13 +325,13 @@ Purpose: A small transient banner reading "Neovim was restarted", pinned top-cen
 
 #### `NvimStatusOverlayView.swift`
 
-Purpose: The crash/stall overlay — a full-bleed opaque cover over a broken editor with a status label and a "Restart Neovim" button, added as a `PaneContainerView` subview and driven by the project's liveness reads.
+Purpose: The crash/stall overlay — a full-bleed opaque cover over a broken editor with a status label and a "Restart Neovim" button, added as a `PaneContainerView` subview and driven by its tab core's liveness reads.
 
 **Public API**
 
 - `enum NvimStatusMode` — `dead(retrying:)` / `notResponding`, mirroring the two non-`Alive` `wolf_core::Liveness` states. `retrying` picks between "restarting…" and "automatic restart failed", so the message never promises a restart the spent automatic budget will not make.
 - `show(mode:)` / `hide()` — toggle visibility and set the message for the mode.
-- `onRestart` — the button action; the controller wires it to `project.restartNeovim()`.
+- `onRestart` — the button action; the controller wires it to `tabCore.restartNeovim()`.
 
 **Decisions**
 
@@ -344,11 +345,11 @@ Purpose: The editor area: one flipped first-responder `NSView` painting every pa
 
 **Public API**
 
-- `markRefocusRebind()` arms a grid rebind after a tabpage switch, `rebind(tabpageHandle:)` after a crash-restart.
+- `resetAfterRestart()` — drops every pane after a crash-restart, so the next wake binds the fresh Neovim's window.
 - `paneLayout`, `leafContents()`, `restoreFailed` — `SessionSeam`'s inputs; leaves by window, terminals included.
 - `capturedTerminals()`, `requestTerminalRestore(_:)` — a restart's capture and restore.
 - `activeTerminal`, `activeTerminalSelection` — `nil` off a terminal pane.
-- `activeWin` — per view: Neovim's tabpage-shared one would let a background tab enable Copy.
+- `activeWin` — the pane this view shows as active, `0` before one binds.
 - `activePreviewSourcePath` — `nil` in edit mode.
 - `otherPaneTarget(prefer:)` — `0` splits, `nil` is a no-op.
 - `canClosePane`, `closeActivePane()`, `splitActivePane(_:)` — Close Pane's gate and action, and the splits' ([why](../../../../notes/wolf-macos-decisions.md#terminal-panes)).
@@ -356,7 +357,6 @@ Purpose: The editor area: one flipped first-responder `NSView` painting every pa
 
 **Decisions**
 
-- The refocus rebind waits for this view's tabpage, skipping close detection: the vacated tabpage's grids would prune live panes.
 - One `geometry(_:fullWidth:)` call sets web-view frame, occlusion and statusbar span: no frame paints preview alignment without its web view.
 - Grids are skipped only under an opaque, loaded preview web view; the flag survives reloads: WebKit shows the outgoing document.
 - Scroll follows `scrollingDeltaY`'s natural-scroll-aware sign; `isDirectionInvertedFromDevice` double-corrects.
@@ -454,7 +454,7 @@ Purpose: The floating file picker: a hand-built search bar over an `NSTableView`
 
 #### `PickerWakeBridge.swift`
 
-Purpose: Installs the process-global file-search wake callback so wolf-core's traversal batches reach the right project's picker.
+Purpose: Installs the process-global file-search wake callback so wolf-core's traversal batches reach the picker of the tab whose core fired.
 
 **Public API**
 
@@ -462,31 +462,12 @@ Purpose: Installs the process-global file-search wake callback so wolf-core's tr
 
 **Decisions**
 
-- The callback closure captures nothing, so it converts to a `@convention(c)` function pointer. Routing is by the per-project token looked up in `WindowRegistry`, not by a captured reference, which is what lets a single global callback serve every project.
+- The callback closure captures nothing, so it converts to a `@convention(c)` function pointer. Routing is by the core's token looked up in `WindowRegistry`, not by a captured reference, which is what lets a single global callback serve every tab's core.
 - The wake requests a coalesced `scheduleRefresh()` rather than `refresh()`, so a large traversal's burst of batch wakes collapses to one re-rank per frame.
 
 **Gotchas**
 
 - Core fires this on a tokio worker thread; the thunk hops to the main thread before touching AppKit. A wake arriving after the picker has closed is a harmless no-op.
-
-#### `Project.swift`
-
-Purpose: One captive Neovim shared by N views, each bound to one nvim tabpage. Owns the single `WolfCoreHandle` and the per-project wake token. Main-thread-only.
-
-**Public API**
-
-- `start(launchCwd:coordinator:)` — the sole caller of `wolf_ffi_start`, `nil` on failure. Defaults `WOLF_NVIM_BIN`, `WOLF_RG_BIN` and `WOLF_TERMINFO_DIR` to the bundle's (`overwrite=0`), so an export wins.
-- `restartNeovim()` — the "Restart Neovim" button's entry, resetting the attempt count.
-
-**Decisions**
-
-- Views are held weakly and hold their project strongly, so the core outlives one view's teardown; the last view's `detach` is the only core-shutdown path.
-- Render and picker wakes go only to `currentView`; tree and content-search wakes fan out to every view, since the token names no view and refreshes are version-gated.
-- `onWake` acts on [`LivenessSeam`](../WolfKeyMap/README.md#livenessseamswift)'s decision, committing on `persist`, and drains commands last, since a drained close can shut the core down.
-- An automatic restart waits `autoRestartDelay` on `asyncAfter`: `handle.restart()` blocks the main thread, and only a pending timer guarantees the overlay paints first.
-- Attempts count when scheduled and reset on `Alive`, a successful respawn or the button, so a press against a failing respawn can cost two respawns ([why](../../../../notes/crates/wolf-gnome/src/shell.rs.md#one-press-two-respawns)).
-- The respawn captures files and cwds before `handle.restart()` replaces the mirror, then runs each view's [`restoreSteps`](../WolfKeyMap/README.md#livenessseamswift); a view whose tabpage fails skips the rest. On `false` it applies only a fresh decision's overlay: scheduling there would bypass the cap.
-- `closeTabpage` skips the last view: closing nvim's last tabpage fails with E784, and that view's `detach` shuts the core down.
 
 #### `SearchView.swift`
 
@@ -507,7 +488,7 @@ Purpose: The sidebar content-search panel — a query field and three toggles ab
 
 #### `SearchWakeBridge.swift`
 
-Purpose: Installs the process-global content-search wake so each streamed ripgrep batch reaches every attached view's `SearchView`.
+Purpose: Installs the process-global content-search wake so each streamed ripgrep batch reaches the `SearchView` of the tab whose core fired.
 
 **Public API**
 
@@ -515,8 +496,8 @@ Purpose: Installs the process-global content-search wake so each streamed ripgre
 
 **Decisions**
 
-- The callback closure captures nothing, so it converts to a `@convention(c)` function pointer; the per-project token is resolved through `WindowRegistry` instead.
-- The wake fans out to all of a project's views rather than just the current one, because each view owns an independent `start_search` session and the token carries no view discriminator. Idle panels no-op on their own version gate.
+- The callback closure captures nothing, so it converts to a `@convention(c)` function pointer; the core's token is resolved through `WindowRegistry` instead.
+- The wake asks for a coalesced refresh, which an idle panel no-ops on its own version gate.
 
 **Gotchas**
 
@@ -555,6 +536,26 @@ Purpose: Watches one window's geometry, sidebar collapse state, and tab-group me
 - Trigger-only glue: no file IO, no per-field state writes. Persistence is a whole-tree snapshot the coordinator walks, so writing anything here would duplicate that walk rather than extend it.
 - The `didResize` observer bails while `inLiveResize`. A live drag emits it once per frame, and `didEndLiveResize` already catches the final size; the `didResize` registration exists only for discrete resizes such as zoom and a programmatic `setFrame`.
 
+#### `TabCore.swift`
+
+Purpose: One tab's captive Neovim: its `WolfCoreHandle`, its wake token and its crash restart, serving the tab's view through the `TabCoreView` protocol. Main-thread-only.
+
+**Public API**
+
+- `start(launchCwd:coordinator:)` — the sole caller of `wolf_ffi_start`, `nil` on failure, registering the core in `WindowRegistry`. Defaults `WOLF_NVIM_BIN`, `WOLF_RG_BIN` and `WOLF_TERMINFO_DIR` to the bundle's (`overwrite=0`), so an export wins.
+- `view` — the tab it serves, weak. `WolfWindowController` conforms to `TabCoreView`, and a live test stands a recording view in, since a controller cannot be built offscreen.
+- `onWake()`, `onPickerWake()`, `onTreeWake()`, `onSearchWake()` — the wake bridges' targets.
+- `setUiFocus(gained:)` — a gain fires `FocusGained`, whose `:checktime` reloads a file another tab saved.
+- `restartNeovim()` — the "Restart Neovim" button's entry, resetting the attempt count.
+- `shutdown()` — the tab's teardown calls it; it also unregisters the token.
+
+**Decisions**
+
+- `onWake` acts on [`LivenessSeam`](../WolfKeyMap/README.md#livenessseamswift)'s decision, committing on `persist`, and drains commands last, since a drained close can shut the core down.
+- An automatic restart waits `autoRestartDelay` on `asyncAfter`: `handle.restart()` blocks the main thread, and only a pending timer guarantees the overlay paints first.
+- Attempts count when scheduled and reset on `Alive`, a successful respawn or the button, so a press against a failing respawn can cost two respawns ([why](../../../../notes/crates/wolf-gnome/src/shell.rs.md#one-press-two-respawns)).
+- The respawn captures files, cwd and terminals before `handle.restart()` replaces the mirror, then runs [`restoreSteps(for:launchCwd:)`](../WolfKeyMap/README.md#livenessseamswift). On `false` it applies only a fresh decision's overlay: scheduling there would bypass the cap.
+
 #### `TabGroupObserver.swift`
 
 Purpose: Best-effort KVO on one window's native tab group — its `windows` and `selectedWindow` — so a tear-off, drag-merge, reorder, or tab switch fires `onChange`. Owned by `StatePersistence`; the native tab bar mutates the group with no call site of ours, so nothing else would notice.
@@ -591,9 +592,9 @@ Purpose: The `ext_messages` message toast — an overlay view that `PaneContaine
 
 #### `TreeWakeBridge.swift`
 
-Purpose: Registers the file-tree traversal wake with the Rust core at launch and routes each wake to the owning project's sidebars.
+Purpose: Registers the file-tree traversal wake with the Rust core at launch and routes each wake to the sidebar of the tab whose core fired it.
 
-Shared `*WakeBridge` shape: core fires the registered `extern "C"` callback on a tokio worker thread carrying its per-project token; the thunk hops to the main thread, resolves the token through `WindowRegistry`, and calls one method on the resulting `Project`.
+Shared `*WakeBridge` shape: core fires the registered `extern "C"` callback on a tokio worker thread carrying its core's token; the thunk hops to the main thread, resolves the token through `WindowRegistry`, and calls one method on the resulting `TabCore`.
 
 **Public API**
 
@@ -602,8 +603,7 @@ Shared `*WakeBridge` shape: core fires the registered `extern "C"` callback on a
 **Decisions**
 
 - The thunk closure captures nothing but the global `WindowRegistry`. That is what lets it convert to a `@convention(c)` function pointer; capturing any per-window state breaks the conversion outright.
-- The wake fans out to every attached view's tree, not just the current one, because the token is per-project and carries no view discriminator while each view runs its own independent `start_tree_search()` traversal.
-- Each view is asked for a coalesced refresh, so a large directory's batch wakes collapse to at most one reload per frame.
+- The tree is asked for a coalesced refresh, so a large directory's batch wakes collapse to at most one reload per frame.
 
 **Gotchas**
 
@@ -619,23 +619,23 @@ Purpose: Registers the editor render wake with the Rust core at launch, driving 
 
 **Decisions**
 
-- Routes to the project's current view only, and immediately rather than coalesced: this wake is the frame. Non-focused views of the same project hold their last painted frame until refocused.
+- Hands the wake to `TabCore.onWake()` immediately rather than coalesced: this wake is the frame.
 
 #### `WindowRegistry.swift`
 
-Purpose: The process-global map from a core's per-project wake token to the `Project` that owns it. The `*WakeBridge` thunks carry only a plain `u64` across the thread hop, and resolve it here.
+Purpose: The process-global map from a core's wake token to the `TabCore` that owns it. The `*WakeBridge` thunks carry only a plain `u64` across the thread hop, and resolve it here.
 
 **Public API**
 
-- `register(_:token:)` / `unregister(token:)` / `project(for:)` — all main-thread only.
+- `register(_:token:)` / `unregister(token:)` / `tabCore(for:)` — all main-thread only.
 
 **Decisions**
 
-- Unsynchronized on purpose. Every access is already on the main thread: registration at project start, lookup inside the dispatched-to-main wake, removal at last-view shutdown. Adding a lock would imply it is safe to call from the wake's own tokio thread, which it is not.
+- Unsynchronized on purpose. Every access is already on the main thread: registration at `TabCore.start`, lookup inside the dispatched-to-main wake, removal at `TabCore.shutdown`. Adding a lock would imply it is safe to call from the wake's own tokio thread, which it is not.
 
 **Gotchas**
 
-- `project(for:)` returns `nil` for a wake that arrives after its project's last view closed; every caller treats that as a no-op rather than an error.
+- `tabCore(for:)` returns `nil` for a wake that arrives after its tab closed; every caller treats that as a no-op rather than an error.
 
 #### `WolfApplication.swift`
 
@@ -647,21 +647,21 @@ Purpose: The app's entry point, called by [`WolfMain`](../WolfMain/README.md): `
 
 #### `WolfWindowController.swift`
 
-Purpose: One view — a single tab's whole UI stack, bound to a `(project, tabpageHandle)` pair. A tab is its own OS window; several may share a native tab group.
+Purpose: One view — a single tab's whole UI stack, owning its [`TabCore`](#tabcoreswift) as that core's `TabCoreView`. A tab is its own OS window; several may share a native tab group.
 
 **Public API**
 
-- `build() -> Bool` — `false`, building nothing, for an invalid tabpage bind; the coordinator then drops the view.
+- `build()` — shows the stack and becomes its core's view.
 - `hasFolder` — false in the empty state, so an empty-state window's sidebar never scans `home`.
-- `persistedCwd` — the tabpage-local cwd, right even for a background view, unlike `currentCwd`.
+- `persistedCwd` — the tab's live cwd, `""` in the empty state, unlike `currentCwd`.
 - `persistedTab()` — this view's [`SessionSeam`](../WolfKeyMap/Persistence/README.md#sessionseamswift) contribution, seeded from the restored tab.
 - `canCopy` — whether Copy has anything to copy, as `copy()` decides it. Copy and Paste in a terminal pane use its session.
-- `drainAndDispatchCommands()` — apart from `onRenderWake()`, so the project drains in every state ([why](../WolfKeyMap/README.md#livenessseamswift)).
+- `drainAndDispatchCommands()` — apart from `onRenderWake()`, so the tab's core drains in every state ([why](../WolfKeyMap/README.md#livenessseamswift)).
 
 **Decisions**
 
-- `project` is held strong, and views weakly, as [`Project.swift`](#projectswift) explains.
+- `tabCore` is held strong and shut down in `teardown()`, and holds this view weakly.
 - `teardown()` takes its close commit before setting `isTornDown`, which the burst's read skips: taken after, a last close would commit nothing. It is idempotent and defers `removeController` one turn, capturing `self` strongly: during `windowWillClose` the coordinator holds the last strong reference, so a synchronous drop frees the `NSWindow` mid-close.
 - `window.historyNav = self` is explicit: this is not an `NSWindowController`, so a `target: nil` toolbar action never reaches it.
 - The file tree starts last in `build()`, after the sidebar's collapse state seeds its refresh gate, so a restored collapsed sidebar defers outline work.
-- Both key edges sync terminal focus, `windowDidBecomeKey` before its already-current guard.
+- Both key edges sync terminal focus; tab focus follows `windowDidBecomeMain` ([why](../../../../notes/wolf-macos-decisions.md#one-neovim-per-tab)).

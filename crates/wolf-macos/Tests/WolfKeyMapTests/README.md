@@ -156,11 +156,11 @@ Note that the nearby `swift_format_srcs` glob feeds lint and format only, not te
 
 #### `LivenessSeamTests.swift`
 
-**Covers** — `LivenessSeam.decision(liveness:autoRestartAttempts:)`: the whole decision table at zero and one attempts; the cap, which refuses a second automatic attempt and switches the overlay to `crashed(retrying: false)`; the drain in every liveness state; that only a dead core with its attempt unspent auto-restarts; that only an alive core renders or persists, whatever the count; and that `NvimLiveness`'s raw values match `wolf-ffi`'s `mod liveness`. Also `LivenessSeam.restoreSteps(for:)`: view 0 binds the first tabpage and is re-rooted unless its cwd is empty, later views get a new tabpage and no chdir, and the active file opens last, once, even when the captured files lack it.
+**Covers** — `LivenessSeam.decision(liveness:autoRestartAttempts:)`: the whole decision table at zero and one attempts; the cap, which refuses a second automatic attempt and switches the overlay to `crashed(retrying: false)`; the drain in every liveness state; that only a dead core with its attempt unspent auto-restarts; that only an alive core renders or persists, whatever the count; and that `NvimLiveness`'s raw values match `wolf-ffi`'s `mod liveness`. Also `LivenessSeam.restoreSteps(for:launchCwd:)`: a tab whose cwd moved from its launch directory is re-rooted there first, one still at it or with an empty cwd is not, and the active file opens last, once, even when the captured files lack it.
 
 It also covers `terminalRestore(splits:drawerOpen:live:)`: live splits once, ascending, dead ones skipped, then `.drawer` last and only when it was open.
 
-**Gotchas** — the cases list the liveness states by hand, so a new `NvimLiveness` case must be added here deliberately. The deferral before the automatic respawn and the overlay painting ahead of it are not observable headlessly; they, the rest of the `Project.onWake` glue, and `Project.respawnNeovim` running the restore steps are manual-smoke.
+**Gotchas** — the cases list the liveness states by hand, so a new `NvimLiveness` case must be added here deliberately. The overlay painting ahead of the automatic respawn is not observable headlessly, and is manual-smoke; [`TabCoreTests`](../WolfMacOSTests/README.md#tabcoretestsswift) drives the rest of `TabCore.onWake` and the respawn's reopen against a real Neovim.
 
 #### `OtherPaneSeamTests.swift`
 
@@ -322,13 +322,12 @@ The `PreviewSeam` reload gate plus the click-to-focus surface. `winsNeedingReloa
 
 **Covers**
 
-`RestoreSeam.plan(windows:home:isDirectory:)`, the group-by-cwd project planner: tabs sharing a real directory merge into one project even across saved windows, different directories split, each empty-state or since-deleted tab becomes its own single-tab project launched at `home`, and every tab keeps its `(groupIndex, positionInGroup, cwd, sidebarVisible)` placement plus its `layout` passthrough. Layout rides through verbatim and never influences grouping.
+`RestoreSeam.plan(windows:home:isDirectory:)`: tabs on one directory, in one window or across windows, each plan a tab of their own at that directory; an empty-state or since-deleted tab launches at `home` with no folder; and every tab keeps its `(groupIndex, positionInGroup, cwd, sidebarVisible)` placement plus its `layout`, verbatim.
 
 **Gotchas**
 
 - `isDirectory` is injected and the tests pass a set lookup; that is what keeps the seam free of `FileManager`. A new case must list its real directories in that set, including `home`.
-- Project order is not part of the contract. Assert through the `projectIndex` helper or an order-independent `Set<PlannedTab>`.
-- A since-deleted directory plans at `home` but its `PlannedTab.cwd` retains the original saved string — the grouping key and the retained field differ on purpose.
+- A since-deleted directory plans at `home` but its `PlannedTab.cwd` retains the original saved string — `launchCwd` and the retained field differ on purpose.
 
 #### `ScrollAccumulatorTests.swift`
 
@@ -374,7 +373,7 @@ The `PreviewSeam` reload gate plus the click-to-focus surface. `winsNeedingReloa
 
 Of `CloseBurst`, it covers that a tab group closed in one turn keeps the tree read once, at its first close, a tab closed alone stays dropped once its burst's end has run, and a terminating close reads, commits and schedules nothing.
 
-**Gotchas** — the seed and live fixtures differ in every field, so an assertion that the cache survived cannot pass on a live tab by coincidence. The burst tests hold every end closure and run it only when a test says the turn is over. The `WolfMacOS` glue that feeds these decisions — `Project.onWake`, `teardown`, `AppDelegate.closeBurst`, the live filter in `gatherTree` and `leafContents()` — is compile-verified and manual-smoke.
+**Gotchas** — the seed and live fixtures differ in every field, so an assertion that the cache survived cannot pass on a live tab by coincidence. The burst tests hold every end closure and run it only when a test says the turn is over. The `WolfMacOS` glue that feeds these decisions — `TabCore.onWake`, `teardown`, `AppDelegate.closeBurst`, the live filter in `gatherTree` and `leafContents()` — is compile-verified and manual-smoke.
 
 #### `ShortcutSeamTests.swift`
 
@@ -417,6 +416,10 @@ Of `CloseBurst`, it covers that a tab group closed in one turn keeps the tree re
 **Covers**: `StatusbarText` against the four rows of wolf-gnome's `statusbar_text_table` in `crates/wolf-gnome/src/statusbar_layout.rs`, verbatim, comparing both packed colours and the bold flag exactly. A changed alpha, a blend toward black, ties rounded to even, or a weight that stops following `active` each fails a row.
 
 **Gotchas**: the two tables change together. The active white-on-black secondary is exactly 178.5, which is what pins half-away-from-zero rounding, and the grey-background rows are what tell a blend toward the background from one toward black.
+
+#### `TabFocusSeamTests.swift`
+
+**Covers** — `TabFocusSeam`: a switch reports the previous tab's loss, then the next tab's gain; activating and resigning report one edge each; an unchanged tab, `nil` included, reports nothing; and an inactive app focuses no tab whatever its main window.
 
 #### `TerminalCellStyleTests.swift`
 

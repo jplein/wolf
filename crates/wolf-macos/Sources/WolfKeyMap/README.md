@@ -309,14 +309,14 @@ Purpose: Pure key translation for the macOS front end — the fields an `NSView.
 
 #### `LivenessSeam.swift`
 
-Purpose: The crash/stall recovery rulebook: what a wake does by liveness and restart count, and the view restore after a restart. A port of wolf-gnome's [`liveness_ui.rs`](../../../wolf-gnome/src/README.md#liveness_uirs); `Project` acts on it.
+Purpose: The crash/stall recovery rulebook: what a wake does by liveness and restart count, and the tab restore after a restart. A port of wolf-gnome's [`liveness_ui.rs`](../../../wolf-gnome/src/README.md#liveness_uirs); [`TabCore`](../WolfMacOS/README.md#tabcoreswift) acts on it.
 
 **Public API**
 
 - `NvimLiveness` — its raw values are `wolf-ffi`'s `mod liveness` discriminants; an unknown one decodes to `nil`, read as `.alive`.
 - `decision(liveness:autoRestartAttempts:)` — `overlay` (`.hidden`, `.crashed(retrying:)`, `.stalled`), `autoRestart`, `render` and `persist` (both only for `.alive`), and `drain`.
 - `maxAutoRestartAttempts` — one automatic attempt per crash.
-- `restoreSteps(for:)` — each `CapturedView`'s `RestoreStep`s; an empty `cwd` or `activePath` means none; `terminalRestore(splits:drawerOpen:live:)`, the terminal steps ([order](../../../../specs/terminal-panes.md#when-neovim-dies)).
+- `restoreSteps(for:launchCwd:)` — a `CapturedView`'s `RestoreStep`s, `.chdir` then `.open`; an empty `cwd` or `activePath` means none; `terminalRestore(splits:drawerOpen:live:)`, the terminal steps ([order](../../../../specs/terminal-panes.md#when-neovim-dies)).
 
 **Decisions**
 
@@ -326,7 +326,7 @@ Purpose: The crash/stall recovery rulebook: what a wake does by liveness and res
 - `.notResponding` never auto-restarts: a restart loses what no swap file holds, so that is the user's call.
 - The cap stops a retry loop against a failing respawn, never the user: the button resets the count. `retrying` means an attempt is permitted, not running.
 - Unlike `liveness_ui`, the seam takes the count, so the cap is tested here.
-- View 0 rebinds the fresh first tabpage, which starts in the launch directory, so it is re-rooted with `.chdir`: an empty-state window reached its folder only through one. Later views get a `.newTabpage` in their cwd. The active file opens last, to land focused.
+- A restart respawns Neovim in its launch directory, so a tab whose cwd differs is re-rooted with `.chdir` first: an empty-state window reached its folder only through one. The active file opens last, to land focused.
 
 #### `OtherPaneSeam.swift`
 
@@ -687,6 +687,19 @@ Purpose: The horizontal sibling of `StatusbarLayout` — the absolute left edge 
 **Gotchas**
 
 - The preview web view's frame, this span, and the draw loop's occlusion test all derive from the same `geometry(_:fullWidth:)` applied to `gridRect(ofPane:)`, and must change together.
+
+#### `TabFocusSeam.swift`
+
+Purpose: Which tab is focused, and the focus edges a change reports to the tabs' Neovims. `AppDelegate.refreshTabFocus()` applies it.
+
+**Public API**
+
+- `focusedTab(appActive:mainTab:)` — `mainTab` while the app is active, else `nil`.
+- `edges(from:to:)` — none when the two are equal, else the previous tab's loss, then the next tab's gain, each when present.
+
+**Decisions**
+
+- The rule reads the main window, not the key one: a picker panel takes key and cannot become main, so it changes no tab's focus ([why](../../../../notes/wolf-macos-decisions.md#one-neovim-per-tab)).
 
 #### `TitlebarBackground.swift`
 

@@ -28,13 +28,13 @@ Coalescing also collapses the two to four identical emits a plain `:e file` prod
 
 Measured on Linux, the swap for `/home/<user>/project/Untitled.md` records its owner as `~<user>/project/Untitled.md`, because nvim writes `b0_fname` through `home_replace`. The `fname == abspath` fast path is subsumed by the `fnamemodify(fname, ":p")` branch, and it stays because it is the only branch the fixtures outside `$HOME` (`/tmp`, `/private/var/folders`) exercise.
 
-nvim's own `findswapname` uses both identities in turn: it derives the swap name from `b_ffname`, then raises `ATTENTION` for an existing `.swp` only when that swap's expanded `b0_fname` names the same file, inode included. A swap owned by a different file is skipped for the next suffix. The two criteria in `wolf_untitled_swap_exists` check each identity on its own, so either one counts as a collision.
+nvim's own `findswapname` uses both identities in turn: it derives the swap name from `b_ffname`, then counts an existing `.swp` as this file's, the one `ATTENTION` and `SwapExists` concern, only when that swap's expanded `b0_fname` names the same file, inode included. A swap owned by a different file is skipped for the next suffix. The two criteria in `wolf_untitled_swap_exists` check each identity on its own, so either one counts as a collision.
 
 ## Swapfile stays on
 
 For a buffer whose swap name fits under the cut (see [Long-path swaps](#long-path-swaps)), `'swapfile'` stays on when it is named, so the swap is created eagerly at naming time. That atomically claims the name against a sibling nvim in the same project, and it is what makes an unsaved Untitled buffer crash-recoverable at all.
 
-`setlocal noswapfile` before naming would avoid the dialog only by giving up recovery: `ml_open_file` returns early while `'swapfile'` is off, so the buffer gets no swap at naming or at its first change. That breaks the recovery pinned by `crates/wolf-core/tests/swap_recovery.rs` (`restart_recovers_unsaved_untitled_buffer`) and `crates/wolf-core/tests/nvim_restart.rs`, which is why name avoidance is the defence.
+`setlocal noswapfile` before naming would dodge a stale swap only by giving up recovery: `ml_open_file` returns early while `'swapfile'` is off, so the buffer gets no swap at naming or at its first change. That breaks the recovery pinned by `crates/wolf-core/tests/swap_recovery.rs` (`restart_recovers_unsaved_untitled_buffer`) and `crates/wolf-core/tests/nvim_restart.rs`, which is why name avoidance is the defence.
 
 ## Long-path swaps
 
@@ -42,7 +42,7 @@ With `'directory'` ending in `//`, `makeswapname` builds the name from the resol
 
 Past the cut, three things break. `recover_names` searches for the uncut name, so recovery fails with E305, after the `SwapExists` dead-owner branch has already scheduled the delete of the only copy. `:saveas!` onto a sibling fails with E768 in `check_overwrite`, because the target's cut name is the source's live swap. And since `findswapname` compares `b0_fname`, a sibling's swap lands on `.swo`, which no later session offers.
 
-So a buffer whose full or resolved path exceeds `SWAP_NAME_MAX` gets `noswapfile`, with `b:wolf_long_path_noswap` recording that Wolf, not the user, turned it off. `BufNew` is the only per-buffer event early enough, because `check_need_swap` runs before `BufReadPre` and `BufNewFile`. The `BufReadPost`/`BufNewFile` backstop exists because, measured on 0.12.6, `:bdelete` then `:e F` resets `&l:swapfile` to the global value; by then `SwapExists` has fired on any stale cut-name swap, so its first branch answers `e` and never deletes.
+So a buffer whose full or resolved path exceeds `SWAP_NAME_MAX` gets `noswapfile`, with `b:wolf_long_path_noswap` recording that Wolf, not the user, turned it off. `BufNew` is the only per-buffer event early enough, because `check_need_swap` runs before `BufReadPre` and `BufNewFile`. The `BufReadPost`/`BufNewFile` backstop exists because, measured on 0.12.6, `:bdelete` then `:e F` resets `&l:swapfile` to the global value; by then a stale cut-name swap has been passed over under `A`, or, with `A` dropped by the user, answered `e` by the `SwapExists` callback's first branch, so it is never deleted.
 
 `BufFilePost` turns swap back on after a rename onto a short path, unless `wolf_untitled_swap_exists` finds a swap there: setting `'swapfile'` opens the swap at once, on a path where `SwapExists` is not armed. `wolf_name_untitled` runs the same sync directly, because `rename_buffer` applies `BufFilePost` unforced and the startup rename happens inside the non-nested `VimEnter` callback.
 

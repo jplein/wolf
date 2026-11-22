@@ -2,7 +2,7 @@
 
 `lib.rs` is the crate root: one `#[swift_bridge::bridge] mod ffi` plus the hand-written Rust glue behind it. It builds as a `staticlib` (the archive the `.app` links through the generated Swift) and as an `rlib`, so the Rust integration tests link and drive the same surface headlessly with no Swift runtime present. `bin/gen_bindings.rs` regenerates the committed bindings.
 
-Read [`wolf-ffi-decisions.md`](../../../notes/wolf-ffi-decisions.md) first. It holds the durable constraints behind this file — the registered C function pointer that carries the wake, the per-project wake tokens, the four wake channels, the append-only discriminant rule, and the generated-bindings workflow — and none of that is repeated here.
+Read [`wolf-ffi-decisions.md`](../../../notes/wolf-ffi-decisions.md) first. It holds the durable constraints behind this file — the registered C function pointer that carries the wake, the per-core wake tokens, the four wake channels, the append-only discriminant rule, and the generated-bindings workflow — and none of that is repeated here.
 
 **Shapes that repeat across the whole surface.** Knowing these makes the entries below read as signatures rather than as a list of exceptions.
 
@@ -16,21 +16,21 @@ Read [`wolf-ffi-decisions.md`](../../../notes/wolf-ffi-decisions.md) first. It h
 
 ### Lifecycle
 
-- `wolf_ffi_start(init_lua: String, cwd: String, cols: u16, rows: u16) -> Option<WolfCoreHandle>` — `init_lua` and `cwd` are filesystem paths. Logs and returns `None` on any startup error. Mints this core's wake token. Takes the core's terminfo directory from `WOLF_TERMINFO_DIR` through `wolf_core::terminfo_dir_from_env()` rather than a parameter, so the Swift signature is unchanged; `Project.swift` defaults that variable to the bundle's.
+- `wolf_ffi_start(init_lua: String, cwd: String, cols: u16, rows: u16) -> Option<WolfCoreHandle>` — `init_lua` and `cwd` are filesystem paths. Logs and returns `None` on any startup error. Mints this core's wake token. Takes the core's terminfo directory from `WOLF_TERMINFO_DIR` through `wolf_core::terminfo_dir_from_env()` rather than a parameter, so the Swift signature is unchanged; `TabCore.swift` defaults that variable to the bundle's.
 - `WolfCoreHandle` — Opaque and main-thread-only: `WolfCore` is not `Send`. Its `RefCell<Option<WolfCore>>` lets `shutdown` take the core by value while the bridge only ever hands Swift a `&self`.
 - `wake_token(&self) -> u64` — Routing identity for this core's wakes. Tokens start at 1, leaving 0 free as the front-end's "no core" sentinel.
 - `shutdown(&self)` — Takes the core out of the handle and drops it; every method afterwards returns its empty-backed value.
-- `set_ui_focus(&self, gained: bool)` — `nvim_ui_set_focus`. Both edges are reported so each refocus is a real transition, which is what makes `FocusGained` fire the autoread `:checktime`.
+- `set_ui_focus(&self, gained: bool)` — `nvim_ui_set_focus`, reporting whether the tab this core serves has focus. nvim fires `FocusGained` on every `true`, which runs the autoread `:checktime`, so the front-end sends each edge once.
 
 The four `extern "C"` wake registrations (`wolf_ffi_set_wake`, `wolf_ffi_set_filesearch_wake`, `wolf_ffi_set_tree_wake`, `wolf_ffi_set_search_wake`) live in `generated/wolf_ffi_wake.h` rather than in `mod ffi`; see [`wolf-ffi-decisions.md`](../../../notes/wolf-ffi-decisions.md).
 
 ### Liveness and restart
 
 - `liveness(&self) -> u8` — `mod liveness`. A lock-free snapshot read, no RPC, so the front-end can call it on every wake to drive the crash and stall overlay.
-- `restart(&self) -> bool` — Force-kills and respawns the captive nvim in place, re-running the setup chain. Capture each view's `open_files_for_tabpage` before calling: a respawn wipes the mirror.
+- `restart(&self) -> bool` — Force-kills and respawns the captive nvim in place, re-running the setup chain. Capture `open_files_for_tabpage` before calling, keyed by `active_tabpage`, which a dead core still answers: a respawn wipes the mirror.
 - `open_files_for_tabpage(&self, tab: i64) -> FfiOpenFiles` — The Tier-1 open-file mirror; a snapshot read, no RPC. Only `active_path` is per-tabpage; `files` is not (below).
 - `FfiOpenFiles::active_path(&self) -> String` — `""` for an unnamed buffer.
-- `FfiOpenFiles::files(&self) -> Vec<String>` — Absolute paths. Reopen the active one last so it lands focused. This is the instance-global buflisted set, so a multi-view project over-reopens.
+- `FfiOpenFiles::files(&self) -> Vec<String>` — Absolute paths. Reopen the active one last so it lands focused. This is the instance-global buflisted set, so a core showing several tabpages over-reopens.
 
 ### Render and frame
 
@@ -84,7 +84,7 @@ The four `extern "C"` wake registrations (`wolf_ffi_set_wake`, `wolf_ffi_set_fil
 - `split_horizontal(&self)`, `split_vertical(&self)` — Stacked (`:split`) and side-by-side (`:vsplit`) splits of Neovim's current window, through `WolfCore::split_pane`.
 - `rebuild_layout(&self, layout: &FfiPaneNode) -> Vec<i64>` — Realizes a saved split tree, the node `FfiTabState::layout` returned, in the current tabpage's lone window, returning the window handles in leaf order. Rust renders it with `wolf_core::state::rebuild_layout_spec`, so no front-end renders the spec. nvim supplies only count, topology, and per-window buffer; sizes come from the front-end's weights. When it returns, `win_buffer` and `previews` already report every returned window, so a state commit straight after it reads the restored files rather than the startup buffer. A terminal leaf's window already shows its new session. When the node marks a zoomed leaf, Neovim's current window and `active_win` are already the first such leaf's.
 - `pane_status_for_grid(&self, grid: u64) -> FfiPaneStatus` — The statusbar strings for the window drawing into `grid`.
-- `win_buffer(&self, win: i64) -> FfiWinBuffer` — What window `win` shows, read from core's `win_buffers` by handle. That map spans every tabpage, so a background view's window is still reported, where `pane_status_for_grid` joins through the current-tabpage `windows` map and answers `[No Name]`. The front-end reads persisted leaf paths through it for that reason.
+- `win_buffer(&self, win: i64) -> FfiWinBuffer` — What window `win` shows, read from core's `win_buffers` by handle. That map spans every tabpage, so a window on a tabpage that is not current is still reported, where `pane_status_for_grid` joins through the current-tabpage `windows` map and answers `[No Name]`. The front-end reads persisted leaf paths through it.
 - `toggle_full_width(&self)` — Flips `b:wolf_full_width` on the effective buffer, which for a preview scratch is the source buffer.
 - `is_full_width_active(&self) -> bool` — Drives the View > Use full width for content checkmark.
 - `full_width_for_win(&self, win: i64) -> bool` — The per-window flag the front-end threads into a pane's geometry.
@@ -131,20 +131,20 @@ Mouse and scroll take scalar arguments and a `mods` bitset rather than transpare
 
 ### Tabpages
 
-One captive nvim is one project; each of its views binds to a distinct tabpage.
+Core's tabpage API, for a front-end whose tabs are tabpages of one Neovim. A macOS tab's core holds one tabpage, and macOS reads only `active_tabpage` here, for its restart capture.
 
-- `create_tabpage(&self, cwd: String) -> i64` — Optionally roots the tabpage at `cwd` via `:tcd`; an empty string skips it. Blocks briefly. 0 when the core is gone, and the caller then drops the would-be view.
-- `current_tabpage(&self) -> i64` — The authoritative first-view bind, via a blocking RPC.
-- `active_tabpage(&self) -> i64` — The cheap refocus gate, read from the snapshot with no RPC.
-- `cwd_for_tabpage(&self, tab: i64) -> String` — A tabpage's canonicalized `:tcd` cwd, authoritative for a view that is not current. `""` for a closed or unknown handle.
-- `set_current_tabpage(&self, tab: i64)` — The front-end drives every tabpage switch when a view becomes key.
-- `close_tabpage(&self, tab: i64)` — A non-last view close. The shared nvim survives until the last view goes, which the front-end handles by shutting the core down instead.
+- `create_tabpage(&self, cwd: String) -> i64` — Optionally roots the tabpage at `cwd` via `:tcd`; an empty string skips it. Blocks briefly. 0 when the core is gone, and the caller then drops the would-be tab.
+- `current_tabpage(&self) -> i64` — The authoritative current tabpage, via a blocking RPC.
+- `active_tabpage(&self) -> i64` — The current tabpage read from the snapshot with no RPC, so a dead core still answers it.
+- `cwd_for_tabpage(&self, tab: i64) -> String` — A tabpage's canonicalized `:tcd` cwd, authoritative for a tabpage that is not current. `""` for a closed or unknown handle.
+- `set_current_tabpage(&self, tab: i64)` — Makes `tab` current; the front-end drives every tabpage switch.
+- `close_tabpage(&self, tab: i64)` — A last-tabpage close is swallowed: a front-end ends the last tabpage by shutting the core down.
 
 ### Documents and directories
 
 - `open(&self, path: String)` — Absolute path. The core's input pump records the file MRU.
 - `open_at(&self, path: String, line: u64, col: u64)` — Open and jump. `line` is 1-based, `col` a 0-based byte offset.
-- `chdir(&self, path: String)` — `:tcd` — the tab-local cwd, since each view owns its own working directory.
+- `chdir(&self, path: String)` — `:tcd`, the current tabpage's cwd; a macOS tab's core holds one tabpage, so the whole tab moves ([why](../../../notes/wolf-macos-decisions.md#one-neovim-per-tab)).
 - `cwd(&self) -> String` — nvim's live canonicalized cwd, tracking `:cd` and `DirChanged`.
 - `current_file(&self) -> String` — `""` for an unnamed buffer.
 - `new_buffer(&self)` — An empty markdown-typed buffer named the next free `Untitled N.md`, not written to disk.
@@ -236,7 +236,7 @@ One captive nvim is one project; each of its views binds to a distinct tabpage.
 
 ### Appearance and theme
 
-- `set_background(&self, dark: bool)` — `:set background=dark|light`. The macOS front-end pushes the resolved appearance at launch and on every system change while in auto mode.
+- `set_background(&self, dark: bool)` — `:set background=dark|light`. The macOS front-end pushes the resolved appearance when each core starts and on every system change while in auto mode.
 - `theme_titlebar_bg(&self) -> FfiColor` — The `WolfTitlebar` group's background, which macOS prefers to `Normal`'s for the titlebar. Unset when the group is absent or cleared.
 - `theme_titlebar_fg(&self) -> FfiColor` — The same group's foreground, carried and applied by no front-end. Same unset convention.
 
@@ -325,7 +325,7 @@ These `u8` values are the ABI: Swift decodes raw integers, so the numbers are co
 | 17    | `NEW_TAB`               | New tab in the current window.                                                                  |
 | 18    | `PREVIEW`               | Render the active markdown buffer into a preview pane.                                          |
 | 19    | `EDIT`                  | From a preview pane back to its source file.                                                    |
-| 20    | `TERMINAL`              | Toggle the per-project terminal drawer.                                                         |
+| 20    | `TERMINAL`              | Toggle the terminal drawer.                                                                     |
 | 21    | `PREVIEW_IN_BROWSER`    | Render the active markdown buffer and open it in the system browser.                            |
 | 22    | `FULL_WIDTH`            | Toggle the active buffer between the default content width and full pane width.                 |
 | 23    | `TOGGLE_SIDEBAR`        | Collapse or expand the sidebar; a native-only action.                                           |

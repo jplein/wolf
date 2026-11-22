@@ -16,7 +16,7 @@ void wolf_ffi_set_wake(void (*wake)(uint64_t token));   // generated/wolf_ffi_wa
 
 The obvious design is an `extern "Swift"` symbol, and it is wrong here: a Rust-only integration test could never resolve one at link time. Registration keeps `wolf_ffi_start` linkable and runnable with no Swift runtime present, which is what lets the real-nvim tests drive the bridge at all. An unregistered wake is a harmless no-op.
 
-Each callback carries the firing core's per-project wake token, a `u64` minted in `wolf_ffi_start`, so one process-global callback routes each wake to the right project without clobbering. The token identifies a project — one captive Neovim shared by N views — and the front-end fans it out to that project's current view.
+Each callback carries the firing core's wake token, a `u64` minted in `wolf_ffi_start`, so one process-global callback routes each wake to the right core without clobbering. The token identifies one core, which on macOS is one tab's captive Neovim, and the front-end hands the wake to that tab.
 
 The wake fires on a tokio worker thread and must not touch the `!Send` handle, which is precisely why identity crosses the boundary as a plain `Send` scalar rather than a pointer. The registered thunk must stay `@convention(c)`, so it can capture nothing but globals.
 

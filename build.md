@@ -125,7 +125,7 @@ nix build .#wolf-gnome --no-link --print-out-paths
 | `share/fonts/truetype/` | iA Writer Mono S, JetBrains Mono and Symbols Nerd Font Mono                         |
 | `share/licenses/`       | iA Writer Mono S's licence, and Symbols Nerd Font Mono's licence and icon-set table |
 
-The wrapper sets `WOLF_NVIM_BIN`, `WOLF_RG_BIN`, `WOLF_NVIM_TREESITTER_DIR`, `WOLF_PARSERS_DIR`, `WOLF_TERMINFO_DIR` and `FONTCONFIG_FILE` as defaults, so an exported value of any of them still wins — the rule `Project.swift` follows on macOS with `setenv(…, 0)`, and what keeps the devShell's pinned font stack winning inside `nix develop`. It never sets `WOLF_INIT_LUA`, which would make the installed runtime unreachable and the development override useless on the packaged binary.
+The wrapper sets `WOLF_NVIM_BIN`, `WOLF_RG_BIN`, `WOLF_NVIM_TREESITTER_DIR`, `WOLF_PARSERS_DIR`, `WOLF_TERMINFO_DIR` and `FONTCONFIG_FILE` as defaults, so an exported value of any of them still wins — the rule `TabCore.swift` follows on macOS with `setenv(…, 0)`, and what keeps the devShell's pinned font stack winning inside `nix develop`. It never sets `WOLF_INIT_LUA`, which would make the installed runtime unreachable and the development override useless on the packaged binary.
 
 A NixOS configuration consumes the flake as an input:
 

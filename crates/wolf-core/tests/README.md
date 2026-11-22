@@ -60,10 +60,11 @@ Real Neovim (`//crates/wolf-core:autoread`: staged nvim runfiles, `WOLF_NVIM_BIN
 **Covers**
 
 - init.lua's `WolfAutoRead` augroup: a file rewritten on disk from outside reloads into an unmodified buffer, and a buffer holding unsaved edits is never clobbered.
+- Two cores on one cwd, as two macOS tabs on one folder: a save in one reloads in the other, unmodified, after its focus trigger, with `CursorHold` held off so only the trigger can reload it.
 
 **Gotchas**
 
-- The trigger is `set_ui_focus(false)` then `set_ui_focus(true)`; `FocusGained` is edge-triggered, so a lone `true` can be a no-op.
+- The trigger is `set_ui_focus(false)` then `set_ui_focus(true)`, a loss and a gain as a tab reports them; the gain alone fires `FocusGained`.
 - An external rewrite must differ in byte length from the original and follow a ~1.1s sleep, so `:checktime`'s size and mtime checks both trip.
 
 #### `browser_preview.rs`
@@ -208,7 +209,7 @@ Real Neovim (`//crates/wolf-core:file_search_rescan`: staged nvim runfiles, `WOL
 
 **Covers**
 
-- Rescans of a live `FileSearch` session from each nvim trigger alone, with the watcher off: a file written through nvim appears with `version` bumped and the session `complete`; a deleted file stays gone despite the MRU seed; `:saveas` lists both names; `:w` of a listed file moves nothing; a burst converges deduplicated. The refocus-edge cases drive a `:silent !rm`, both `set_ui_focus` edges (nvim de-dupes `FocusGained`), and the drawer's `terminal_focus(id, false)`, never a `doautocmd`.
+- Rescans of a live `FileSearch` session from each nvim trigger alone, with the watcher off: a file written through nvim appears with `version` bumped and the session `complete`; a deleted file stays gone despite the MRU seed; `:saveas` lists both names; `:w` of a listed file moves nothing; a burst converges deduplicated. The refocus-edge cases drive a `:silent !rm`, a `set_ui_focus` loss and gain, and the drawer's `terminal_focus(id, false)`, never a `doautocmd`.
 - With the watcher on and changes made only through `std::fs`: a create appears; a delete, and a rename into an ignored directory, disappear; a `.gitignore` edit re-filters; ignored churn and a modify of a listed file bump no `version`.
 
 **Gotchas**
@@ -665,7 +666,7 @@ Also the durable user-directory surface: the `spell_dir`/`runtime_user_dir`/`par
 
 Spawns a real Neovim (staged runfiles, wired `WOLF_NVIM_BIN`, `no-sandbox`).
 
-**Covers** — `SwapExists` never prompting: a dead owner's unsaved edit is recovered (`"r"`), a live owner's is not (`"e"`), and an unsaved `Untitled.md` survives a crash-restart unshadowed. On the naming path `SwapExists` cannot reach ([`runtime/nvim/README.md`](../../../runtime/nvim/README.md#decisions)), a cold start over a stale `<cwd>/Untitled.md` swap names its buffer `Untitled 2.md` and keeps the first keystroke.
+**Covers** — no swap ever prompting: a dead owner's unsaved edit is recovered (`"r"`) through the `BufNew` re-arm, and an unsaved `Untitled.md` survives a crash-restart unshadowed. A live owner's swap is never offered, and a second core opening its file shows no prompt and no `W325` or `ATTENTION` toast. On the naming path `SwapExists` cannot reach ([`runtime/nvim/README.md`](../../../runtime/nvim/README.md#decisions)), a cold start over a stale `<cwd>/Untitled.md` swap names its buffer `Untitled 2.md` and keeps the first keystroke.
 
 Long paths (`long_dir`): files past `SWAP_NAME_MAX` get no swap, the startup `Untitled.md` included, while a short file keeps one; a forcing `SaveAs` between cut-name siblings overwrites; a rename onto a short path restores the swap, but keeps it off when a crashed session left one for that name, with no `E325` prompt and the stale swap untouched; a stale cut-name swap survives a reload after `:bdelete`.
 

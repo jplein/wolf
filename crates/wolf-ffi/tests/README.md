@@ -387,7 +387,7 @@ That the harness's state-dir funnel keeps a real-nvim test off the user's Wolf s
 
 #### `tabpages.rs`
 
-**Covers** — the tabpage handle methods the macOS front-end drives (`current_tabpage`, `create_tabpage`, `active_tabpage`, `set_current_tabpage`, `cwd_for_tabpage`, `close_tabpage`) plus their neutral values after `shutdown()`. Real nvim; target `//crates/wolf-ffi:tabpages` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`).
+**Covers** — core's tabpage handle methods across the bridge, for a front-end whose tabs are tabpages of one Neovim (`current_tabpage`, `create_tabpage`, `active_tabpage`, `set_current_tabpage`, `cwd_for_tabpage`, `close_tabpage`) plus their neutral values after `shutdown()`. Real nvim; target `//crates/wolf-ffi:tabpages` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`).
 
 **Gotchas** — one `#[test]`, which also sets the process-global `WOLF_STATE_DIR` for shutdown-flush hygiene. The `:vsplit`-then-switch-away-and-back step is the point of the test, not setup: it proves each window handle re-resolves to a live, paintable grid after a tabpage switch.
 
@@ -463,6 +463,6 @@ Real nvim plus queries and parsers trees from either provider, so both platforms
 
 #### `win_buffer.rs`
 
-**Covers** — `win_buffer(win)` reading a window on a background tabpage, the read the macOS state commit resolves every pane leaf through: a window opened on one tabpage still reports its file after a second tabpage becomes current, while an unknown window and a shut-down core report nothing with an empty path. Real nvim; target `//crates/wolf-ffi:win_buffer` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`).
+**Covers** — `win_buffer(win)` reading a window on a tabpage that is not current: a window opened on one tabpage still reports its file after a second tabpage becomes current, while an unknown window and a shut-down core report nothing with an empty path. Real nvim; target `//crates/wolf-ffi:win_buffer` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`).
 
 **Gotchas** — one `#[test]`, because it sets the process-global `WOLF_STATE_DIR` for the shutdown flush and a sibling in the binary would race it. The test polls `grid_for_win(win1) == 0` before the read, so the premise that the window left the current-tabpage `windows` map is measured: if Neovim ever kept it bound, the premise fails rather than the read passing vacuously.

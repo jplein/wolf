@@ -1,6 +1,6 @@
 # wolf-macos/Sources/WolfKeyMap/Persistence
 
-The pure decisions behind `state.json`: what each live view writes to it, how a pane layout encodes, and how windows, projects and layouts come back from it on launch. The directory compiles into the [`WolfKeyMap`](../README.md) module, not a module of its own.
+The pure decisions behind `state.json`: what each live view writes to it, how a pane layout encodes, and how windows, tabs and layouts come back from it on launch. The directory compiles into the [`WolfKeyMap`](../README.md) module, not a module of its own.
 
 Coverage lives in [`Tests/WolfKeyMapTests/`](../../../Tests/WolfKeyMapTests/README.md).
 
@@ -27,18 +27,17 @@ Purpose: The pure codec between the live `PaneTree` layout and the shapes that p
 
 #### `RestoreSeam.swift`
 
-Purpose: The pure restore planner. It rebuilds projects from the saved (window, tab, working directory) tree, because project identity is not persisted — see [wolf-macos-decisions.md](../../../../../notes/wolf-macos-decisions.md) for that model.
+Purpose: The pure restore planner: one planned tab per saved tab, each to start its own Neovim, so tabs on one directory are never merged ([why](../../../../../notes/wolf-macos-decisions.md#one-neovim-per-tab)).
 
 **Public API**
 
-- `plan(windows:home:isDirectory:) -> RestorePlan` — `isDirectory` is the seam's only injected impurity (the app passes a `FileManager` check, tests pass a set lookup). Projects come back in first-encounter order.
-- `SavedTab` and `SavedWindow` are the inputs; `SavedTab` is also what a live view contributes to a commit, through [`SessionSeam`](#sessionseamswift); `PlannedTab`, `ProjectPlan` and `RestorePlan` the outputs. A `PlannedTab` retains its `groupIndex` and `positionInGroup` so the window-assembly phase can drop it back into the right OS window and tab group.
+- `plan(windows:home:isDirectory:) -> [PlannedTab]` — in window then tab order. `isDirectory` is the seam's only injected impurity (the app passes a `FileManager` check, tests pass a set lookup).
+- `SavedTab` and `SavedWindow` are the inputs; `SavedTab` is also what a live view contributes to a commit, through [`SessionSeam`](#sessionseamswift). A `PlannedTab` retains its `groupIndex` and `positionInGroup` so the window-assembly phase can drop it back into the right OS window and tab group.
+- `PlannedTab.launchCwd` and `hasFolder` are [`launchDecision`](#stateseamswift)'s: the saved directory when it still is one, else `home` in the empty state. `PlannedTab.cwd` still carries the original saved string.
 
 **Decisions**
 
-- An empty-state tab (`cwd == ""`) and a tab whose saved directory has since been deleted each get a single-tab project of their own rather than sharing one, matching "a new window is a new project". Their `launchCwd` is `home`, while `PlannedTab.cwd` still carries the original saved string.
-- The seam does not canonicalize. The caller persists an already-canonical working directory via `cwd_for_tabpage`, so grouping is on the string exactly as saved.
-- `layout` is a passthrough: it rides from `SavedTab` into the matching `PlannedTab` untouched and never affects grouping, which is by working directory alone.
+- `layout` is a passthrough: it rides from `SavedTab` into the matching `PlannedTab` untouched.
 
 #### `SessionSeam.swift`
 
