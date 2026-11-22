@@ -30,7 +30,7 @@ fi
 
 root_props="$(/usr/sbin/ioreg -n Root -d1 2>/dev/null || true)"
 if /usr/bin/grep -Eq '"(CGSSessionScreenIsLocked|IOConsoleLocked)" *= *Yes' <<<"$root_props"; then
-	refuse "unlock the screen; a window cannot become key while it is locked."
+	refuse "unlock the screen; no run on a locked screen has been measured."
 fi
 
 for tool in bazel python3; do

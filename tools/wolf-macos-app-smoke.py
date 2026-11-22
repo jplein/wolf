@@ -175,7 +175,7 @@ PGREP = "/usr/bin/pgrep"
 
 SAVED_STATE_NAME = "org.wolf.WolfMacOS.savedState"
 SCREEN_LOCKED_RE = re.compile(r'"(?:CGSSessionScreenIsLocked|IOConsoleLocked)"\s*=\s*Yes')
-SCREEN_LOCKED_MESSAGE = "unlock the screen; a window cannot become key while it is locked."
+SCREEN_LOCKED_MESSAGE = "unlock the screen; no run on a locked screen has been measured."
 
 SCRUBBED_ENV_NAMES = ("NVIM", "NVIM_LISTEN_ADDRESS", "VIMINIT", "MYVIMRC", "ENV")
 SCRUBBED_ENV_PREFIXES = ("WOLF_", "DYLD_")
@@ -332,7 +332,8 @@ def refuse_unless_darwin_outside_regina() -> None:
 def refuse_if_screen_locked() -> None:
     """Raises SetupError while `ioreg -n Root -d1` reports the screen locked.
 
-    An unreadable `ioreg` passes: P0's message names a window that never became key first.
+    An unreadable `ioreg` passes: the refusal is a precaution, since no check is known to fail
+    on a locked screen, though no run there has been measured.
     """
     try:
         out = subprocess.run(
@@ -934,10 +935,10 @@ def _run_one_checks(run: RunDir, app: App, nvim: Nvim) -> Tuple[int, int]:
         if len(eds) == 1 and not eds[0].name:
             return (
                 f"want one editor window showing {LEFT_FILE}, got [{_sizes(p)}]. A lone unnamed "
-                "window means, most likely first: the window never became key (screen locked, "
-                "or activation refused): a restored view becomes current only when its window "
-                "becomes key. Otherwise the seeded state.json was not restored (WOLF_STATE_DIR "
-                "ignored, or the file rejected), or the layout rebuild never ran."
+                "window means, most likely first: the seeded state.json was not restored "
+                "(WOLF_STATE_DIR ignored, or the file rejected), so the app opened its "
+                "empty-state tab. Otherwise the restored tab's layout rebuild never ran: its "
+                "core's render wakes never reached its view, or its first pane never bound."
             )
         return (
             f"want one editor window showing {LEFT_FILE}, got [{_sizes(p)}]: the launch opened "
@@ -1097,9 +1098,9 @@ def _run_two_checks(app: App, nvim: Nvim, l1: Tuple[int, int]) -> None:
         if len(eds) == 1 and not eds[0].name:
             return (
                 f"want two editor windows, got [{_sizes(p)}]. A lone unnamed window means, most "
-                "likely first: run 2's window never became key (screen locked, or activation "
-                "refused while another app was in use), so no view became current and the saved "
-                "split was never rebuilt. Otherwise the restore read no layout."
+                "likely first: the restore read no layout. Otherwise the restored tab's layout "
+                "rebuild never ran: its core's render wakes never reached its view, or its first "
+                "pane never bound."
             )
         return (
             f"want two editor windows, got [{_sizes(p)}]: the saved split was not rebuilt (the "
