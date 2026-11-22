@@ -37,15 +37,11 @@
 //!
 //! **A tab restored with a layout it has never gathered contributes the SEED.**
 //! [`StateHandle::cached_tab`] derives it at read time through
-//! [`crate::state_seam::seeded_tab_state`], so a tab with no bound pane — one whose
-//! `realize_layout` bound none, so whose gate never opens — is not erased by the
-//! next commit. The seed stops being consulted the instant a real gather succeeds,
-//! which for a materialized restored tab is its first wake: its panes were created
-//! synchronously, and its leaves resolve from the window-keyed maps while Neovim is
-//! on another tabpage, so being unselected costs it nothing. The tab that has no
-//! glue here at all — one still QUEUED for materialization — is seeded a level up,
-//! by `window::WindowHandle::cached_subtree` through
-//! [`crate::state_seam::pending_tab_states`].
+//! [`crate::state_seam::seeded_tab_state`], so a tab whose restored layout bound no
+//! pane, and whose gate therefore never opens, is not erased by the next commit.
+//! The seed stops being consulted the instant a real gather succeeds, which for a
+//! restored tab is the wake after its layout is realized on its own Neovim,
+//! selected or not.
 //!
 //! This module submits nothing itself: [`crate::coordinator::Coordinator`] walks
 //! every window, which walks every tab, and commits the assembled tree.
@@ -53,7 +49,8 @@
 //! ## Borrow discipline (load-bearing)
 //!
 //! [`StateHandle::refresh_tab`] runs INSIDE `window::wire_close`'s
-//! `close-request` handler, which goes on to do `core.borrow_mut().take()`. Every
+//! `close-request` handler, which goes on to take every tab's core out with a
+//! `borrow_mut()`. Every
 //! `core.borrow()` below is therefore taken and dropped in its OWN statement, and
 //! none is live when [`StateHandle::refresh_tab`] returns. An outstanding
 //! `borrow()` there is a `RefCell` panic, not a warning.
@@ -94,14 +91,13 @@ pub struct StateParts<'a> {
 /// The persistence glue's shared state. Single GTK main thread, so `Cell` /
 /// `RefCell` suffice.
 struct PersistInner {
-    /// The live core (liveness + live cwd reads).
+    /// This tab's own core (liveness + live cwd reads).
     core: Rc<RefCell<Option<WolfCore>>>,
     /// The pane view (layout snapshot + readiness counts).
     panes: PaneHandle,
     /// The last [`TabState`] a successful gather produced, and this tab's
     /// contribution whenever a later one refuses. `None` until the first gather
-    /// succeeds, which for a restored tab whose `realize_layout` bound no pane is
-    /// forever — see [`StateHandle::cached_tab`].
+    /// succeeds, which for a restored tab whose layout bound no pane is forever — see [`StateHandle::cached_tab`].
     tab: RefCell<Option<TabState>>,
     /// The launch cwd, persisted until nvim reports a live one.
     launch_cwd: PathBuf,

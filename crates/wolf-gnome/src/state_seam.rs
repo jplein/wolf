@@ -14,11 +14,13 @@
 //!   [`restored_window_size`] returns SIZE only.
 //! - **Tabs.** Windows are the tree and tabs are its second level:
 //!   [`restore_plans`] walks every saved window and plans every saved tab of it
-//!   ([`RestorePlan::tabs`], capped at [`MAX_RESTORE_TABS`]), while
-//!   [`snapshot_state`] assembles every live window and [`window_subtree`] every
-//!   contributing tab, in tab order. What is NOT here is a per-tab working
-//!   directory: the cwd and the sidebar preference are per WINDOW, written into
-//!   every tab and read back from the first.
+//!   ([`RestorePlan::tabs`], capped at [`MAX_RESTORE_TABS`] and
+//!   [`MAX_RESTORE_NEOVIMS`]), while [`snapshot_state`] assembles every live window
+//!   and [`window_subtree`] every contributing tab, in tab order. What is NOT here
+//!   is a per-tab working directory on the RESTORE side: each tab persists its own
+//!   Neovim's cwd, while restore reads the window's from the first tab and starts
+//!   every tab of it there. The sidebar preference is per WINDOW, written into every
+//!   tab and read back from the first.
 
 use std::path::{Path, PathBuf};
 
@@ -27,25 +29,26 @@ use wolf_core::{Liveness, PaneNode, TabState, WindowState, WolfState};
 use crate::pane_layout;
 use crate::workspace::{self, LaunchDecision};
 
-/// The most windows [`restore_plans`] will open from one saved tree.
+/// The most tabs, and so Neovim processes, [`restore_plans`] will plan across
+/// every window of one saved tree.
 ///
 /// A restore POLICY cap, not a tree limit — the
 /// [`crate::pane_layout::MAX_RESTORE_LEAVES`] precedent. What it bounds is not
-/// memory but PROCESSES: every restored window costs a whole captive Neovim and a
+/// memory but PROCESSES: every restored tab costs a whole captive Neovim and a
 /// tokio runtime of its own, so a corrupt or hand-edited `state.json` must not be
 /// able to fork dozens of them before the first frame. The number sits far above
 /// any session a user assembles by hand, so refusing is the pathological case
 /// rather than a limit anyone meets.
-pub const MAX_RESTORE_WINDOWS: usize = 16;
+pub const MAX_RESTORE_NEOVIMS: usize = 16;
 
 /// The most tabs [`restore_plans`] will plan for ONE saved window.
 ///
-/// The [`MAX_RESTORE_WINDOWS`] precedent, bounding a different resource: what a
-/// long tab list costs is the launch's BLOCKING-RPC budget — one `create_tabpage`
-/// and up to one `rebuild_layout` per restored tab, every one of them on the GTK
-/// main thread before the window is interactive — whose worst case is the product
-/// of the two caps. The number sits far above any session a user assembles by
-/// hand, so refusing is the pathological case rather than a limit anyone meets.
+/// The [`MAX_RESTORE_NEOVIMS`] precedent, bounding a different resource: one
+/// window's LAUNCH COST. Every tab's `WolfCore::start` — a spawn plus its setup
+/// calls — runs on the GTK main thread before that window is presented, followed
+/// on its first wake by up to one blocking `rebuild_layout`. The number sits far
+/// above any session a user assembles by hand, so refusing is the pathological
+/// case rather than a limit anyone meets.
 pub const MAX_RESTORE_TABS: usize = 8;
 
 /// One restored TAB's plan.
@@ -67,9 +70,8 @@ pub struct RestorePlan {
     /// Whether to show the empty state (drives `tree_view::build`'s `start` flag
     /// and `crate::shell::AppShell::set_empty_state`).
     pub empty: bool,
-    /// The tabs to open, in saved order, NEVER empty: index 0 is the window's first
-    /// tab and every later index is queued for the restore materialization
-    /// ([`crate::tab_view::TabsHandle::queue_restore`]).
+    /// The tabs to open, in saved order, NEVER empty. `window::build` opens every
+    /// one, each with its own Neovim, and selects index 0.
     pub tabs: Vec<TabPlan>,
     /// The restored window size in pixels, or `None` for the unset sentinel.
     pub window_size: Option<(i32, i32)>,
@@ -117,8 +119,13 @@ pub struct RestorePlan {
 /// snapshot writes the merge back over the saved tree, so the session is gone
 /// rather than merely mis-displayed.
 ///
-/// At most [`MAX_RESTORE_WINDOWS`] plans are returned; a hand-edited tree longer
-/// than that is truncated.
+/// # The Neovim budget
+///
+/// The plans hold at most [`MAX_RESTORE_NEOVIMS`] tabs between them. Windows are
+/// planned in saved order, each with at most `min(MAX_RESTORE_TABS, remaining)` of
+/// its tabs — its saved ones, or the one-tab floor — and the walk stops when the
+/// budget is spent. A window that only partly fits is truncated to its first tabs
+/// rather than dropped, so the windows saved earliest are the ones that come back.
 ///
 /// `is_dir` is injected so the whole plan is pure; production passes
 /// `Path::is_dir`.
@@ -131,17 +138,21 @@ pub fn restore_plans(
 ) -> Vec<RestorePlan> {
     let saved_windows = saved.map_or(&[][..], |state| state.windows.as_slice());
 
-    let mut plans: Vec<RestorePlan> = saved_windows
-        .iter()
-        .take(MAX_RESTORE_WINDOWS)
-        .enumerate()
-        .map(|(index, window)| {
-            // The rule above: only the first window is a candidate for the
-            // directory this process was launched from.
-            let offered_cwd = if index == 0 { process_cwd } else { None };
-            plan_for_window(Some(window), offered_cwd, home, &is_dir)
-        })
-        .collect();
+    let mut plans: Vec<RestorePlan> = Vec::new();
+    let mut remaining = MAX_RESTORE_NEOVIMS;
+    for (index, window) in saved_windows.iter().enumerate() {
+        if remaining == 0 {
+            break;
+        }
+        // The rule above: only the first window is a candidate for the
+        // directory this process was launched from.
+        let offered_cwd = if index == 0 { process_cwd } else { None };
+        let mut plan = plan_for_window(Some(window), offered_cwd, home, &is_dir);
+        // Never empties the plan: it holds at least the one-tab floor, and `remaining` is positive.
+        plan.tabs.truncate(remaining);
+        remaining -= plan.tabs.len();
+        plans.push(plan);
+    }
 
     if plans.is_empty() {
         // The floor, not a fallback: an empty vec here would leave the
@@ -308,27 +319,16 @@ pub fn snapshot_cwd(empty: bool, launch_cwd: &Path, live_cwd: Option<&Path>) -> 
 /// DESTROY the user's saved layout. Gated, a crash instead preserves the last
 /// good save.
 ///
-/// **The gate is read ONCE PER TAB, against that tab's window's core**, and a
-/// refusal means "contribute the cached subtree", not "vanish from the tree" — a
-/// tab whose panes have not bound yet keeps whatever it last persisted.
+/// **The gate is read ONCE PER TAB, against that tab's own core**, and a refusal
+/// means "contribute the cached subtree", not "vanish from the tree" — a tab whose
+/// panes have not bound yet keeps whatever it last persisted.
 ///
-/// **It is asked about every tab, including background ones, and answers usefully
-/// for them.** `reported_windows` is `Snapshot::win_buffers.len() +
-/// Snapshot::previews.len()`, both filled by `runtime/nvim/init.lua` from
-/// `nvim_list_wins()` — GLOBAL across tabpages — so it describes the whole Neovim
-/// rather than the current tabpage, which is exactly what makes it the right input
-/// for a tab the user is not looking at. A background tab's own refusal route is
-/// [`crate::pane_layout::resolve_leaves`], one layer down: a leaf whose window is
-/// in neither map refuses that tab's gather, and its cache is contributed instead.
-/// The two refusals compose — either one leaves the last good subtree standing.
-///
-/// A RESTORED tab is gathered LIVE from the moment it materializes:
-/// `pane_view::PaneHandle::realize_layout` creates its panes synchronously, so
-/// `bound_panes` is non-zero and this gate passes for it even while Neovim is on
-/// another tabpage. The tabs that reach [`seeded_tab_state`] instead are the ones
-/// with no bound pane at all — a tab still sitting in the restore QUEUE, whose page
-/// does not exist yet ([`pending_tab_states`]), and a materialized tab whose
-/// `realize_layout` bound none.
+/// `reported_windows` is `Snapshot::win_buffers.len() + Snapshot::previews.len()`,
+/// both filled by `runtime/nvim/init.lua` from `nvim_list_wins()`. A tab's second
+/// refusal route is [`crate::pane_layout::resolve_leaves`], one layer down: a leaf
+/// whose window is in neither map refuses that tab's gather, and its cache is
+/// contributed instead. The two refusals compose — either one leaves the last good
+/// subtree standing.
 ///
 /// The match over [`Liveness`] is TOTAL with no `_` arm, so a new variant is an
 /// `E0004` here rather than a silent "not alive" — matching
@@ -399,12 +399,10 @@ pub fn window_subtree(width: i32, height: i32, tabs: Vec<TabState>) -> Option<Wi
 /// `Some` **iff** `restored_layout` is `Some`, carrying that layout verbatim at
 /// [`snapshot_cwd`]'s answer for this window and the LIVE sidebar preference.
 ///
-/// Two tabs reach it, and neither has a cache to fall back on: one still sitting in
-/// the restore QUEUE, whose page does not exist yet ([`pending_tab_states`] maps
-/// this over that queue), and a materialized tab whose `realize_layout` bound no
-/// pane. A restored tab that DID materialize is gathered live from its first wake —
-/// `realize_layout` creates its panes synchronously and the window-keyed maps
-/// resolve them from any tabpage — and never consults this at all.
+/// Only a restored tab whose layout bound no pane reaches it, and that tab has no
+/// cache to fall back on: until its own first gather succeeds, which for such a tab
+/// is never, this seed is all it contributes. A restored tab whose panes DID bind
+/// is gathered live from its own Neovim and never consults this at all.
 ///
 /// Both halves are load-bearing, in opposite directions:
 ///
@@ -432,46 +430,6 @@ pub fn seeded_tab_state(
     ))
 }
 
-/// What a window contributes for the tabs its launch has QUEUED but not yet
-/// created: [`seeded_tab_state`] mapped over the queue, in queued order, with the
-/// entries that take no seed dropped.
-///
-/// It maps and nothing else — no cwd and no preference is re-derived here — so a
-/// queued tab and a materialized tab whose own gather never succeeded contribute
-/// the identical [`TabState`].
-///
-/// # Why a queued tab must be contributed at all
-///
-/// A queued tab has no page, so nothing else can speak for it: no cache, because
-/// [`crate::persistence`] holds one per live tab, and no live gather, because its
-/// panes do not exist. `window::build` drives a commit before the window is even
-/// presented, while Neovim's current tabpage is still `0`, so a window offering
-/// only the tabs that already have pages commits `tabs: [one]` over the whole saved
-/// session.
-///
-/// **The loss that would cause is PERSISTENT, not a frame of transient
-/// wrongness.** That commit is ungated by liveness, while
-/// [`crate::tabs_ui::restore_press`] answers `Wait` forever behind a wedged or dead
-/// Neovim — so a launch that never materializes at all still writes the one-tab
-/// tree, nothing afterwards re-adds the missing tabs, and that file is what the next
-/// launch reads.
-///
-/// Dropping the entries that carry no layout is [`seeded_tab_state`]'s refusal half,
-/// unchanged: a queued tab whose plan carried none would otherwise contribute an
-/// empty-state tab at `cwd: ""`.
-#[must_use]
-pub fn pending_tab_states(
-    layouts: &[Option<PaneNode>],
-    empty: bool,
-    launch_cwd: &Path,
-    sidebar_visible: bool,
-) -> Vec<TabState> {
-    layouts
-        .iter()
-        .filter_map(|layout| seeded_tab_state(layout.as_ref(), empty, launch_cwd, sidebar_visible))
-        .collect()
-}
-
 /// A window's live tabs in PAGE order — the order they sit in the tab bar — from
 /// the `(page position, tab)` pairs its caller collected, with the positions
 /// stripped.
@@ -497,13 +455,6 @@ pub fn pending_tab_states(
 /// user's arrangement at that launch, and because the gather after it writes the
 /// collected order back, the discard is permanent rather than one run's.
 ///
-/// # There is no third order to fall back on
-///
-/// Reordering GTK pages does NOT reorder Neovim's tabpages: libadwaita moves the
-/// page inside its own view and this front-end issues no Neovim call for it, so page
-/// order and tabpage order genuinely diverge after a drag. Persistence follows PAGE
-/// order, which is what the user sees.
-///
 /// The sort is STABLE. `adw::TabView` hands out one position per page, so a tie is
 /// not an input production can produce; a stable sort is what gives the impossible
 /// case a stated answer — the pairs' given relative order — instead of one that
@@ -513,56 +464,6 @@ pub fn ordered_tab_states(positioned: Vec<(i32, TabState)>) -> Vec<TabState> {
     let mut positioned = positioned;
     positioned.sort_by_key(|(position, _)| *position);
     positioned.into_iter().map(|(_, tab)| tab).collect()
-}
-
-/// ONE window's whole contribution to the persisted tree: its LIVE tabs' caches in
-/// tab order, FOLLOWED BY a seed for every tab its launch has queued but not yet
-/// created — or `None` when neither has anything to say.
-///
-/// `window::WindowHandle::cached_subtree` is one call to this, so the composition is
-/// executed by the fast suite rather than modelled by it.
-///
-/// # The order is load-bearing
-///
-/// Queued tabs materialize AFTER the live ones — `tab_view::TabsInner::open_tab`
-/// appends each created page to the end of the bar — and [`restore_plans`] walks a
-/// window's tabs positionally. Seeds inserted anywhere but the end therefore hand
-/// the next launch the user's tabs in an order they never arranged, and because the
-/// gather after that writes the new order back, the rearrangement compounds on every
-/// run.
-///
-/// `live` must ALREADY be in page order; this appends and never sorts. Putting it
-/// there is [`ordered_tab_states`]', which is where the reason page order rather
-/// than insertion order is the persisted one lives.
-///
-/// # `sidebar_visible` reaches the SEEDS alone
-///
-/// It is the window-level preference [`seeded_tab_state`] builds a queued tab's
-/// [`TabState`] from. A live tab's cache passes through VERBATIM: the preference
-/// inside it is the one that tab's own gather persisted, and rewriting it here would
-/// make this seam a second, competing author of a value
-/// [`crate::persistence::StateHandle::set_sidebar_shown`] already owns.
-///
-/// `None` means "commit nothing" rather than "commit an empty window", inherited
-/// unchanged from [`window_subtree`].
-#[must_use]
-pub fn window_contribution(
-    width: i32,
-    height: i32,
-    live: Vec<TabState>,
-    pending: &[Option<PaneNode>],
-    empty: bool,
-    launch_cwd: &Path,
-    sidebar_visible: bool,
-) -> Option<WindowState> {
-    let mut tabs = live;
-    tabs.extend(pending_tab_states(
-        pending,
-        empty,
-        launch_cwd,
-        sidebar_visible,
-    ));
-    window_subtree(width, height, tabs)
 }
 
 /// Assembles the whole persisted tree from the live windows' subtrees, in window
@@ -920,7 +821,7 @@ mod tests {
 
     /// The injected `is_dir` for [`many_window_tree`]: every per-window directory
     /// under [`MANY`], plus home. A prefix test rather than a list, because the
-    /// window count is read from [`MAX_RESTORE_WINDOWS`] and must stay free to move.
+    /// window count is read from [`MAX_RESTORE_NEOVIMS`] and must stay free to move.
     fn many_window_dirs(path: &Path) -> bool {
         path == Path::new(HOME) || path.to_string_lossy().starts_with(MANY)
     }
@@ -1585,18 +1486,18 @@ mod tests {
         );
     }
 
-    /// A hand-edited or corrupted tree is truncated to [`MAX_RESTORE_WINDOWS`]
-    /// plans.
+    /// A hand-edited or corrupted tree of one-tab windows is truncated to
+    /// [`MAX_RESTORE_NEOVIMS`] plans.
     ///
     /// A restore POLICY cap, not a tree limit: what it bounds is PROCESSES, since
-    /// every restored window costs a captive Neovim and a tokio runtime of its own.
-    /// The symbol is read rather than a literal written, so the value can move
-    /// without retuning anything here.
+    /// every restored tab costs a captive Neovim and a tokio runtime of its own, and
+    /// each window here holds one tab. The symbol is read rather than a literal
+    /// written, so the value can move without retuning anything here.
     ///
     /// Isolated: yes. No other test builds a tree anywhere near the cap.
     #[test]
     fn restore_plans_caps_a_hand_edited_tree() {
-        let hand_edited = many_window_tree(MAX_RESTORE_WINDOWS + 3);
+        let hand_edited = many_window_tree(MAX_RESTORE_NEOVIMS + 3);
         let plans = restore_plans(
             Some(&hand_edited),
             None,
@@ -1606,24 +1507,24 @@ mod tests {
 
         assert_eq!(
             plans.len(),
-            MAX_RESTORE_WINDOWS,
-            "a saved tree of {} windows must yield {MAX_RESTORE_WINDOWS} plans. Every window in \
+            MAX_RESTORE_NEOVIMS,
+            "a saved tree of {} windows must yield {MAX_RESTORE_NEOVIMS} plans. Every window in \
              this fixture is a usable project of its own, so the cap is the only thing that can \
              reduce the count — and without it a corrupt state.json forks one Neovim process and \
              one tokio runtime per entry before the first frame is drawn. Got {} plans.",
-            MAX_RESTORE_WINDOWS + 3,
+            MAX_RESTORE_NEOVIMS + 3,
             plans.len()
         );
         assert_eq!(
             plans[0].core_cwd,
             PathBuf::from(format!("{MANY}0")),
-            "truncation must keep the FIRST windows: taking the last {MAX_RESTORE_WINDOWS} would \
+            "truncation must keep the FIRST windows: taking the last {MAX_RESTORE_NEOVIMS} would \
              satisfy the count above while silently dropping the windows saved earliest"
         );
 
         // Non-vacuous cap: exactly at the limit nothing truncates, catching a `take` off by one or a
         // cap of zero.
-        let exactly_at_cap = many_window_tree(MAX_RESTORE_WINDOWS);
+        let exactly_at_cap = many_window_tree(MAX_RESTORE_NEOVIMS);
         let capped_plans = restore_plans(
             Some(&exactly_at_cap),
             None,
@@ -1632,8 +1533,8 @@ mod tests {
         );
         assert_eq!(
             capped_plans.len(),
-            MAX_RESTORE_WINDOWS,
-            "a tree of exactly {MAX_RESTORE_WINDOWS} windows must restore ALL of them; without \
+            MAX_RESTORE_NEOVIMS,
+            "a tree of exactly {MAX_RESTORE_NEOVIMS} windows must restore ALL of them; without \
              this the truncation assertion above would also pass with the cap mistakenly one too \
              tight, which would lose a window from a session the user really did assemble"
         );
@@ -1714,12 +1615,10 @@ mod tests {
 
     /// A hand-edited or corrupted tab list is truncated to [`MAX_RESTORE_TABS`].
     ///
-    /// The [`MAX_RESTORE_WINDOWS`] precedent, bounding a different resource: what a
-    /// long tab list costs is the launch's BLOCKING-RPC budget — one `create_tabpage`
-    /// and up to one `rebuild_layout` per restored tab, all on the GTK main thread
-    /// before the window is interactive — whose worst case is the product of the two
-    /// caps. The symbol is read rather than a literal written, so the value can move
-    /// without retuning anything here.
+    /// The [`MAX_RESTORE_NEOVIMS`] precedent, bounding a different resource: one
+    /// window's launch cost, a `WolfCore::start` per restored tab on the GTK main
+    /// thread before the window is presented. The symbol is read rather than a
+    /// literal written, so the value can move without retuning anything here.
     ///
     /// Isolated: yes. No other test builds a tab list anywhere near the cap.
     #[test]
@@ -1742,10 +1641,9 @@ mod tests {
             MAX_RESTORE_TABS,
             "a saved window carrying {} tabs must plan {MAX_RESTORE_TABS}, got {}. Every tab in \
              this fixture is a usable restore candidate, so the cap is the only thing that can \
-             reduce the count — and without it a corrupt state.json puts one blocking \
-             `create_tabpage` plus one blocking `rebuild_layout` per entry on the main thread \
-             before the first frame, so the window is unresponsive for as long as the file is \
-             long.",
+             reduce the count — and without it a corrupt state.json starts one Neovim per \
+             entry on the main thread before the window is presented, so the launch stalls for \
+             as long as the file is long.",
             MAX_RESTORE_TABS + 3,
             plans[0].tabs.len()
         );
@@ -2635,9 +2533,7 @@ mod tests {
     /// process that is running perfectly and reported as a successful save.
     ///
     /// An empty contribution set is reachable without any bug at all: every one of a
-    /// window's tabs refuses while its panes are still binding, and a window whose
-    /// restore has not materialized yet holds no cache for its queued tabs until
-    /// [`pending_tab_states`] supplies their seeds.
+    /// window's tabs refuses while its panes are still binding.
     ///
     /// Isolated: yes. No other test hands `window_subtree` an empty vec.
     #[test]
@@ -2689,19 +2585,14 @@ mod tests {
 
     /// What a restored tab contributes while its own gate has never opened.
     ///
-    /// TWO tabs reach it, and neither has a cache to fall back on: one still sitting in
-    /// the restore QUEUE, whose page does not exist yet ([`pending_tab_states`]), and a
-    /// materialized one whose `realize_layout` bound no pane, so `may_snapshot` refuses
-    /// it and its cache stays `None`. A restored tab that DID materialize is gathered
-    /// live from its first wake — `realize_layout` creates its panes synchronously —
-    /// and never consults the seed at all. Both halves of the rule are load-bearing, in
-    /// opposite directions:
+    /// Only a restored tab whose layout bound no pane reaches it, so `may_snapshot`
+    /// refuses it and its cache stays `None`. A restored tab whose panes DID bind is
+    /// gathered live from its own Neovim and never consults the seed at all. Both
+    /// halves of the rule are load-bearing, in opposite directions:
     ///
-    /// FALSIFYING EDIT 1 — return `None` unconditionally. Neither of those two tabs
-    /// contributes anything, so the commit writes a window holding only the tabs with
-    /// bound panes: a queued tab is dropped from the saved session while the launch is
-    /// still coming up, and nothing re-adds it, because its page does not exist.
-    /// [`pending_tab_states_table`] carries that same red one level up.
+    /// FALSIFYING EDIT 1 — return `None` unconditionally. That tab contributes
+    /// nothing, so the commit writes a window holding only the tabs with bound panes:
+    /// the tab is dropped from the saved session while the launch is still coming up.
     ///
     /// FALSIFYING EDIT 2 — return `Some` unconditionally (a seed even where no layout
     /// was restored). A launch whose project has gone plans `layout: None`, so the
@@ -2800,9 +2691,8 @@ mod tests {
                 case.want,
                 "seeded_tab_state(restored_layout = {:?}, empty = {}, launch_cwd = {:?}, \
                  sidebar_visible = {}) must be {:?}, got {got:?} — {}. A `None` where a seed is \
-                 due ERASES a tab that has no cache to fall back on — one still queued for \
-                 materialization, or one whose `realize_layout` bound no pane — so it contributes \
-                 nothing and the next commit writes the window back without it. A `Some` where \
+                 due ERASES a tab that has no cache to fall back on — one whose restored layout \
+                 bound no pane — so it contributes nothing and the next commit writes the window back without it. A `Some` where \
                  `None` is due commits an empty-state tab over a saved project before any pane has \
                  bound. A wrong cwd re-roots the tab somewhere the window is not; a wrong layout \
                  is the tab's files, which ride only inside `TabState::layout`.",
@@ -2819,8 +2709,8 @@ mod tests {
         assert!(
             cases.iter().any(|case| case.want.is_some()),
             "no seeded_tab_state row expects a seed, so a function returning None for everything \
-             would satisfy every row above — and every tab with no cache of its own, queued or \
-             bound to no pane, would be erased by the next commit."
+             would satisfy every row above — and every restored tab bound to no pane would be \
+             erased by the next commit."
         );
         assert!(
             cases.iter().any(|case| case.want.is_none()),
@@ -2854,193 +2744,6 @@ mod tests {
         }
     }
 
-    // --- pending_tab_states: what a window contributes for tabs queued but not yet created ---
-
-    /// One [`pending_tab_states`] table row. The expectation is DATA for the reason
-    /// [`SeedCase`] gives: a `want` computed by calling `seeded_tab_state` again would
-    /// agree with any bug that call also contained.
-    struct PendingCase {
-        desc: &'static str,
-        layouts: Vec<Option<PaneNode>>,
-        empty: bool,
-        launch_cwd: &'static str,
-        sidebar_visible: bool,
-        want: Vec<TabState>,
-    }
-
-    /// What a window contributes for the tabs its launch has QUEUED but not yet
-    /// materialized: one seed per queued layout, in queued order.
-    ///
-    /// The queue is drained on a render wake, and the commit does not wait for it.
-    /// `window::build` drives `shell::on_render_wake` before the window is ever
-    /// presented, while Neovim's current tabpage is still `0` and tabs 1..N have no
-    /// pages at all, so that commit assembles the window from tab 0 alone unless the
-    /// queued tabs are contributed too.
-    ///
-    /// FALSIFYING EDIT — return `vec![]` unconditionally. A window restored with three
-    /// tabs commits `tabs: [one]` over the saved three-tab session, and the two the
-    /// user has not seen yet are gone.
-    ///
-    /// **The loss is PERSISTENT rather than a frame of transient wrongness**, which is
-    /// the half worth reading twice. `shell::on_render_wake` commits UNGATED by
-    /// liveness, while [`crate::tabs_ui::restore_press`] answers `Wait` forever behind
-    /// a wedged or dead Neovim — so a launch that never materializes at all still
-    /// writes the one-tab tree, and nothing later re-adds the queued tabs, because the
-    /// queue is the only record of them: their pages do not exist, so no cache and no
-    /// live gather can speak for them. That file is what the next launch reads.
-    #[test]
-    fn pending_tab_states_table() {
-        let cases = [
-            PendingCase {
-                // The row the seam exists for: queued layouts return in order, and a layout-less entry is
-                // dropped, so a `None` in the middle exposes a position-preserving rule.
-                desc: "two queued layouts around one carrying none => two seeds, in queued order",
-                layouts: vec![tab_layout(0), None, tab_layout(1)],
-                empty: false,
-                launch_cwd: SAVED,
-                sidebar_visible: true,
-                want: vec![
-                    TabState {
-                        cwd: SAVED.to_string(),
-                        sidebar_visible: true,
-                        layout: Some(leaf(SAVED_TAB_FILES[0])),
-                    },
-                    TabState {
-                        cwd: SAVED.to_string(),
-                        sidebar_visible: true,
-                        layout: Some(leaf(SAVED_TAB_FILES[1])),
-                    },
-                ],
-            },
-            PendingCase {
-                // The steady state: an empty queue contributes nothing, or every later commit grows a tab.
-                desc: "an empty queue contributes nothing",
-                layouts: Vec::new(),
-                empty: false,
-                launch_cwd: SAVED,
-                sidebar_visible: true,
-                want: Vec::new(),
-            },
-            PendingCase {
-                // The refusal half, lifted to the vec: a layout-less queued tab (project gone) contributes
-                // nothing, not an empty-state tab.
-                desc: "a queue of tabs that carry no layout contributes nothing",
-                layouts: vec![None, None],
-                empty: false,
-                launch_cwd: SAVED,
-                sidebar_visible: true,
-                want: Vec::new(),
-            },
-            PendingCase {
-                // The empty-state cwd rule from `snapshot_cwd`: always `""`, never the fallback handed Neovim,
-                // or the next launch declares `$HOME` a project.
-                desc: "an empty-state launch seeds the \"\" cwd sentinel, never $HOME",
-                layouts: vec![Some(leaf(SAVED_FILE))],
-                empty: true,
-                launch_cwd: HOME,
-                sidebar_visible: true,
-                want: vec![TabState {
-                    cwd: String::new(),
-                    sidebar_visible: true,
-                    layout: Some(leaf(SAVED_FILE)),
-                }],
-            },
-            PendingCase {
-                // The live preference reaches every queued tab, so hiding the sidebar and quitting before the
-                // restore ran keeps it hidden on all of them.
-                desc: "the live sidebar preference is carried to every queued tab",
-                layouts: vec![tab_layout(0), tab_layout(1)],
-                empty: false,
-                launch_cwd: SAVED,
-                sidebar_visible: false,
-                want: vec![
-                    TabState {
-                        cwd: SAVED.to_string(),
-                        sidebar_visible: false,
-                        layout: Some(leaf(SAVED_TAB_FILES[0])),
-                    },
-                    TabState {
-                        cwd: SAVED.to_string(),
-                        sidebar_visible: false,
-                        layout: Some(leaf(SAVED_TAB_FILES[1])),
-                    },
-                ],
-            },
-        ];
-
-        for case in &cases {
-            let got = pending_tab_states(
-                &case.layouts,
-                case.empty,
-                Path::new(case.launch_cwd),
-                case.sidebar_visible,
-            );
-            assert_eq!(
-                got,
-                case.want,
-                "pending_tab_states(layouts = {:?}, empty = {}, launch_cwd = {:?}, \
-                 sidebar_visible = {}) must be {:?}, got {got:?} — {}. A SHORT answer \
-                 drops queued tabs out of every commit made before the restore \
-                 materializes, and `window::build` makes one of those before the window \
-                 is even presented: the window writes a one-tab tree over the saved \
-                 multi-tab session, and a tab with no page yet has nothing else that can \
-                 speak for it. A REORDERED answer hands the next launch the user's tabs \
-                 in an order they never arranged, and the gather after that writes the \
-                 swap back. A wrong cwd re-roots the tab somewhere the window is not; a \
-                 wrong layout is the tab's files, which ride only inside \
-                 `TabState::layout`.",
-                case.layouts,
-                case.empty,
-                case.launch_cwd,
-                case.sidebar_visible,
-                case.want,
-                case.desc
-            );
-        }
-
-        // --- Non-vacuity, in both directions ----------------------------------
-        assert!(
-            cases.iter().any(|case| !case.want.is_empty()),
-            "no pending_tab_states row expects a contribution, so a function answering \
-             `vec![]` for everything would satisfy every row above — and that function \
-             IS the durability gap this seam exists to close. A launch's queued tabs \
-             live nowhere else: their pages do not exist, so neither a cache nor a live \
-             gather can contribute them, and a window offering only the tabs that \
-             already have pages commits `tabs: [one]` over the whole saved session. Nor \
-             is that a frame of transient wrongness — `shell::on_render_wake` commits \
-             ungated by liveness while `tabs_ui::restore_press` answers Wait forever \
-             behind a wedged or dead Neovim, so a launch that NEVER materializes still \
-             writes the one-tab tree, nothing afterwards re-adds the missing tabs, and \
-             that file is what the next launch reads."
-        );
-        assert!(
-            cases.iter().any(|case| case.want.is_empty()),
-            "no pending_tab_states row expects an EMPTY answer, so a function that \
-             manufactured a seed for every queued entry would pass. A queued tab \
-             carrying no layout must contribute nothing: its seed would be an \
-             empty-state tab at cwd \"\", committed over the saved one before any pane \
-             had bound — the loss `seeded_tab_state`'s refusal half exists to prevent."
-        );
-
-        // The join with the per-tab seed: `seeded_tab_state` mapped over the queue, so a queued tab and
-        // an ungathered live one agree; re-deriving here would let one window's tabs disagree on cwd.
-        let layouts = [tab_layout(0), tab_layout(1)];
-        let pending = pending_tab_states(&layouts, false, Path::new(SAVED), true);
-        for (index, layout) in layouts.iter().enumerate() {
-            assert_eq!(
-                pending.get(index),
-                seeded_tab_state(layout.as_ref(), false, Path::new(SAVED), true).as_ref(),
-                "queued tab {index} must contribute exactly what `seeded_tab_state` \
-                 contributes for the same layout. `None` here means the queued tab \
-                 contributes nothing at all, which is the one-tab commit above; a \
-                 DIFFERENT value means this seam re-derives the cwd or the preference \
-                 rather than mapping the one seed rule, so two tabs of the same window \
-                 disagree about where the project is and the disagreement is what gets \
-                 saved."
-            );
-        }
-    }
-
     // --- ordered_tab_states: the persisted order is page order, the user's arrangement ---
 
     /// One [`ordered_tab_states`] row: the `(page position, tab)` pairs as they were
@@ -3065,8 +2768,8 @@ mod tests {
     /// in this tree disables it — so the two orders diverge the first time a user
     /// rearranges their tabs. `window::WindowHandle::cached_subtree` therefore pairs
     /// each cached tab with `view.page_position(page)` and runs the pairs through here
-    /// before handing the result to [`window_contribution`] as its `live`. This is the
-    /// ONE place that reconciliation happens.
+    /// before handing the result to [`window_subtree`]. This is the ONE place that
+    /// reconciliation happens.
     ///
     /// libadwaita's other reorder route — the `Ctrl+Shift+Page_Up` /
     /// `Ctrl+Shift+Page_Down` shortcuts `AdwTabView:shortcuts` enables by default — is
@@ -3120,7 +2823,7 @@ mod tests {
             },
             OrderCase {
                 // Every live gate shut (launch, before any pane binds): the answer stays empty, which
-                // `window_contribution` and `window_subtree` read as queued-seeds-only and commit-nothing.
+                // `window_subtree` reads as commit-nothing.
                 desc: "no pairs at all => no tabs at all",
                 positioned: Vec::new(),
                 want: Vec::new(),
@@ -3150,16 +2853,14 @@ mod tests {
             assert_eq!(
                 got, case.want,
                 "ordered_tab_states({:?}) must be {:?}, got {got:?} — {}. This vec is what \
-                 `window_contribution` writes into `state.json` as the window's live tabs, and \
+                 `window_subtree` writes into `state.json` as the window's tabs, and \
                  `restore_plans` walks a saved window's tabs POSITIONALLY, so the order here is \
                  literally the order the next launch replays. THREE failures are \
                  distinguishable. The tabs in the order the pairs ARRIVED is insertion order — \
                  the order the pages were created — so a user who drags a tab along the bar has \
                  their arrangement silently discarded at the next launch, and because the gather \
                  after that writes the collected order back the discard is permanent rather than \
-                 one run's. There is no third order to fall back on: reordering GTK pages does \
-                 NOT reorder Neovim's tabpages, so page order and tabpage order genuinely \
-                 diverge after a drag, and persistence follows what the user SEES. A SHORT vec \
+                 one run's. Persistence follows what the user SEES. A SHORT vec \
                  drops tabs outright, and a tab's files ride only inside `TabState::layout`. A \
                  LONGER one duplicates a tab, which the next launch opens twice and then saves \
                  twice, so the count doubles every run.",
@@ -3184,495 +2885,8 @@ mod tests {
             cases.iter().any(|case| !case.want.is_empty()),
             "no ordered_tab_states row expects a tab to SURVIVE, so a function answering `vec![]` \
              for everything would satisfy every row above — and a window whose live tabs all \
-             vanished here hands `window_contribution` an empty `live`, so unless its restore \
-             queue still holds seeds the whole window drops out of the committed tree and the \
-             next launch opens one fewer window than the user had."
-        );
-    }
-
-    // --- window_contribution: live tabs' caches, then queued tabs' seeds ---
-
-    /// One [`window_contribution`] table row. The expectation is DATA — a `want`
-    /// assembled by calling the two seams this composes would agree with any bug in
-    /// the composition it also contained (the [`SeedCase`] precedent).
-    struct ContributionCase {
-        desc: &'static str,
-        live: Vec<TabState>,
-        pending: Vec<Option<PaneNode>>,
-        empty: bool,
-        launch_cwd: &'static str,
-        sidebar_visible: bool,
-        want: Option<WindowState>,
-    }
-
-    /// What ONE window contributes to `state.json`: every live tab's cache in tab
-    /// order, FOLLOWED BY a seed for every tab its launch has queued but not yet
-    /// created, under the window's own size — and `None` when neither has anything.
-    ///
-    /// `window::WindowHandle::cached_subtree` is one call to this, so the composition
-    /// is EXECUTED by the fast suite rather than modelled by it: the glue needs a GTK
-    /// window and a live core, and a rule left inside it is a rule no headless test
-    /// can reach.
-    ///
-    /// FALSIFYING EDIT 1 — PREPEND the seeds instead of appending them. Every count
-    /// survives and every layout is still present, so only the exact-vec rows fail:
-    /// the user's tabs come back rearranged, and because the next gather writes the
-    /// new order back, the rearrangement compounds on every launch.
-    ///
-    /// FALSIFYING EDIT 2 — read `pending` and discard it. That is the durability gap
-    /// [`pending_tab_states`] exists to close, arriving one level up: `window::build`
-    /// drives a commit before the window is presented, while only tab 0 has a page,
-    /// so the window writes a one-tab tree over the whole saved session — and behind
-    /// a wedged or dead Neovim that commit is the only one there will ever be,
-    /// because [`crate::tabs_ui::restore_press`] answers `Wait` forever.
-    ///
-    /// FALSIFYING EDIT 3 — answer `Some` for the wholly empty contribution. Inherited
-    /// from [`window_subtree`], and [`a_window_with_no_tab_contribution_commits_nothing`]
-    /// carries the reason: `restore_plans` reads a `tabs: []` window as the EMPTY
-    /// STATE, so committing one destroys that window's project silently.
-    #[test]
-    fn window_contribution_table() {
-        // Each `want` carries these as literal f64s, so a widening that drops or swaps a dimension shows
-        // in the expectation.
-        const WIDTH: i32 = 1200;
-        const HEIGHT: i32 = 640;
-
-        let cases = [
-            ContributionCase {
-                // The ordering row: the live layout names a file no queued layout does, so only the order tells
-                // a correct answer from one that prepended the seeds.
-                desc: "one live tab and two queued layouts => three tabs, the LIVE one first",
-                live: vec![tab_subtree(SAVED.to_string(), true, Some(leaf(SAVED_FILE)))],
-                pending: vec![tab_layout(0), tab_layout(1)],
-                empty: false,
-                launch_cwd: SAVED,
-                sidebar_visible: true,
-                want: Some(WindowState {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 1200.0,
-                    height: 640.0,
-                    tabs: vec![
-                        TabState {
-                            cwd: SAVED.to_string(),
-                            sidebar_visible: true,
-                            layout: Some(leaf(SAVED_FILE)),
-                        },
-                        TabState {
-                            cwd: SAVED.to_string(),
-                            sidebar_visible: true,
-                            layout: Some(leaf(SAVED_TAB_FILES[0])),
-                        },
-                        TabState {
-                            cwd: SAVED.to_string(),
-                            sidebar_visible: true,
-                            layout: Some(leaf(SAVED_TAB_FILES[1])),
-                        },
-                    ],
-                }),
-            },
-            ContributionCase {
-                // The pre-materialization launch: `window::build`'s commit runs before present and can find every
-                // live gate shut, so only the queue has anything to say.
-                desc: "no live tab at all and two queued layouts => the two seeds in queued order",
-                live: Vec::new(),
-                pending: vec![tab_layout(0), tab_layout(1)],
-                empty: false,
-                launch_cwd: SAVED,
-                sidebar_visible: true,
-                want: Some(WindowState {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 1200.0,
-                    height: 640.0,
-                    tabs: vec![
-                        TabState {
-                            cwd: SAVED.to_string(),
-                            sidebar_visible: true,
-                            layout: Some(leaf(SAVED_TAB_FILES[0])),
-                        },
-                        TabState {
-                            cwd: SAVED.to_string(),
-                            sidebar_visible: true,
-                            layout: Some(leaf(SAVED_TAB_FILES[1])),
-                        },
-                    ],
-                }),
-            },
-            ContributionCase {
-                // The steady state after materialization: no queue, exactly the live tabs. Two of them, so
-                // truncation or duplication shows.
-                desc: "live tabs and an empty queue => exactly the live tabs",
-                live: vec![
-                    tab_subtree(SAVED.to_string(), true, Some(leaf(SAVED_TAB_FILES[0]))),
-                    tab_subtree(SAVED.to_string(), true, Some(leaf(SAVED_TAB_FILES[1]))),
-                ],
-                pending: Vec::new(),
-                empty: false,
-                launch_cwd: SAVED,
-                sidebar_visible: true,
-                want: Some(WindowState {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 1200.0,
-                    height: 640.0,
-                    tabs: vec![
-                        TabState {
-                            cwd: SAVED.to_string(),
-                            sidebar_visible: true,
-                            layout: Some(leaf(SAVED_TAB_FILES[0])),
-                        },
-                        TabState {
-                            cwd: SAVED.to_string(),
-                            sidebar_visible: true,
-                            layout: Some(leaf(SAVED_TAB_FILES[1])),
-                        },
-                    ],
-                }),
-            },
-            ContributionCase {
-                // The commit-nothing row from `window_subtree`: nothing live or queued is a window whose gates
-                // are all shut while its panes bind, not a window with no tabs.
-                desc: "no live tab and nothing queued => commit NOTHING",
-                live: Vec::new(),
-                pending: Vec::new(),
-                empty: false,
-                launch_cwd: SAVED,
-                sidebar_visible: true,
-                want: None,
-            },
-            ContributionCase {
-                // Two rules: a layout-less queued entry is dropped, and the window's `sidebar_visible` reaches
-                // the seeds alone; a live cache passes verbatim, carrying its own gather's preference.
-                desc: "a queued entry with no layout is dropped, and a live cache passes through \
-                       verbatim",
-                live: vec![tab_subtree(SAVED.to_string(), true, Some(leaf(SAVED_FILE)))],
-                pending: vec![None, tab_layout(2)],
-                empty: false,
-                launch_cwd: SAVED,
-                sidebar_visible: false,
-                want: Some(WindowState {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 1200.0,
-                    height: 640.0,
-                    tabs: vec![
-                        TabState {
-                            cwd: SAVED.to_string(),
-                            sidebar_visible: true,
-                            layout: Some(leaf(SAVED_FILE)),
-                        },
-                        TabState {
-                            cwd: SAVED.to_string(),
-                            sidebar_visible: false,
-                            layout: Some(leaf(SAVED_TAB_FILES[2])),
-                        },
-                    ],
-                }),
-            },
-            ContributionCase {
-                // The seeds use the window-level values: `snapshot_cwd`'s `""` for an empty-state launch,
-                // never the `$HOME` handed Neovim.
-                desc: "an empty-state launch seeds the \"\" cwd sentinel, never $HOME",
-                live: Vec::new(),
-                pending: vec![Some(leaf(SAVED_FILE))],
-                empty: true,
-                launch_cwd: HOME,
-                sidebar_visible: true,
-                want: Some(WindowState {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 1200.0,
-                    height: 640.0,
-                    tabs: vec![TabState {
-                        cwd: String::new(),
-                        sidebar_visible: true,
-                        layout: Some(leaf(SAVED_FILE)),
-                    }],
-                }),
-            },
-        ];
-
-        for case in &cases {
-            let got = window_contribution(
-                WIDTH,
-                HEIGHT,
-                case.live.clone(),
-                &case.pending,
-                case.empty,
-                Path::new(case.launch_cwd),
-                case.sidebar_visible,
-            );
-            assert_eq!(
-                got,
-                case.want,
-                "window_contribution(live = {:?}, pending = {:?}, empty = {}, launch_cwd = \
-                 {:?}, sidebar_visible = {}) must be {:?}, got {got:?} — {}. FIVE failures \
-                 are distinguishable and each loses something different. A `None` where a \
-                 subtree is due drops this whole window out of the committed tree, so the \
-                 next launch opens one fewer window than the user had. A SHORT vec drops \
-                 tabs, whose files ride only inside `TabState::layout`. A REORDERED vec — \
-                 the seeds PREPENDED rather than appended — hands the next launch the \
-                 user's tabs in an order they never arranged, and the gather after that \
-                 writes the swap back, so it compounds every run. A wrong cwd or a wrong \
-                 preference on a seed re-roots a tab somewhere the window is not. A wrong \
-                 size is the window geometry, which is not the tabs' to lose.",
-                case.live,
-                case.pending,
-                case.empty,
-                case.launch_cwd,
-                case.sidebar_visible,
-                case.want,
-                case.desc
-            );
-        }
-
-        // --- Non-vacuity, in three directions ---------------------------------
-        assert!(
-            cases.iter().any(|case| case
-                .want
-                .as_ref()
-                .is_some_and(|window| window.tabs.len() > 1)),
-            "no window_contribution row expects more than ONE tab, so a function that answered \
-             with the first contribution and stopped would satisfy every row above — and a \
-             window's second tab onwards would never be written at all."
-        );
-        assert!(
-            cases
-                .iter()
-                .any(|case| !case.pending.is_empty() && case.want.is_some()),
-            "no window_contribution row expects a QUEUED layout to reach the answer, so a \
-             function that read `pending` and discarded it would satisfy every row above — which \
-             is the durability gap `pending_tab_states` exists to close: the commit \
-             `window::build` drives before the window is presented would write a one-tab tree \
-             over the whole saved session."
-        );
-        assert!(
-            cases.iter().any(|case| case.want.is_none()),
-            "no window_contribution row expects a REFUSAL, so a function that always answered \
-             `Some` would satisfy every row above — and a window whose tabs have all refused \
-             would commit `tabs: []`, which the next launch reads back as the empty state."
-        );
-
-        // --- The two JOINS: this composes those seams, it does not restate them ---
-        let live: Vec<TabState> = SAVED_TAB_FILES
-            .into_iter()
-            .map(|file| tab_subtree(SAVED.to_string(), true, Some(leaf(file))))
-            .collect();
-        assert_eq!(
-            window_contribution(
-                WIDTH,
-                HEIGHT,
-                live.clone(),
-                &[],
-                false,
-                Path::new(SAVED),
-                true
-            ),
-            window_subtree(WIDTH, HEIGHT, live),
-            "with nothing queued, a window's contribution must be EXACTLY `window_subtree`'s \
-             answer for its live tabs. The geometry, the deliberate 0.0 position and the \
-             commit-nothing rule all live in that one function, so a second copy of any of them \
-             here is a second place to fix and a place for the two to disagree."
-        );
-        let queued = [tab_layout(0), tab_layout(1)];
-        let seeded = window_contribution(
-            WIDTH,
-            HEIGHT,
-            Vec::new(),
-            &queued,
-            false,
-            Path::new(SAVED),
-            true,
-        );
-        assert_eq!(
-            seeded.map(|window| window.tabs),
-            Some(pending_tab_states(&queued, false, Path::new(SAVED), true)),
-            "the queued tabs' half must be EXACTLY `pending_tab_states`' answer for the same \
-             queue. A cwd or a preference re-derived here would let a queued tab and a \
-             materialized one of the same window disagree about where the project is, and \
-             whichever the last wake wrote is what the next launch reads back."
-        );
-    }
-
-    /// A window whose restore has not run yet contributes EVERY tab it will have: its
-    /// live ones first, then its queued ones, in tab order.
-    ///
-    /// [`window_contribution_table`] pins that rule over the whole domain; this one
-    /// states the CONSEQUENCE, so a failure names what is lost rather than an index,
-    /// and carries the premise that makes the loss silent.
-    ///
-    /// FALSIFYING EDIT — drop the queued seeds, at either level: `pending_tab_states`
-    /// returning `vec![]`, or [`window_contribution`] ignoring the queue it is handed.
-    /// This window commits ONE tab where the user has three, and the premise assertion
-    /// at the bottom is what says why that is silent rather than loud: the one-tab
-    /// commit is a perfectly well-formed `WindowState`, indistinguishable at read time
-    /// from an honest save of a one-tab session.
-    #[test]
-    fn a_window_whose_restore_has_not_run_yet_contributes_every_tab() {
-        const WIDTH: i32 = 1200;
-        const HEIGHT: i32 = 640;
-
-        // Tab 0 has gathered; tabs 1 and 2 are queued layouts not yet materialized. Three distinct
-        // files, so order is decidable from the values.
-        let live = tab_subtree(SAVED.to_string(), true, tab_layout(0));
-        let queued = [tab_layout(1), tab_layout(2)];
-
-        let contributed = window_contribution(
-            WIDTH,
-            HEIGHT,
-            vec![live.clone()],
-            &queued,
-            false,
-            Path::new(SAVED),
-            true,
-        );
-        let window = contributed.expect("one live tab and two queued must contribute a subtree");
-
-        // Cwd and preference are per window, so live tab and seeds are indistinguishable in the file:
-        // a session restores identically whether or not its tabs materialized before the commit.
-        let want: Vec<TabState> = SAVED_TAB_FILES
-            .into_iter()
-            .map(|file| tab_subtree(SAVED.to_string(), true, Some(leaf(file))))
-            .collect();
-
-        assert_eq!(
-            window.tabs.len(),
-            want.len(),
-            "a window with one live tab and {} queued layouts must contribute {} tabs, \
-             not {}. ONE is the durability gap: between `window::build` returning and \
-             the wake that materializes the queue, only tab 0 has a page, and \
-             `shell::on_render_wake` commits in that gap without waiting — so the queued \
-             tabs must be contributed as seeds or the window writes a one-tab tree over \
-             the user's whole saved session. Behind a wedged or dead Neovim that wake is \
-             the ONLY one there will ever be, because `tabs_ui::restore_press` answers \
-             Wait forever, so the loss is permanent rather than sub-second.",
-            queued.len(),
-            want.len(),
-            window.tabs.len()
-        );
-        assert_eq!(
-            window.tabs, want,
-            "the contributed tabs must be the live one FOLLOWED BY the queued ones, in \
-             queue order — that is the order they materialize in and the order the next \
-             launch replays. Seeds inserted anywhere else restore the user's tabs \
-             rearranged, and since the next gather writes the new order back the swap \
-             compounds on every run. A tab whose `layout` is `None` where a layout was \
-             queued comes back as an empty pane, because a tab's files ride only inside \
-             `TabState::layout`."
-        );
-
-        // The premise behind the falsifier: dropping queued tabs commits a smaller tree rather than
-        // refusing, asserted through the same function.
-        let live_only = window_contribution(
-            WIDTH,
-            HEIGHT,
-            vec![live],
-            &[],
-            false,
-            Path::new(SAVED),
-            true,
-        )
-        .expect("a window contributing one tab must assemble into a subtree");
-        assert_eq!(
-            live_only.tabs.len(),
-            1,
-            "premise: the live tab ALONE assembles into a perfectly valid one-tab \
-             window. That is why contributing nothing for the queued tabs is a SILENT \
-             loss rather than a refused save — nothing downstream can tell this window \
-             from an honest one-tab session, so the commit succeeds, the file is well \
-             formed, and the next launch restores exactly what it was told."
-        );
-    }
-
-    /// A restore that ABORTED part-way keeps speaking for the tabs it never created.
-    ///
-    /// `WolfCore::create_tabpage` answers `0` on an RPC error or a timeout — a Neovim
-    /// still coming up under load at launch is all it takes — and
-    /// `tab_view::TabsInner::create_one_restored_tab` then refuses that handle through
-    /// `tabs_ui::switch_target` and stops the loop. The layouts it never reached have
-    /// no page and never will get one, so an abort that DROPS them leaves nothing that
-    /// can contribute them: no cache, because a cache is per live tab, and no live
-    /// gather, because their panes do not exist. The next commit then writes this
-    /// window back holding only the tabs created before the failure — the same
-    /// durability gap [`pending_tab_states`] closes for the launch, narrowed to the
-    /// abort.
-    ///
-    /// The rule is therefore that an abandoned queue is RETAINED as a seed source
-    /// while no further creation is attempted. This test owns the retention half, over
-    /// the seam the retained queue feeds; the "no further creation" half is
-    /// `tabs_ui::tests::an_abandoned_restore_never_attempts_creation_again`. Re-seating
-    /// the queue inside `materialize_restore` is glue no headless test reaches, and
-    /// `tests/README.md` records the abort path as unproven end to end.
-    ///
-    /// FALSIFYING EDIT — the same one [`window_contribution_table`] names: contribute
-    /// nothing for the queue. Here that is the abort's remainder, so the red says the
-    /// abandoned tabs were dropped rather than that the launch's were.
-    #[test]
-    fn an_abandoned_restore_keeps_seeding_its_un_created_tabs() {
-        const WIDTH: i32 = 1200;
-        const HEIGHT: i32 = 640;
-
-        // Four tabs restored: tab 0 and the first queued one gathered, then `create_tabpage` answered 0
-        // for the last two. Four distinct files, so the missing ones are decidable.
-        let live = vec![
-            tab_subtree(SAVED.to_string(), true, Some(leaf(SAVED_FILE))),
-            tab_subtree(SAVED.to_string(), true, Some(leaf(SAVED_TAB_FILES[0]))),
-        ];
-        let un_created = [tab_layout(1), tab_layout(2)];
-
-        let contributed = window_contribution(
-            WIDTH,
-            HEIGHT,
-            live.clone(),
-            &un_created,
-            false,
-            Path::new(SAVED),
-            true,
-        );
-        let window = contributed.expect("two live tabs must contribute a subtree");
-
-        // The four files this window must come back with, in tab order.
-        let files = [
-            SAVED_FILE,
-            SAVED_TAB_FILES[0],
-            SAVED_TAB_FILES[1],
-            SAVED_TAB_FILES[2],
-        ];
-        let want: Vec<TabState> = files
-            .into_iter()
-            .map(|file| tab_subtree(SAVED.to_string(), true, Some(leaf(file))))
-            .collect();
-
-        assert_eq!(
-            window.tabs, want,
-            "an abandoned restore must keep contributing the tabs it never created, AFTER \
-             the ones it did: four tabs here, in saved order. THREE wrong answers are \
-             distinguishable. TWO tabs is the remainder being dropped on abort — the \
-             durability gap narrowed to the abort, since those layouts have no page and \
-             never will, so nothing else can speak for them and the next commit writes the \
-             window back without them; it needs no bug of ours to reach, because \
-             `create_tabpage` answers 0 on an RPC error or a timeout, which is what a slow \
-             Neovim at launch produces. FIVE tabs, carrying the created tab's layout twice, \
-             is the abort retaining the WHOLE queue rather than its un-created remainder: \
-             that tab then has both a page and a seed, so the save carries a duplicate, the \
-             next launch opens it twice, and since that launch saves what it opened the \
-             count doubles every run. A REORDERED four restores the user's tabs rearranged, \
-             and the gather after that writes the new order back."
-        );
-
-        // The PREMISE that makes the retention rule worth stating: dropping the
-        // remainder does not refuse the commit, it commits a smaller window.
-        let dropped = window_contribution(WIDTH, HEIGHT, live, &[], false, Path::new(SAVED), true)
-            .expect("two live tabs must contribute a subtree");
-        assert_eq!(
-            dropped.tabs.len(),
-            2,
-            "premise: the tabs that WERE created assemble into a perfectly valid two-tab \
-             window. That is why an abort which forgets its remainder is a SILENT loss \
-             rather than a refused save — nothing downstream can tell this window from an \
-             honest two-tab session, so the commit succeeds, `state.json` is well formed, \
-             and the next launch restores exactly what it was told."
+             vanished here hands `window_subtree` an empty vec, so the whole window drops out of \
+             the committed tree and the next launch opens one fewer window than the user had."
         );
     }
 

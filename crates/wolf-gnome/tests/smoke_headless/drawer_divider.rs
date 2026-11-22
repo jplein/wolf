@@ -407,10 +407,12 @@ fn drawer_divider_drag_resizes_and_is_remembered_under_cage() {
     let tab = read_ints(&read_tab, 2, SMOKE);
     assert_eq!(
         (tab[0], tab[1]),
-        (2, 1),
+        (1, 1),
         "{SMOKE}: after Ctrl+Shift+T Neovim reports (tabpagenr(), window count) = ({}, {}), want \
-         (2, 1): a second tab holding its own editor window alone. Without it T measures the \
-         first tab's drawer.",
+         (1, 1): the second tab's own Neovim, on its one tabpage, holding its editor window \
+         alone. (1, 2) is the first tab's editor and drawer, so the chord opened no tab and T \
+         would measure the first tab's drawer; a tabpage number above 1 means the new tab is a \
+         tabpage of another tab's Neovim.",
         tab[0],
         tab[1]
     );

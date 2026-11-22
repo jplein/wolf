@@ -2116,7 +2116,8 @@ const NEAR_SECOND_TAB_CENTRE_FRACTION: f64 = 0.75;
 /// `RELAUNCH_FIXTURE_NAMES` anyway because its absolute path is typed on screen.
 pub(crate) const NEAR_G1_PID_NAME: &str = "wolf_gnome_near_g1_pid.txt";
 
-/// Leg g2: Neovim's `tabpagenr() winnr('$') b:wolf_terminal_id` once the drawer is hidden.
+/// Leg g2: Neovim's `getpid() winnr('$') b:wolf_terminal_id` once the drawer is hidden. Each
+/// tab runs a Neovim of its own, so the pid is what names the tab that answered.
 /// See [`NEAR_G1_PID_NAME`].
 pub(crate) const NEAR_G2_NVIM_NAME: &str = "wolf_gnome_near_g2_nvim.txt";
 
@@ -2200,7 +2201,7 @@ shell_probe() {
 
 # $1 is the readback file, $2 the exit code. Only Neovim writes it.
 nvim_probe() {
-    wtype -- ":call writefile([printf('%d %d %d', tabpagenr(), winnr('\$'), getbufvar('%', 'wolf_terminal_id', 0))], '$1')"
+    wtype -- ":call writefile([printf('%d %d %d', getpid(), winnr('\$'), getbufvar('%', 'wolf_terminal_id', 0))], '$1')"
     wtype -k Return
     wait_file "$1" || exit "$2"
 }
@@ -2313,7 +2314,7 @@ exit 0
 /// | --- | --- | --- | --- | --- |
 /// | 1 | the scenario exits 0 | precondition | none | n/a |
 /// | 2 | eight captures, both click points inside the reported output | precondition | none | n/a |
-/// | 3 | the Neovim readbacks name one editor window in the expected tab, and the shell pids say a new session answered in g3 and g5 and the second tab's own in g7 | precondition | none | n/a |
+/// | 3 | the Neovim readbacks name one editor window, from tab 1's Neovim in g2, g4 and g6 and from tab 2's, a different process, in g5 and g7, and the shell pids say a new session answered in g3 and g5 and the second tab's own in g7 | precondition | none | n/a |
 /// | 4 | capture g0 carries [`NEAR_OCR_FILL`] | precondition: OCR reads the fixture with no terminal open | none | n/a |
 /// | 5 | captures g1 to g7 each carry [`NEAR_OCR_FILL`] | **discriminator** | in `PaneInner::draw_pane`, skip the editor grid branch while `core.live_terminals()` is not empty | g1 to g7: the hidden drawer's session stays live through every later leg |
 #[test]
@@ -2322,9 +2323,8 @@ fn neovim_panes_stay_visible_beside_terminals_under_cage() {
     // The inclusive band of exit codes NEAR_BODY adds to POINTER_PREAMBLE's 11-15.
     const NEAR_EXIT_FIRST: i32 = 61;
     const NEAR_EXIT_LAST: i32 = 69;
-    // A Neovim readback's `tabpagenr() winnr('$') b:wolf_terminal_id`: one editor window.
-    const ONE_EDITOR_IN_TAB_1: [i64; 3] = [1, 1, 0];
-    const ONE_EDITOR_IN_TAB_2: [i64; 3] = [2, 1, 0];
+    // A Neovim readback's `winnr('$') b:wolf_terminal_id`, after its pid: one editor window.
+    const ONE_EDITOR: [i64; 2] = [1, 0];
 
     let runtime_dir = require_smoke_env();
     let cwd = make_temp_cwd();
@@ -2420,51 +2420,42 @@ fn neovim_panes_stay_visible_beside_terminals_under_cage() {
     assert_inside_extents(SMOKE, "the SECOND TAB's centre", (tab2_x, tab_y), extents);
 
     // --- Assertion 3 (precondition): every leg's step happened ----------------
-    for (path, want, leg, step) in [
-        (
-            &nvim_g2,
-            ONE_EDITOR_IN_TAB_1,
-            "g2",
-            "the chord hid the drawer",
-        ),
-        (
-            &nvim_g4,
-            ONE_EDITOR_IN_TAB_1,
-            "g4",
-            "`<C-w>c` closed the terminal split",
-        ),
+    let mut neovims = Vec::new();
+    for (path, leg, step) in [
+        (&nvim_g2, "g2", "the chord hid the drawer"),
+        (&nvim_g4, "g4", "`<C-w>c` closed the terminal split"),
         (
             &tab_g5,
-            ONE_EDITOR_IN_TAB_2,
             "g5",
             "Ctrl+Shift+T opened and entered a second tab",
         ),
-        (
-            &nvim_g6,
-            ONE_EDITOR_IN_TAB_1,
-            "g6",
-            "the click made the first tab current",
-        ),
-        (
-            &nvim_g7,
-            ONE_EDITOR_IN_TAB_2,
-            "g7",
-            "`<C-w>c` closed the second tab's split",
-        ),
+        (&nvim_g6, "g6", "the click made the first tab current"),
+        (&nvim_g7, "g7", "`<C-w>c` closed the second tab's split"),
     ] {
-        let got = read_ints(path, want.len(), SMOKE);
+        let got = read_ints(path, 1 + ONE_EDITOR.len(), SMOKE);
         assert_eq!(
-            got,
-            want,
-            "{SMOKE}: leg {leg}'s readback {} reads {got:?} as `tabpagenr() winnr('$') \
-             b:wolf_terminal_id`, want {want:?}: one editor window in that tab, which is what \
-             says {step}. A wrong tab means the switch or the new tab did not happen; a second \
-             window means the drawer or the terminal pane is still open; a nonzero id means \
-             Neovim's current buffer is a terminal placeholder. The capture of this leg would \
-             then show something other than its row in NEAR_LEGS.",
+            got[1..],
+            ONE_EDITOR,
+            "{SMOKE}: leg {leg}'s readback {} reads {got:?} as `getpid() winnr('$') \
+             b:wolf_terminal_id`, want one editor window and no terminal id after the pid, which \
+             is what says {step}. A second window means the drawer or the terminal pane is still \
+             open; a nonzero id means Neovim's current buffer is a terminal placeholder. The \
+             capture of this leg would then show something other than its row in NEAR_LEGS.",
             path.display()
         );
+        neovims.push((leg, got[0]));
     }
+    let tab_one = [neovims[0], neovims[1], neovims[3]];
+    let tab_two = [neovims[2], neovims[4]];
+    assert!(
+        tab_one.iter().all(|&(_, pid)| pid == tab_one[0].1)
+            && tab_two.iter().all(|&(_, pid)| pid == tab_two[0].1)
+            && tab_one[0].1 != tab_two[0].1,
+        "{SMOKE}: the Neovims answering each leg were {neovims:?}. g2, g4 and g6 must come from \
+         tab 1's Neovim and g5 and g7 from tab 2's, a different process. g6 on tab 2's pid means \
+         the click on the first tab did not move the keys there; g5 on tab 1's means Ctrl+Shift+T \
+         started no Neovim for the new tab, so every later leg is in the wrong tab."
+    );
     let drawer_pid = read_ints(&pid_g1, 1, SMOKE)[0];
     let split_pid = read_ints(&pid_g3, 1, SMOKE)[0];
     let tab_pid = read_ints(&pid_g5, 1, SMOKE)[0];

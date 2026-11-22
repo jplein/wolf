@@ -42,7 +42,7 @@ Assertion 7's revert: delete the `- 2 * padding` term from `editor_inset::grid_r
 
 ## Native tabs smoke
 
-`cage` shows one toplevel at a time, so the two-window smoke can photograph nothing, but a tab bar is inside the one toplevel and the two-tab state is photographable.
+`cage` shows one toplevel at a time, so the two-window smoke can photograph nothing, but a tab bar is inside the one toplevel and the two-tab state is photographable. Each tab runs a Neovim of its own, so the smoke counts the app's live `nvim` children with `recovery.rs`'s `wait_nvim_count` at launch, after Ctrl+Shift+T and after the middle-click, and every readback comes from whichever Neovim the selected tab's core is.
 
 No assertion reads a tab title. `tabs_ui::tab_title` draws the current file's name, as do the statusbar strip and the `:e` echo, so no OCR term separates them, and tesseract reads one of two rendered titles at this page's calibration. The fixture names carry no asserted term, and every OCR claim is about a heading in an editor grid. `bar.is_visible()` reads `true` at one page as well as two; see `TAB_BAR_HEIGHT_EXPECTED`.
 
@@ -51,7 +51,13 @@ No assertion reads a tab title. `tabs_ui::tab_title` draws the current file's na
   project/                    TEMP_CWD_BASENAME -- the launch cwd and search root
     fill*.md                  nine fillers, page density
     tbxray.md                 TABS_FIRST_FILE, opened in tab 1
-    tbsub/                    TABS_SUBDIR -- the `:tcd` target
+    tbsub/                    TABS_SUBDIR -- tab 1's `:tcd` target, where tab 2 starts
       tbyankee.md             TABS_SECOND_FILE, opened in tab 2
     tb_read{a,c,e,f}.txt      the four Neovim readbacks
 ```
+
+## Reload on switch smoke
+
+The two tabs' Neovims are separate processes, so a save in one reaches the other only through a timestamp check, and the smoke closes every check but the focus trigger. Tab 1 sets `'updatetime'` to an hour, so `CursorHold` cannot fire, and enters no buffer after tab 2's write, so `BufEnter` cannot either. The click on tab 1 then leaves `FocusGained`, from the `set_ui_focus(true)` the switch sends, as the one route to `:checktime`.
+
+Every readback carries `getpid()`. The new heading is in tab 2's own buffer, so a readback typed at tab 2 would pass with nothing reloaded; the pid is what says the last one came from tab 1's Neovim. Tab 2's new heading differs from the old one in byte length, because Neovim compares a file's size as well as its mtime and a write within the second tab 1 read the file would otherwise go unseen.

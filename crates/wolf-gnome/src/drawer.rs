@@ -141,7 +141,7 @@ impl DrawerState {
     /// Empties BOTH fields: the bound drawer and the recorded editor pane.
     ///
     /// Clearing both is what `reset_after_restart` needs. A restart replaces every
-    /// pane id in the window, so a surviving `last_editor` would name a pane that no
+    /// pane id in the tab, so a surviving `last_editor` would name a pane that no
     /// longer exists — and, worse, a surviving `drawer` would make
     /// `apply_drawer_open`'s `is_open()` guard true against a dead Neovim's id, so
     /// the drawer could never be opened again for the rest of the session.

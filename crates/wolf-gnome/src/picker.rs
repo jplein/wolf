@@ -49,7 +49,9 @@ use std::sync::Arc;
 use adw::prelude::*;
 use gtk::glib;
 
-use wolf_core::{rank_matches, FileSearch, InputEvent, WakeFn, WolfCore};
+use wolf_core::{rank_matches, FileSearch, InputEvent, WakeFn};
+
+use crate::tab_view::{with_core, CoreSource};
 
 /// The maximum number of ranked rows shown in the picker list. The streaming
 /// traversal can collect far more entries than are useful to display, so only the
@@ -159,8 +161,9 @@ struct PickerInner {
     /// Where focus returns when the picker closes: the SELECTED tab's cmdline
     /// strip, resolved at close time. See [`FocusTarget`].
     area: FocusTarget,
-    /// The live core, shared with the rest of the app.
-    core: Rc<RefCell<Option<WolfCore>>>,
+    /// Resolves the SELECTED tab's core, which the search runs on and a row opens
+    /// in. The picker closes on every tab switch, so one open never spans two.
+    core: CoreSource,
     /// The wake closure handed to `start_file_search`; firing it queues a refresh.
     wake: WakeFn,
     /// The query string used by the previous [`PickerInner::refresh`]. It decides
@@ -178,12 +181,9 @@ impl PickerInner {
         if self.open.get() {
             return;
         }
-        let search = {
-            let core_ref = self.core.borrow();
-            let Some(core) = core_ref.as_ref() else {
-                return;
-            };
-            core.start_file_search(self.wake.clone())
+        let Some(search) = with_core(&self.core, |core| core.start_file_search(self.wake.clone()))
+        else {
+            return;
         };
         *self.search.borrow_mut() = Some(search);
         self.open.set(true);
@@ -297,9 +297,9 @@ impl PickerInner {
         let Some(path) = path else {
             return;
         };
-        if let Some(core) = self.core.borrow().as_ref() {
-            core.send_input(InputEvent::Open { path });
-        }
+        with_core(&self.core, |core| {
+            core.send_input(InputEvent::Open { path })
+        });
         self.close();
     }
 }
@@ -339,11 +339,7 @@ impl PickerHandle {
 /// cmdline strip, never a pane drawing area (`notes/wolf-gnome/window-structure.md`).
 /// See [`FocusTarget`] for why it is a closure.
 #[must_use]
-pub fn build(
-    overlay: &gtk::Overlay,
-    area: FocusTarget,
-    core: &Rc<RefCell<Option<WolfCore>>>,
-) -> PickerHandle {
+pub fn build(overlay: &gtk::Overlay, area: FocusTarget, core: CoreSource) -> PickerHandle {
     let entry = gtk::SearchEntry::new();
     entry.set_hexpand(true);
 
@@ -384,7 +380,7 @@ pub fn build(
         entry: entry.clone(),
         list: list.clone(),
         area,
-        core: core.clone(),
+        core,
         wake,
         last_query: RefCell::new(None),
     });

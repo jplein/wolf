@@ -108,7 +108,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
 use adw::prelude::*;
@@ -120,6 +120,7 @@ use wolf_core::{
 };
 
 use crate::picker::{next_selection, FocusTarget};
+use crate::tab_view::{with_core, CoreCell, CoreSource};
 use crate::tree_gate::TreeRefreshGate;
 use crate::window::TREE_PANE_WIDTH;
 
@@ -731,8 +732,13 @@ struct PanelInner {
     /// Where Escape and an open send focus: the SELECTED tab's cmdline strip,
     /// resolved at that time. See [`crate::picker::FocusTarget`].
     area: FocusTarget,
-    /// The live core, shared with the rest of the app.
-    core: Rc<RefCell<Option<WolfCore>>>,
+    /// Resolves the SELECTED tab's core, which a run starts on and a result opens
+    /// in.
+    core: CoreSource,
+    /// The core [`PanelInner::search`] was started on. A session stays on it across
+    /// a tab switch, since a rerun would only repeat it, and
+    /// [`SearchPanelHandle::release_core`] drops it when that tab closes.
+    session_core: RefCell<Weak<RefCell<Option<WolfCore>>>>,
     /// The wake closure handed to `start_search`; firing it queues a refresh.
     wake: WakeFn,
 }
@@ -941,14 +947,18 @@ impl PanelInner {
         let previous = self.search.borrow_mut().take();
         drop(previous);
 
+        let Some(cell) = (self.core)() else {
+            return;
+        };
         let session = {
-            let core_ref = self.core.borrow();
+            let core_ref = cell.borrow();
             let Some(core) = core_ref.as_ref() else {
                 return;
             };
             core.start_search(search_options_for(&query, toggles), self.wake.clone())
         };
         *self.search.borrow_mut() = Some(session);
+        *self.session_core.borrow_mut() = Rc::downgrade(&cell);
         *self.ran.borrow_mut() = Some((query, toggles));
         self.reset_selection.set(true);
         self.gate.borrow_mut().reset_version_tracking();
@@ -994,22 +1004,17 @@ impl PanelInner {
     /// The snapshot guard is bound to a local inside one scope, dropped before any
     /// core call: `preview_file` and `open_at` take core locks of their own.
     fn open(&self, path: PathBuf, line: u64, col: u64) {
-        let (liveness, preview_win) = {
-            let core_ref = self.core.borrow();
-            match core_ref.as_ref() {
-                Some(core) => {
-                    let liveness = core.liveness();
-                    let snapshot = core.read_snapshot();
-                    let preview_win = if snapshot.is_preview_active() {
-                        snapshot.active_win
-                    } else {
-                        None
-                    };
-                    (Some(liveness), preview_win)
-                }
-                None => (None, None),
-            }
-        };
+        let (liveness, preview_win) = with_core(&self.core, |core| {
+            let liveness = core.liveness();
+            let snapshot = core.read_snapshot();
+            let preview_win = if snapshot.is_preview_active() {
+                snapshot.active_win
+            } else {
+                None
+            };
+            (Some(liveness), preview_win)
+        })
+        .unwrap_or((None, None));
         match activation_route(liveness, preview_win) {
             OpenRoute::Refuse(reason) => {
                 eprintln!("wolf-gnome: search result not opened: {reason}");
@@ -1019,10 +1024,7 @@ impl PanelInner {
             OpenRoute::PreviewFile { win } => {
                 let previewed = match path.to_str() {
                     Some(path) => {
-                        let core_ref = self.core.borrow();
-                        core_ref
-                            .as_ref()
-                            .map_or(0, |core| core.preview_file(win, path))
+                        with_core(&self.core, |core| core.preview_file(win, path)).unwrap_or(0)
                     }
                     None => 0,
                 };
@@ -1040,9 +1042,7 @@ impl PanelInner {
 
     /// Sends `open_at`, fire-and-forget on the ordered input channel.
     fn open_at(&self, path: PathBuf, line: u64, col: u64) {
-        if let Some(core) = self.core.borrow().as_ref() {
-            core.open_at(path, line, col);
-        }
+        with_core(&self.core, |core| core.open_at(path, line, col));
     }
 
     /// Records whether the panel is on screen, refreshing once if a refresh was
@@ -1164,6 +1164,21 @@ impl SearchPanelHandle {
         let session = self.inner.search.borrow_mut().take();
         drop(session);
     }
+
+    /// Drops the session when it runs on `core`, a closing tab's, CANCELLING any
+    /// in-flight `rg` before that core shuts down. The rows stay drawn, as after
+    /// [`SearchPanelHandle::close`], and a result still opens in the selected tab.
+    pub fn release_core(&self, core: &CoreCell) {
+        let ours = self
+            .inner
+            .session_core
+            .borrow()
+            .upgrade()
+            .is_some_and(|session_core| Rc::ptr_eq(&session_core, core));
+        if ours {
+            self.close();
+        }
+    }
 }
 
 /// Builds the panel's widgets, wires their signals and returns a
@@ -1174,7 +1189,7 @@ impl SearchPanelHandle {
 /// cmdline strip (`notes/wolf-gnome/window-structure.md`). See
 /// [`crate::picker::FocusTarget`] for why it is a closure.
 #[must_use]
-pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, area: FocusTarget) -> SearchPanelHandle {
+pub fn build(core: CoreSource, area: FocusTarget) -> SearchPanelHandle {
     let entry = gtk::SearchEntry::builder()
         .placeholder_text(SEARCH_PLACEHOLDER)
         .hexpand(true)
@@ -1257,7 +1272,8 @@ pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, area: FocusTarget) -> SearchP
         scroller,
         list: list.clone(),
         area,
-        core: core.clone(),
+        core,
+        session_core: RefCell::new(Weak::new()),
         wake,
     });
 

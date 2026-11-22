@@ -70,15 +70,13 @@ pub enum UiAction {
     /// Toggle the selected tab's active pane between zoomed and not. Front-end geometry:
     /// Neovim's windows and the pane tree stay as they are.
     ZoomPane,
-    /// Open a new TAB in this window, over the window's EXISTING core, rooted at
-    /// the window's own folder.
+    /// Open a new TAB in this window, with a Neovim of its own, rooted at the
+    /// selected tab's folder.
     ///
     /// The exact opposite of [`UiAction::NewWindow`] in what it inherits, and the
-    /// pair is easy to confuse: a tab shares the window's captive Neovim, its
-    /// project and its sidebar, while a window shares nothing at all. The
-    /// directory is [`crate::tabs_ui::new_tab_cwd`]'s answer, and the press is
-    /// gated by [`crate::tabs_ui::new_tab_press`] because `create_tabpage` is a
-    /// blocking RPC.
+    /// pair is easy to confuse: a tab shares the window's project and its sidebar,
+    /// while a window shares nothing at all. The directory is
+    /// [`crate::tabs_ui::new_tab_cwd`]'s answer.
     NewTab,
     /// Open a FRESH, EMPTY application window with its own core, at `$HOME`.
     ///
@@ -390,8 +388,8 @@ mod tests {
             want: Want::Exact(UiAction::OpenBufferPicker),
         },
         Case {
-            desc: "17 NewTab: appends a native tab to THIS window, over the one core it already \
-                   has, rooted at the window's own folder",
+            desc: "17 NewTab: appends a native tab to THIS window, with a Neovim of its own, \
+                   rooted at the selected tab's folder",
             command: Command::NewTab,
             want: Want::Exact(UiAction::NewTab),
         },

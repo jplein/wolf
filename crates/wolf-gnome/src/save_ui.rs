@@ -66,10 +66,8 @@
 //! ## Where the target comes from
 //!
 //! The path is `Snapshot::current_file` and never `WolfCore::pane_status`. Both are
-//! RPC-free, but `pane_status` joins through the current-tabpage-only
-//! `Snapshot::windows` map and answers a DISPLAY string, with a placeholder label for
-//! an unnamed buffer — the trap [`crate::tabs_ui`]'s module docs record. Save needs
-//! "is there a path" as a value, not a label.
+//! RPC-free, but `pane_status` answers a DISPLAY string, with a placeholder label
+//! for an unnamed buffer. Save needs "is there a path" as a value, not a label.
 //!
 //! ## Totality is the contract
 //!
@@ -274,7 +272,7 @@ pub fn save_as_press(liveness: Option<Liveness>, target: SaveTarget<'_>) -> Save
 ///
 /// **Why the `cwd` passed in is NOT [`crate::tabs_ui::new_tab_cwd`]'s answer**, and
 /// the divergence is deliberate: that one refuses the empty state on purpose, so a
-/// tab is never `:tcd`'d into `$HOME`. A save dialog's folder is a starting point the
+/// tab never treats `$HOME` as its project. A save dialog's folder is a starting point the
 /// user can change, not a declaration that a directory is a project, so the empty
 /// state's home directory is a correct default here.
 #[must_use]
@@ -501,7 +499,7 @@ mod tests {
     ///
     /// Written as LITERALS rather than as the product of the two domain consts'
     /// lengths, and that is the whole point of it — the `nav_ui::tests::SWEEP_INPUTS`
-    /// and `tabs_ui::tests::NAMED_WAKE_CASES` precedent. Comparing a table's length
+    /// precedent. Comparing a table's length
     /// to the product of the arrays it was built from is a TAUTOLOGY: an array that
     /// lost an entry shrinks both sides together, so the check passes while the table
     /// covers less than the domain it claims to.
@@ -510,7 +508,7 @@ mod tests {
     /// A hashable key for one `Option<Liveness>`, matched TOTALLY with no `_` arm so
     /// a new [`Liveness`] variant is an `E0004` here rather than a silently uncovered
     /// input. `Option<Liveness>` is not `Hash`, and the duplicate-row checks below
-    /// need one. Copied from `tabs_ui.rs`'s helper of the same name.
+    /// need one.
     fn liveness_key(liveness: Option<Liveness>) -> u8 {
         match liveness {
             Some(Liveness::Alive) => 0,
@@ -554,9 +552,8 @@ mod tests {
     /// One press-table row.
     ///
     /// The expectation is DATA — a literal `want` per row, deliberately NOT re-derived
-    /// from the same conjunction the function under test uses, which is
-    /// `tabs_ui::tests::RestorePressCase`'s recorded rule. A table computed from the
-    /// seam's own rule cannot disagree with it.
+    /// from the same conjunction the function under test uses. A table computed from
+    /// the seam's own rule cannot disagree with it.
     struct PressCase {
         desc: &'static str,
         liveness: Option<Liveness>,
@@ -567,7 +564,7 @@ mod tests {
     /// The twenty-eight rows of the SAVE gate, one per `(liveness, target)` input.
     ///
     /// A `const` item rather than a local so the coverage sweep and the assertions
-    /// walk the same rows — the `tabs_ui::tests::WAKE_CASES` convention.
+    /// walk the same rows — the `nav_ui::tests::BUTTON_CASES` convention.
     const SAVE_PRESS_CASES: &[PressCase] = &[
         // --- A LIVE core: the only arm that may write or prompt ---------------
         PressCase {
@@ -1623,7 +1620,7 @@ mod tests {
     }
 
     /// How many named rows the proposal table carries, as a LITERAL rather than as
-    /// `cases.len()` — the `tabs_ui::tests::NAMED_WAKE_CASES` reasoning: a row deleted
+    /// `cases.len()` — the `nav_ui::tests::SWEEP_INPUTS` reasoning: a row deleted
     /// along with the number it is measured against is invisible.
     const NAMED_PROPOSAL_CASES: usize = 8;
 

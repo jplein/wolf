@@ -1,6 +1,7 @@
 //! Pane and layout smokes: splits, focus moves, closing panes, `:q` and `:qa`, the per-pane
-//! statusbar and native tabs.
+//! statusbar, native tabs, and a file saved in one tab reloading in another.
 
+use super::recovery::with_nvim_pid_helper;
 use super::*;
 
 // Vertical-split smoke. Fixture names must not contain the heading words (see `PICKER_FILE_NAME`).
@@ -2058,7 +2059,7 @@ fn pane_status_bar_shows_each_panes_filename_under_cage() {
     );
 }
 
-// Native tabs: two `adw::TabPage`s over one Neovim, switched and closed with real pointer events.
+// Native tabs: two `adw::TabPage`s, a Neovim each, switched and closed by real pointer events.
 // See notes/crates/wolf-gnome/tests/smoke_headless/panes.rs.md#native-tabs-smoke
 
 /// Native-tabs smoke: the file opened in the FIRST tab.
@@ -2084,32 +2085,16 @@ pub(crate) const TABS_FIRST_HEADING: &str = "# ZZTABALFA";
 /// `restore_fixture_names_cannot_satisfy_their_own_assertions`).
 pub(crate) const TABS_OCR_FIRST: &str = "zztabalfa";
 
-/// Native-tabs smoke: the subdirectory leg (b) `:tcd`s into, and which leg (c)'s new
-/// tab is then observed to be sitting in.
+/// Native-tabs smoke: the subdirectory leg (b) `:tcd`s tab 1's Neovim into, and
+/// where leg (c)'s new tab must then start.
 ///
-/// **It does NOT make assertion 5 falsifiable, and the opposite claim was measured
-/// false.** `:tabnew` copies the current window's EFFECTIVE working directory into
-/// the tabpage it creates, so leg (b)'s tab-local `:tcd` is INHERITED whatever
-/// `create_tabpage` was passed:
-///
-/// ```text
-/// nvim --headless --clean -c "tcd tbsub" -c "tabnew" -c "echo getcwd()"
-///   new tab getcwd = <project>/tbsub        global = <project>
-/// ```
-///
-/// `wolf_create_tabpage` runs `:tabnew` and only THEN `:tcd cwd` when `cwd ~= nil`,
-/// so the explicit form lands on the directory the tabpage already had — and a new
-/// tab inheriting the window's folder makes the front-end's chosen cwd that same
-/// directory by construction, so the two calls agree by design rather than by
-/// accident. Two escapes were measured and both
-/// fail: `haslocaldir(-1, 0)` reads `1` for an INHERITED tab as well as for an
-/// explicitly `:tcd`'d one, and a window-local `:lcd` is inherited by `:tabnew` too.
-///
-/// What the subdirectory still buys is that the new tab's rooting is OBSERVED rather
-/// than assumed — by leg (c)'s readback and by leg (d)'s bare `:e`, which resolves
-/// only against this directory — so a tab that landed somewhere UNRELATED is caught.
-/// That is the whole of assertion 5's remaining value; see its row in
-/// [`native_tabs_open_switch_and_close_under_cage`]'s table.
+/// The new tab's Neovim is a process of its own, started at the directory
+/// `tabs_ui::new_tab_cwd` picks from the selected tab's `WolfCore::live_cwd`. That
+/// value follows a `:tcd` through the `wolf_cwd` notification `DirChanged` sends,
+/// as its doc comment says. So a new tab sitting in this directory is one whose
+/// core was started where the selected tab's Neovim is, and a new tab at the
+/// project root is one started at the launch directory instead: exit 23 tells the
+/// two apart, since the new Neovim inherits nothing from the first.
 pub(crate) const TABS_SUBDIR: &str = "tbsub";
 
 /// Native-tabs smoke: the file opened in the SECOND tab, as a path RELATIVE TO THE
@@ -2124,10 +2109,10 @@ pub(crate) const TABS_SECOND_FILE: &str = "tbsub/tbyankee.md";
 /// working directory.
 ///
 /// Typed bare rather than as a path on purpose: it only opens the fixture if the
-/// tab really inherited [`TABS_SUBDIR`], so a build whose new tab landed in the
-/// project root gets an empty scratch buffer and capture B's must-CONTAIN half
-/// fails too. Leg (c)'s readback reaches that failure first and names it precisely;
-/// this is the belt to its braces.
+/// new tab's Neovim really started in [`TABS_SUBDIR`], so a build whose new tab
+/// landed in the project root gets an empty scratch buffer and capture B's
+/// must-CONTAIN half fails too. Leg (c)'s readback reaches that failure first and
+/// names it precisely; this is the belt to its braces.
 pub(crate) const TABS_SECOND_NAME: &str = "tbyankee.md";
 
 /// Heading written into [`TABS_SECOND_FILE`]; lowercased it contains
@@ -2138,36 +2123,28 @@ pub(crate) const TABS_SECOND_HEADING: &str = "# ZZTABBRAVO";
 /// See [`TABS_OCR_FIRST`] for why only tab 2's editor grid can draw it.
 pub(crate) const TABS_OCR_SECOND: &str = "zztabbravo";
 
-/// Name of the readback leg (a) writes: the tabpage count and `winheight(0)` = H1.
+/// Name of the readback leg (a) writes: tab 1's `winheight(0)` = H1.
 pub(crate) const TABS_READ_A_NAME: &str = "tb_reada.txt";
 
-/// Name of the readback leg (c) writes: two lines, `tabpagecount nr winheight
-/// showtabline` and then `getcwd()`.
+/// Name of the readback leg (c) writes from the NEW tab's Neovim: two lines,
+/// `winheight(0)` = H2 and then `getcwd()`.
 ///
 /// Two lines rather than one joined string, so the PATH never has to be split back
 /// out of a separator it could contain — the `TWOWIN_READBACK_R2_NAME` precedent.
 pub(crate) const TABS_READ_C_NAME: &str = "tb_readc.txt";
 
-/// Name of the readback leg (e) writes after the tab-bar click: two lines,
-/// `tabpagenr()` and then the TAIL of `bufname('%')`.
+/// Name of the readback leg (e) writes after the tab-bar click: the TAIL of
+/// `bufname('%')` in whichever Neovim the keys reached.
 ///
-/// The tail rather than the raw name because `:tcd` re-derives every buffer's
-/// displayed name against the new directory, and leg (b) moves the tab into a
-/// subdirectory the first file does not live in. The tail is the same string under
-/// either behaviour and costs nothing, because the two fixtures' tails are distinct
-/// — which the crossed pair in
+/// The tail rather than the raw name because leg (b)'s `:tcd` re-derives tab 1's
+/// buffer names against a subdirectory its file does not live in. The tail is the
+/// same string under either behaviour, and the two fixtures' tails are distinct,
+/// which the crossed pair in
 /// `restore_fixture_names_cannot_satisfy_their_own_assertions` keeps true.
 pub(crate) const TABS_READ_E_NAME: &str = "tb_reade.txt";
 
-/// Name of the readback leg (f) writes after the middle-click: the tabpage count
-/// and `&hidden`.
-///
-/// `&hidden` rides along because it is the premise the close rests on.
-/// `_G.wolf_close_tabpage` runs `<n>tabclose` inside a `pcall`, which SWALLOWS a
-/// refusal — and every leg here parks its block cursor with `o`, which modifies the
-/// buffer. With `hidden` off, `tabclose` would refuse to abandon that buffer, the
-/// pcall would eat the error, and the count would stay at 2: a red that looks
-/// exactly like an unanswered `close-page` veto while being nothing of the kind.
+/// Name of the readback leg (f) writes after the middle-click: the tail of the
+/// surviving tab's `bufname('%')`.
 pub(crate) const TABS_READ_F_NAME: &str = "tb_readf.txt";
 
 /// Fraction of the output WIDTH at which the FIRST tab's centre sits with two tabs
@@ -2186,31 +2163,25 @@ pub(crate) const TABS_READ_F_NAME: &str = "tb_readf.txt";
 pub(crate) const TABS_FIRST_TAB_CENTRE_FRACTION: f64 = 0.25;
 
 /// Body of [`native_tabs_open_switch_and_close_under_cage`], appended to
-/// [`POINTER_PREAMBLE`].
+/// [`POINTER_PREAMBLE`] and composed with `recovery::with_nvim_pid_helper`.
 ///
-/// Six legs over ONE launch: open a file in tab 1, `:tcd` into a subdirectory, open
-/// a second tab with Ctrl+Shift+T, open the second file into it, click tab 1's
-/// entry in the bar, then middle-click it to close it. Three captures and four
-/// Neovim readbacks.
+/// Six legs over ONE launch: open a file in tab 1, `:tcd` its Neovim into a
+/// subdirectory, open a second tab with Ctrl+Shift+T, open the second file into it,
+/// click tab 1's entry in the bar, then middle-click it to close it. Three captures,
+/// four Neovim readbacks and three counts of the app's live `nvim` children.
 ///
 /// ## Exit codes it adds to [`POINTER_PREAMBLE`]'s 11-15
 ///
 /// | code | leg | meaning |
 /// | --- | --- | --- |
-/// | `21` | a | the run did not START on exactly one tabpage, so every count below would be measuring the wrong baseline |
-/// | `22` | c | Ctrl+Shift+T produced no second tabpage |
-/// | `23` | c | the new tabpage is not rooted in [`TABS_SUBDIR`] — a precondition for leg (d), NOT a check on `create_tabpage`'s cwd argument; see assertion 5 |
-/// | `24` | c | the editor did not lose a row: either the tab bar took no height, or the new page was never selected and its grid kept a taller default |
-/// | `25` | e | the click on tab 1's bar entry did not move Neovim to tabpage 1 |
-/// | `26` | f | the middle-click did not close a tabpage |
+/// | `21` | a | the app did not START with exactly one live Neovim, so every count below would be measuring the wrong baseline |
+/// | `22` | c | Ctrl+Shift+T started no second Neovim |
+/// | `23` | c | the new tab's Neovim is not rooted in [`TABS_SUBDIR`], where the selected tab's Neovim was |
+/// | `24` | c | the editor did not lose a row: either the tab bar took no height, or the new page was never selected and its grid kept the core's initial size |
+/// | `25` | e | after the click on tab 1's bar entry, the keys reached a Neovim whose buffer is not [`TABS_FIRST_FILE`] |
+/// | `26` | f | the middle-click did not leave exactly one live Neovim |
 /// | `27` | f | the APP DIED on the middle-click — the last-page arm ran with two pages live |
-///
-/// ## Why `len(gettabinfo())` rather than `tabpagenr('$')`
-///
-/// Identical value. The idiomatic form would put a `$'` inside the double-quoted
-/// shell word `wtype` is handed; POSIX leaves that `$` literal, so it would in fact
-/// work — but "in fact works because of a quoting rule" is not worth spending a red
-/// run on, and `gettabinfo()` needs no argument at all.
+/// | `28` | f | the surviving tab's Neovim is not the one showing [`TABS_SECOND_NAME`] |
 const POINTER_TABS_BODY: &str = r#"
 # How long to wait after Ctrl+Shift+T before ANYTHING reads a number back.
 #
@@ -2223,12 +2194,13 @@ const POINTER_TABS_BODY: &str = r#"
 TABS_BAR_SETTLE=2.0
 
 # Every readback path below is ABSOLUTE and arrives as an env var, so no `writefile`
-# here depends on Neovim's working directory -- which this scenario deliberately
-# changes twice, once with `:tcd` and once by inheritance into a new tab. A missing
-# readback is the preamble's own exit 14 (a KEYBOARD failure), never one of this
-# smoke's own codes.
+# here depends on a Neovim's working directory -- which leg (b) changes in tab 1, and
+# which leg (c)'s new Neovim starts somewhere of its own. A missing readback is the
+# preamble's own exit 14 (a KEYBOARD failure), never one of this smoke's own codes.
 #
-# --- Leg (a): one tab, one file, and the baseline row count ------------------
+# --- Leg (a): one tab, one Neovim, one file, and the baseline row count ------
+wait_nvim_count 1 21 "at launch, with one tab open"
+
 wtype -- ":e $TABS_FIRST_FILE"
 wtype -k Return
 sleep "$SETTLE"
@@ -2240,36 +2212,22 @@ wtype -- o
 wtype -k Escape
 sleep "$SETTLE"
 
-wtype -- ":call writefile([printf('%d %d', len(gettabinfo()), winheight(0))], '$TABS_READ_A')"
+wtype -- ":call writefile([printf('%d', winheight(0))], '$TABS_READ_A')"
 wtype -k Return
 wait_file "$TABS_READ_A" || exit 14
-set -- $(cat "$TABS_READ_A")
-tabs_a=$1
-h1=$2
-echo "wolf-gnome native-tabs smoke: leg (a) tabs=$tabs_a winheight=$h1" >&2
-if [ "$tabs_a" != "1" ]; then
-    echo "wolf-gnome native-tabs smoke: the run started with $tabs_a tabpage(s), not 1." >&2
-    echo "  Every count below is a comparison against this baseline, so nothing downstream" >&2
-    echo "  would be about opening a tab. A leftover tabpage means the captive Neovim was not" >&2
-    echo "  freshly launched, or something typed earlier created one." >&2
-    exit 21
-fi
+h1=$(cat "$TABS_READ_A")
+echo "wolf-gnome native-tabs smoke: leg (a) winheight=$h1" >&2
 
 # Capture A: the FIRST tab's heading, with one tab open. This is capture B's
 # non-vacuity partner -- without it, B's must-NOT-contain half would hold for a
 # window that never drew the first file at all.
 grim "$OUT_PNG_A"
 
-# --- Leg (b): give tab 1 a tab-local working directory -----------------------
+# --- Leg (b): move tab 1's Neovim into a subdirectory ------------------------
 #
-# What this does NOT do is make the exit-23 check below able to tell
-# create_tabpage(Some(cwd)) from create_tabpage(None). MEASURED: `:tabnew` copies the
-# current window's effective directory into the tabpage it creates, so the new tab
-# inherits this `:tcd` either way (see TABS_SUBDIR for the probe and for the two
-# escapes that were tried and failed). What it does buy is a directory that is NOT
-# the global cwd, so exit 23 reads "the new tab is rooted where the window was"
-# rather than "the new tab is rooted at the only directory in play", and leg (d)'s
-# bare `:e` has one specific place to resolve against.
+# The new tab's core starts at the selected tab's live cwd, which follows a :tcd
+# (see TABS_SUBDIR), so this is what exit 23 discriminates: a subdirectory that is
+# NOT the launch directory, which a core started anywhere else cannot be sitting in.
 #
 # RELATIVE on purpose, the typed-`:cd` smoke's reason: an absolute `:tcd <path>`
 # would put the whole temp path into the command line the cmdline strip draws.
@@ -2280,69 +2238,46 @@ wtype -- ":tcd $TABS_SUBDIR"
 wtype -k Return
 sleep "$SETTLE"
 
-# --- Leg (c): Ctrl+Shift+T ---------------------------------------------------
+# --- Leg (c): Ctrl+Shift+T starts a second Neovim ---------------------------
 #
 # GTK captures the chord before the window key controller and activates
-# `win.new-tab`; the shell gates on liveness, resolves the new tab's directory from
-# the window's live cwd, issues the blocking create_tabpage RPC and appends a page.
+# `win.new-tab`; the shell picks the new tab's directory from the selected tab's
+# live cwd, and TabsInner::open_tab starts a core of its own there and selects the
+# new page.
 wtype -M ctrl -M shift -k t -m shift -m ctrl
+wait_nvim_count 2 22 "after Ctrl+Shift+T opened a second tab"
 sleep "$TABS_BAR_SETTLE"
 
-# Four numbers and a path, in ONE writefile so they describe one instant.
-# &showtabline rides along as a PRECONDITION: Neovim's own default draws a tabline
-# as soon as a second tabpage exists, which would cost the editor a row for a reason
-# that has nothing to do with the adw::TabBar and would leave the h2 < h1 check
-# below green with the bar never appended.
-wtype -- ":call writefile([printf('%d %d %d %d', len(gettabinfo()), tabpagenr(), winheight(0), &showtabline), getcwd()], '$TABS_READ_C')"
+# Typed at the NEW tab, so the NEW Neovim answers. Both values in ONE writefile so
+# they describe one instant.
+wtype -- ":call writefile([printf('%d', winheight(0)), getcwd()], '$TABS_READ_C')"
 wtype -k Return
 wait_file "$TABS_READ_C" || exit 14
-set -- $(sed -n 1p "$TABS_READ_C")
-tabs_c=$1
-nr_c=$2
-h2=$3
-stl_c=$4
+h2=$(sed -n 1p "$TABS_READ_C")
 cwd_c=$(sed -n 2p "$TABS_READ_C")
-echo "wolf-gnome native-tabs smoke: leg (c) tabs=$tabs_c nr=$nr_c winheight=$h2 showtabline=$stl_c" >&2
-echo "  getcwd=$cwd_c" >&2
-
-if [ "$tabs_c" != "2" ]; then
-    echo "wolf-gnome native-tabs smoke: after Ctrl+Shift+T the captive Neovim has $tabs_c" >&2
-    echo "  tabpage(s), not 2. The chord produced no tabpage at all: either win.new-tab is not" >&2
-    echo "  installed (Command::NewTab demoted back to Deferred, in which case the chord fell" >&2
-    echo "  through to Neovim as <C-t>), or the liveness gate refused, or create_tabpage" >&2
-    echo "  answered 0." >&2
-    exit 22
-fi
+echo "wolf-gnome native-tabs smoke: leg (c) winheight=$h2 getcwd=$cwd_c" >&2
 
 # The comparison is on the final path component, the two-window smoke's reason:
 # /tmp may resolve through a symlink on this host, so getcwd() need not be
 # string-equal to the path this harness built, while the basename survives every
 # symlink. The Rust side asserts the same thing against its own fixture path.
 if [ "${cwd_c##*/}" != "$TABS_SUBDIR" ]; then
-    echo "wolf-gnome native-tabs smoke: the NEW tab's working directory is $cwd_c, whose final" >&2
-    echo "  component is not $TABS_SUBDIR. This is a PRECONDITION for leg (d), not a check on" >&2
-    echo "  create_tabpage's cwd argument: :tabnew COPIES the current window's effective" >&2
-    echo "  directory into the tabpage it creates, so leg (b)'s :tcd is inherited whether" >&2
-    echo "  create_tabpage was passed the cwd or nothing at all (measured; see TABS_SUBDIR)." >&2
-    echo "  What a red here names is a tab that landed somewhere UNRELATED -- the launch cwd," >&2
-    echo "  the app's home directory, or a stale tracked_cwd handed over in place of the" >&2
-    echo "  window's live folder -- and leg (d)'s bare :e would then open an empty scratch" >&2
-    echo "  buffer instead of the second fixture." >&2
+    echo "wolf-gnome native-tabs smoke: the NEW tab's Neovim started in $cwd_c, whose final" >&2
+    echo "  component is not $TABS_SUBDIR, the directory leg (b) moved tab 1's Neovim into." >&2
+    echo "  AppShell::new_tab must hand new_tab_cwd the selected tab's live_cwd; a tab at the" >&2
+    echo "  project root means it was handed nothing (or the launch cwd), and leg (d)'s bare" >&2
+    echo "  :e would then open an empty scratch buffer instead of the second fixture." >&2
     exit 23
 fi
 
 if [ "$h2" -ge "$h1" ]; then
-    echo "wolf-gnome native-tabs smoke: the editor pane reports $h2 row(s) with two tabs" >&2
-    echo "  open, against $h1 with one. The adw::TabBar is supposed to take real height out of" >&2
-    echo "  the window's vertical box, so the pane must lose at least one row. The two causes" >&2
-    echo "  are told apart by the number above. EQUAL to $h1: the bar was never appended between" >&2
-    echo "  the header bar and the gtk::Paned, or it is still autohidden because the second page" >&2
-    echo "  was never added to the view. GREATER than $h1 (measured 14 against 11): the new page" >&2
-    echo "  was appended but never SELECTED, so its DrawingArea stays unmapped at 0x0," >&2
-    echo "  pane_view::pending_resize refuses that size, and the new tabpage's grid keeps a" >&2
-    echo "  taller default -- check that open_tab still calls set_selected_page." >&2
-    echo "  (showtabline=$stl_c: a value other than 0 would make this check unsound in the" >&2
-    echo "  other direction -- Neovim's own tabline would take the row instead.)" >&2
+    echo "wolf-gnome native-tabs smoke: the new tab's editor pane reports $h2 row(s) with two" >&2
+    echo "  tabs open, against $h1 with one. The adw::TabBar takes real height out of the" >&2
+    echo "  window's vertical box, so the pane must lose at least one row. EQUAL to $h1: the" >&2
+    echo "  bar was never appended between the header bar and the gtk::Paned. GREATER than" >&2
+    echo "  $h1: the new page was never SELECTED, so its DrawingArea stays unmapped at 0x0," >&2
+    echo "  pane_view::pending_resize refuses that size, and the new Neovim keeps the core's" >&2
+    echo "  initial rows." >&2
     exit 24
 fi
 
@@ -2376,89 +2311,72 @@ sleep "$SETTLE"
 # carry no typed text at all.
 grim "$OUT_PNG"
 
-# The buffer's TAIL rather than its raw name, and not for brevity: `:tcd` re-derives
-# every buffer's displayed name against the new directory, so after leg (b) the first
-# file -- which lives in the PARENT of that directory -- is no longer expressible
-# relative to it. The tail is the same string under either behaviour, and it loses
-# nothing here because the two fixtures' tails are distinct (the guard asserts the
-# crossing).
-wtype -- ":call writefile([printf('%d', tabpagenr()), fnamemodify(bufname('%'), ':t')], '$TABS_READ_E')"
+# Which Neovim the keys reach is the claim: each tab's Neovim holds one buffer of
+# its own, so the tail names the tab whose core the window resolved.
+wtype -- ":call writefile([fnamemodify(bufname('%'), ':t')], '$TABS_READ_E')"
 wtype -k Return
 wait_file "$TABS_READ_E" || exit 14
-nr_e=$(sed -n 1p "$TABS_READ_E")
-buf_e=$(sed -n 2p "$TABS_READ_E")
-echo "wolf-gnome native-tabs smoke: leg (e) nr=$nr_e bufname=$buf_e" >&2
+buf_e=$(cat "$TABS_READ_E")
+echo "wolf-gnome native-tabs smoke: leg (e) bufname=$buf_e" >&2
 
-if [ "$nr_e" != "1" ]; then
-    echo "wolf-gnome native-tabs smoke: after clicking the FIRST tab the captive Neovim is on" >&2
-    echo "  tabpage $nr_e, not 1. GTK may well have selected the page -- what this says is that" >&2
-    echo "  the selection never reached Neovim, i.e. the selected-page notify no longer calls" >&2
-    echo "  set_current_tabpage. Note the capture taken a moment ago stays CORRECT under that" >&2
-    echo "  defect, because a background grid is frozen and byte-identical, so page 0 repaints" >&2
-    echo "  its own content whether or not Neovim switched. This readback is the discriminator." >&2
-    exit 25
-fi
 if [ "$buf_e" != "$TABS_FIRST_FILE" ]; then
-    echo "wolf-gnome native-tabs smoke: Neovim is on tabpage 1 but its current buffer's tail is" >&2
-    echo "  $buf_e rather than $TABS_FIRST_FILE, so the two tabs are not bound to the tabpages" >&2
-    echo "  this smoke thinks they are. A page bound to the wrong handle would switch to the" >&2
-    echo "  wrong tabpage and still report a plausible number." >&2
+    echo "wolf-gnome native-tabs smoke: after clicking the FIRST tab the keys reached a Neovim" >&2
+    echo "  whose current buffer is $buf_e, not $TABS_FIRST_FILE. GTK may well have selected" >&2
+    echo "  the page -- capture C stays correct either way, since tab 1's pane view repaints" >&2
+    echo "  its own Neovim's grid -- so what this says is that keys still go to tab 2's core:" >&2
+    echo "  TabsHandle::selected_core is not answering the selected tab." >&2
     exit 25
 fi
 
 # --- Leg (f): middle-click the same entry to CLOSE that tab ------------------
 #
 # Middle-click on an adw::TabBar tab raises `close-page`, which is a VETO the
-# handler must answer with close_page_finish and Stop. MEASURED under cage before
-# this leg was written; see POINTER_BUTTON_MIDDLE.
+# handler must answer with close_page_finish and Stop. MEASURED under cage; see
+# POINTER_BUTTON_MIDDLE.
 hsend motion "$TABS_CLICK_X" "$TABS_CLICK_Y"
 hsend press "$BTN_MIDDLE"
 hsend release "$BTN_MIDDLE"
 sleep "$TABS_BAR_SETTLE"
 
-# Aliveness FIRST: a window that closed takes its readback with it, and "the file
-# never appeared" (exit 14) would bury the finding under a keyboard failure.
-if ! kill -0 "$app_pid" 2>/dev/null; then
+# Aliveness FIRST, and through pid_is_live: the app is this shell's child, so a dead
+# one is a zombie that `kill -0` would still find.
+if ! pid_is_live "$app_pid"; then
     echo "wolf-gnome native-tabs smoke: the APP EXITED when one of TWO tabs was closed." >&2
     echo "  The last-page arm ran with two pages live: close_outcome answered CloseWindow at a" >&2
-    echo "  page count where it must answer CloseTabpage, so the window routed a tab close into" >&2
-    echo "  its own close and shut the captive Neovim down." >&2
+    echo "  page count where it must answer CloseTab, so the window routed a tab close into" >&2
+    echo "  its own close and shut every Neovim down." >&2
     exit 27
 fi
 
-wtype -- ":call writefile([printf('%d %d', len(gettabinfo()), &hidden)], '$TABS_READ_F')"
+wait_nvim_count 1 26 "after the middle-click closed one of two tabs"
+
+wtype -- ":call writefile([fnamemodify(bufname('%'), ':t')], '$TABS_READ_F')"
 wtype -k Return
 wait_file "$TABS_READ_F" || exit 14
-set -- $(cat "$TABS_READ_F")
-tabs_f=$1
-hidden_f=$2
-echo "wolf-gnome native-tabs smoke: leg (f) tabs=$tabs_f hidden=$hidden_f" >&2
+buf_f=$(cat "$TABS_READ_F")
+echo "wolf-gnome native-tabs smoke: leg (f) bufname=$buf_f" >&2
 
-if [ "$tabs_f" != "1" ]; then
-    echo "wolf-gnome native-tabs smoke: after the middle-click the captive Neovim still has" >&2
-    echo "  $tabs_f tabpage(s), so no tabpage was closed. Two candidate causes, in order:" >&2
-    echo "  (1) the close-page VETO was left unanswered -- a handler returning Proceed without" >&2
-    echo "  close_page_finish leaves the page on screen forever with no error, and" >&2
-    echo "  close_tabpage is never reached; (2) hidden=$hidden_f -- with 'hidden' off, Neovim" >&2
-    echo "  refuses <n>tabclose over the modified buffer this scenario's cursor park creates," >&2
-    echo "  and wolf_close_tabpage's pcall swallows that refusal silently." >&2
-    exit 26
+if [ "$buf_f" != "$TABS_SECOND_NAME" ]; then
+    echo "wolf-gnome native-tabs smoke: after closing tab 1 the remaining Neovim's buffer is" >&2
+    echo "  $buf_f, not $TABS_SECOND_NAME. One Neovim is live, but it is not tab 2's: the close" >&2
+    echo "  shut the wrong tab's core down, or keys go to a core no page shows." >&2
+    exit 28
 fi
 
 hsend quit
 exit 0
 "#;
 
-/// Two `adw::TabPage`s over ONE captive Neovim: opened with Ctrl+Shift+T, switched
-/// by a real click on the tab bar, and closed by a real middle-click.
+/// Two `adw::TabPage`s, each over its OWN captive Neovim: opened with Ctrl+Shift+T,
+/// switched by a real click on the tab bar, and closed by a real middle-click.
 ///
 /// ## What it proves that nothing else can
 ///
-/// Every headless tab test can only see values the front-end itself
-/// computed. This is the only observation in the repository that a second
-/// `adw::TabPage` exists over one core at all, that the GTK selection reaches
-/// Neovim, that the bar costs the editor grid real rows, and that `close-page`'s
-/// veto is answered.
+/// Every headless tab test can only see values the front-end itself computed. This
+/// is the observation that a second tab starts a second Neovim process, where the
+/// selected tab's Neovim is, that the keys follow the GTK selection to the selected
+/// tab's core, that the bar costs the editor grid real rows, that `close-page`'s veto
+/// is answered, and that closing a tab shuts its Neovim down and leaves the other's.
 ///
 /// ## Which capture proves what, and which one does NOT
 ///
@@ -2466,66 +2384,47 @@ exit 0
 /// NOT the first; capture C the first again and NOT the second. A and B together
 /// are the pixel claim that exactly one page's pane view is on screen at a time.
 ///
-/// **Capture C is not the switch's discriminator, and reading it as one is the
-/// mistake this paragraph exists to prevent.** A background grid was measured to be
-/// FROZEN and byte-identical rather than pruned, and a background page's
-/// `DrawingArea`s are unmapped and never asked to draw — so with
-/// `set_current_tabpage` deleted from the selection notify, GTK still shows page 0,
-/// page 0 still repaints its own last content, and capture C is still exactly the
-/// first heading with the second absent. It stays GREEN under that revert. The
-/// `tabpagenr()` READBACK is what discriminates, and it exits 25.
+/// **Capture C is not the switch's discriminator.** Tab 1's pane view draws its own
+/// Neovim's grid, which nothing changed while tab 2 was selected, so with keys still
+/// routed to tab 2's core GTK shows page 0 and capture C is still exactly the first
+/// heading with the second absent. The leg (e) READBACK is what discriminates, and
+/// it exits 25.
 ///
 /// ## Assertions, classified
 ///
-/// A precondition gets no revert of its own. Where a revert WAS run and this smoke
-/// stayed green, or reddened somewhere other than the row it was aimed at, that
-/// measurement stands in the revert column in place of the claim it falsified. The
-/// `measured` column is from an actual run.
+/// A precondition gets no falsifier of its own. Each predicted red stands until a run
+/// of its falsifier alone measures it.
 ///
-/// | # | assertion | kind | revert | measured |
+/// | # | assertion | kind | falsifier | predicted red |
 /// | --- | --- | --- | --- | --- |
-/// | 0 | the second fixture is inside [`TABS_SUBDIR`] and NOT at the project root | precondition on the fixture layout, checked against the filesystem this run uses | none | n/a |
-/// | 1 | the scenario exited 0 | precondition — it ran to completion | none; do not invent one | n/a |
+/// | 0 | the second fixture is inside [`TABS_SUBDIR`] and NOT at the project root | precondition on the fixture layout | none | n/a |
+/// | 1 | the scenario exited 0 | precondition — it ran to completion | none | n/a |
 /// | 2 | three captures present, the injected point inside the reported extents | precondition | none | n/a |
-/// | 3 | `&showtabline == 0` | PRECONDITION for assertion 6 — Neovim draws no tabline of its own | none of this crate's; `crates/wolf-core/tests/tabpages.rs::a_second_tabpage_draws_no_neovim_tabline` owns it | n/a |
-/// | 4 | leg (c) reports two tabpages, the second current | **discriminator** | `command_action.rs`: restore `Command::NewTab => Deferred(..)` | scenario exit 22 |
-/// | 5 | leg (c)'s `getcwd()` ends in [`TABS_SUBDIR`] | PRECONDITION for leg (d) — where the new tab is rooted | **no isolated red.** The revert in `shell.rs`, `create_tabpage(Some(cwd))` -> `create_tabpage(None)`, was RUN and this smoke stayed GREEN: `:tabnew` copies the current window's effective directory, so the tab inherits leg (b)'s `:tcd` under both calls, and a new tab inheriting the window's folder makes the two arguments name the same directory anyway. `haslocaldir(-1, 0)` and a window-local `:lcd` were both measured and neither separates them either. Kept because a tab rooted somewhere UNRELATED has no other observer here; see [`TABS_SUBDIR`] | ran: GREEN |
-/// | 6 | `H2 < H1` | **discriminator** | `window.rs`: drop the `content.append(&tabs.bar_widget())`, which leaves `H2 == H1`. A SECOND revert lands on this same assertion: dropping `set_selected_page` from `open_tab` leaves the new page unmapped and `0x0`, `pane_view::pending_resize` refuses that size, and the new tabpage's grid keeps a taller default — `H2` reads 14 against `H1` = 11, a GROWN count | scenario exit 24, from either |
-/// | 7 | leg (e) reports tabpage 1 and the first file | **discriminator** | `tab_view.rs`: delete the `set_current_tabpage` call in the selection notify | scenario exit 25 |
-/// | 8 | `&hidden` is on | PRECONDITION for assertion 9 — Neovim would accept the close | none | n/a |
-/// | 9 | leg (f) reports one tabpage | **discriminator** | `tab_view.rs`: return `Propagation::Proceed` with no `close_page_finish` | scenario exit 26 |
-/// | 10 | capture A carries [`TABS_OCR_FIRST`] | precondition — capture B's non-vacuity partner | none | n/a |
-/// | 11 | capture B carries [`TABS_OCR_SECOND`] | corroboration for the SELECTION of a newly appended page | `tab_view.rs`: drop `set_selected_page` from `open_tab`. MEASURED, and the run never reaches capture B: the unselected page's `DrawingArea` stays unmapped at `0x0`, `pending_resize` refuses that size, the new tabpage's grid keeps a taller default and leg (c) exits 24 with `H2` = 14 against `H1` = 11. The revert DOES redden this smoke — at assertion 6, not here — so it is not an unproven rule; what has no red of its own is this assertion | scenario exit 24, in leg (c) |
-/// | 12 | capture B does NOT carry [`TABS_OCR_FIRST`] | **discriminator** | **no isolated red.** What it catches is two panes drawn at once, which is reachable only by a structural edit that appends both tabs' widgets to one visible container. Recorded rather than papered over, the same shape as the drawer smoke's leg (f) | n/a |
-/// | 13 | capture C carries [`TABS_OCR_FIRST`] and not [`TABS_OCR_SECOND`] | corroboration — the only pixel evidence that selecting a page changes what is on screen | none that is isolated; see the capture-C paragraph above | n/a |
+/// | 3 | leg (a): exactly one live Neovim at launch | precondition — the baseline of every later count | none | n/a |
+/// | 4 | leg (c): exactly two live Neovims after Ctrl+Shift+T | **discriminator** | NT1a: in `AppShell::new_tab`, delete the `open_tab` call | scenario exit 22 |
+/// | 5 | leg (c)'s `getcwd()` ends in [`TABS_SUBDIR`] | **discriminator** | NT2a: in `AppShell::new_tab`, pass `None` as `live_cwd` to `new_tab_cwd` | scenario exit 23 |
+/// | 6 | `H2 < H1` | **discriminator** | NT3a: in `window::build`, drop `content.append(&tabs.bar_widget())` | scenario exit 24 |
+/// | 7 | leg (e)'s buffer tail is [`TABS_FIRST_FILE`] | **discriminator** | NT4a: in `TabsHandle::selected_core`, answer `entries().last()` instead of the selected tab | scenario exit 25, naming [`TABS_SECOND_NAME`] |
+/// | 8 | leg (f): exactly one live Neovim after the middle-click | **discriminator** | NT5a: in the `CloseTab` arm, delete both `deregister(page)` and `entry.shutdown()` | scenario exit 26 |
+/// | 9 | leg (f): the app survives closing one of two tabs | **discriminator** | NT6a: in `close_outcome`, `live_pages <= 1` → `<= 2` | scenario exit 27 |
+/// | 10 | leg (f)'s survivor names [`TABS_SECOND_NAME`] | corroboration | none isolated | n/a |
+/// | 11 | capture A carries [`TABS_OCR_FIRST`] | precondition — capture B's non-vacuity partner | none | n/a |
+/// | 12 | capture B carries [`TABS_OCR_SECOND`] | corroboration for the selection of a newly appended page | none isolated: an unselected page fails assertion 6 first | n/a |
+/// | 13 | capture B does NOT carry [`TABS_OCR_FIRST`] | **discriminator** | none isolated: what it catches is two panes drawn at once, reachable only by a structural edit that appends both tabs' widgets to one visible container | n/a |
+/// | 14 | capture C carries [`TABS_OCR_FIRST`] and not [`TABS_OCR_SECOND`] | corroboration — the pixel evidence that selecting a page changes what is on screen | none isolated; see the capture-C paragraph above | n/a |
 ///
-/// ## Seconds
-///
-/// 16.9 s, measured over three filtered single-test runs (16.98 / 16.92 / 16.90)
-/// against a ~500 s suite — alongside
-/// `two_windows_two_neovims_and_two_saved_sessions_under_cage` at 16.73 s.
+/// NT5a deletes the `shutdown()` together with the `deregister`, because deleting
+/// `shutdown()` alone may stay green: the entry's last handle drops its core, and an
+/// embedded Neovim exits when its stdin closes.
 #[test]
 fn native_tabs_open_switch_and_close_under_cage() {
     const SMOKE: &str = "native_tabs_open_switch_and_close_under_cage";
-    // `tabpagecount winheight`.
-    const LEG_A_TOKENS: usize = 2;
-    // `tabpagecount tabpagenr winheight showtabline`.
-    const LEG_C_TOKENS: usize = 4;
-    // `tabpagecount hidden`.
-    const LEG_F_TOKENS: usize = 2;
+    // `winheight(0)`.
+    const LEG_A_TOKENS: usize = 1;
     // The inclusive band of scenario exit codes this smoke adds on top of
     // `POINTER_PREAMBLE`'s shared 11-15.
     const TABS_EXIT_FIRST: i32 = 21;
-    const TABS_EXIT_LAST: i32 = 27;
-    // What `&showtabline` must read: re-typed here rather than imported, so a
-    // change to the captive config fails this assertion instead of moving with it.
-    const SHOWTABLINE_OFF: i64 = 0;
-    // What `&hidden` must read.
-    const HIDDEN_ON: i64 = 1;
-    // Tabpage counts and numbers the legs expect.
-    const TABS_AFTER_OPEN: i64 = 2;
-    const TABS_AFTER_CLOSE: i64 = 1;
-    const FIRST_TABPAGE_NR: i64 = 1;
+    const TABS_EXIT_LAST: i32 = 28;
 
     let runtime_dir = require_smoke_env();
 
@@ -2549,7 +2448,7 @@ fn native_tabs_open_switch_and_close_under_cage() {
     );
 
     // Assertion 0 (precondition): if the second fixture also existed at the root, leg (d)'s bare `:e`
-    // would find it whether or not the new tab inherited the subdirectory.
+    // would find it whether or not the new tab started in the subdirectory.
     let second_in_subdir = cwd.join(TABS_SECOND_FILE);
     assert!(
         second_in_subdir.is_file(),
@@ -2562,8 +2461,8 @@ fn native_tabs_open_switch_and_close_under_cage() {
         !second_at_root.exists(),
         "{SMOKE}: {} exists, so leg (d)'s bare `:e {TABS_SECOND_NAME}` resolves to a real file \
          against the PROJECT ROOT as well as against {TABS_SUBDIR:?}. That disarms the belt half \
-         of leg (c)'s inheritance check: a new tab that never inherited the window's folder would \
-         still open a document and still draw a heading. A SIDEBAR_FILLER_FILES entry or another \
+         of leg (c)'s directory check: a new tab started at the launch directory would still \
+         open a document and still draw a heading. A SIDEBAR_FILLER_FILES entry or another \
          smoke's fixture renamed to {TABS_SECOND_NAME:?} is the likely cause; rename that rather \
          than moving this smoke's fixture out of {TABS_SUBDIR:?}.",
         second_at_root.display()
@@ -2596,8 +2495,9 @@ fn native_tabs_open_switch_and_close_under_cage() {
     let click_x_env = click_x.to_string();
     let click_y_env = click_y.to_string();
 
+    let body = with_nvim_pid_helper(POINTER_TABS_BODY);
     let status = run_pointer_scenario(
-        POINTER_TABS_BODY,
+        &body,
         &cwd,
         &runtime_dir,
         &out_png,
@@ -2622,30 +2522,30 @@ fn native_tabs_open_switch_and_close_under_cage() {
     assert!(
         !matches!(status.code(), Some(c) if (TABS_EXIT_FIRST..=TABS_EXIT_LAST).contains(&c)),
         "{SMOKE}: the cage scenario exited with a TAB-SPECIFIC code ({status}). The scenario \
-         echoes every number it read to stderr, so read that first; each code names one leg.\n\
-         Exit 21: the run did not START on exactly one tabpage, so every count below would be \
-         measured against the wrong baseline.\n\
-         Exit 22: Ctrl+Shift+T produced no second tabpage. Either `win.new-tab` is not installed \
-         (a `Command::NewTab` demoted back to `Deferred` leaves the chord falling through to \
-         Neovim as `<C-t>`), or `tabs_ui::new_tab_press` refused, or `create_tabpage` answered 0.\n\
-         Exit 23: the new tabpage is not rooted in the subdirectory leg (b) moved the window into. \
-         A PRECONDITION for leg (d) rather than a check on `create_tabpage`'s cwd argument — \
-         `:tabnew` copies the current window's effective directory, so the tab inherits leg (b)'s \
-         `:tcd` either way — and what it names is a tab that landed somewhere UNRELATED, e.g. the \
-         launch cwd or a stale `tracked_cwd` handed over in place of the window's live folder.\n\
+         echoes every value it read to stderr, so read that first; each code names one leg.\n\
+         Exit 21: the app did not START with exactly one live `nvim` child, so every count below \
+         would be measured against the wrong baseline.\n\
+         Exit 22: Ctrl+Shift+T started no second Neovim. Either `win.new-tab` is not installed (a \
+         `Command::NewTab` demoted back to `Deferred` leaves the chord falling through to Neovim \
+         as `<C-t>`), or `AppShell::new_tab` never reached `TabsInner::open_tab`, or the new \
+         tab's `WolfCore::start` failed (its stderr line says so).\n\
+         Exit 23: the new tab's Neovim is not rooted in the subdirectory leg (b) moved tab 1's \
+         Neovim into, so `new_tab_cwd` was not handed the selected tab's `live_cwd`.\n\
          Exit 24: the editor did not lose a row, and the number the scenario printed says which \
          cause. EQUAL: the `adw::TabBar` took no height — check that `window::build` still appends \
-         it between the header bar and the `gtk::Paned`. GREATER: `open_tab` no longer calls \
-         `set_selected_page`, so the new page is never mapped, reports 0x0, and its grid keeps a \
-         taller default that `pane_view::pending_resize` refuses to correct.\n\
-         Exit 25: the click on the first tab's bar entry did not move Neovim to tabpage 1. Either \
-         the selection notify no longer calls `set_current_tabpage`, or the derived point missed \
-         the bar (both constants behind it are pinned; see `TAB_BAR_HEIGHT_EXPECTED`).\n\
-         Exit 26: the middle-click closed no tabpage — the `close-page` veto was left unanswered, \
-         or Neovim refused the `tabclose` (the scenario prints `&hidden`, which decides that).\n\
+         it between the header bar and the `gtk::Paned`. GREATER: the new page was never \
+         selected, so it is never mapped, reports 0x0, and its Neovim keeps the core's initial \
+         rows.\n\
+         Exit 25: after the click on the first tab's bar entry, the keys reached a Neovim whose \
+         buffer is not {TABS_FIRST_FILE:?}: `TabsHandle::selected_core` does not answer the \
+         selected tab, or the derived point missed the bar (both constants behind it are pinned; \
+         see `TAB_BAR_HEIGHT_EXPECTED`).\n\
+         Exit 26: the middle-click did not leave exactly one live Neovim — the `close-page` veto \
+         was left unanswered, or the closed tab's core was never shut down.\n\
          Exit 27: THE APP DIED closing one of TWO tabs. `close_outcome` answered `CloseWindow` at \
-         a page count where it must answer `CloseTabpage`, so a tab close shut the whole window \
-         and its captive Neovim down.\n\
+         a page count where it must answer `CloseTab`.\n\
+         Exit 28: one Neovim survived the close, but its buffer is not {TABS_SECOND_NAME:?}, so \
+         the close shut the wrong tab's core down.\n\
          Captures expected at {}, {} and {}.",
         out_png_a.display(),
         out_png_b.display(),
@@ -2671,203 +2571,393 @@ fn native_tabs_open_switch_and_close_under_cage() {
     );
     assert_inside_extents(SMOKE, "the FIRST TAB's centre", (click_x, click_y), extents);
 
-    // Assertion 3 (precondition): `showtabline` is 0, or a second tabpage costs a row with no bar and
-    // dropping the bar has no red. `init.lua` is not this test's to control, so Neovim is asked.
+    // Assertions 3, 4, 8 and 9 are the scenario's process counts and its aliveness check; an exit
+    // 0 means each held, so the Rust side reads only what the scenario wrote down.
+    let winheight_one = read_ints(&read_a, LEG_A_TOKENS, SMOKE)[0];
     let leg_c = read_readback(&read_c, SMOKE);
     let mut leg_c_lines = leg_c.lines();
-    let leg_c_numbers = leg_c_lines.next().unwrap_or_default();
+    let winheight_two = parse_readback_int(
+        leg_c_lines.next().unwrap_or_default().trim(),
+        &read_c,
+        &leg_c,
+        SMOKE,
+    );
     let leg_c_cwd = leg_c_lines.next().unwrap_or_default().trim().to_string();
-    let leg_c_tokens: Vec<&str> = leg_c_numbers.split_whitespace().collect();
-    assert!(
-        leg_c_tokens.len() == LEG_C_TOKENS,
-        "{SMOKE}: leg (c)'s readback {} holds {} number(s) on its first line, expected \
-         {LEG_C_TOKENS} (tabpage count, tabpage number, winheight, showtabline). Raw contents were \
-         {leg_c:?}. A SHORT line means the `printf` format and its argument list disagree.",
-        read_c.display(),
-        leg_c_tokens.len()
-    );
-    let tabs_after_open = parse_readback_int(leg_c_tokens[0], &read_c, &leg_c, SMOKE);
-    let nr_after_open = parse_readback_int(leg_c_tokens[1], &read_c, &leg_c, SMOKE);
-    let winheight_two = parse_readback_int(leg_c_tokens[2], &read_c, &leg_c, SMOKE);
-    let showtabline = parse_readback_int(leg_c_tokens[3], &read_c, &leg_c, SMOKE);
-    assert_eq!(
-        showtabline, SHOWTABLINE_OFF,
-        "{SMOKE}: with two tabpages live the captive Neovim reports `&showtabline` = \
-         {showtabline}, not {SHOWTABLINE_OFF}. Neovim then draws its OWN tabline into grid 1, \
-         which neither front-end paints and which still costs the editor a whole row — so \
-         assertion 6 below would be satisfied by Neovim's chrome rather than by the \
-         `adw::TabBar`, and would keep passing with the bar never appended. This is a PRECONDITION \
-         about the shared `runtime/nvim/init.lua`, not a front-end failure; read it as \"assertion \
-         6 cannot be trusted this run\", and fix it in \
-         `crates/wolf-core/tests/tabpages.rs::a_second_tabpage_draws_no_neovim_tabline`'s subject."
-    );
 
-    // --- Assertion 4 (DISCRIMINATOR): the chord opened a second tabpage ------
-    let leg_a = read_ints(&read_a, LEG_A_TOKENS, SMOKE);
-    let (tabs_at_start, winheight_one) = (leg_a[0], leg_a[1]);
-    assert_eq!(
-        tabs_after_open, TABS_AFTER_OPEN,
-        "{SMOKE}: after Ctrl+Shift+T the captive Neovim reports {tabs_after_open} tabpage(s), not \
-         {TABS_AFTER_OPEN} (it started with {tabs_at_start}). The scenario exits 22 on this, so \
-         reaching the assertion means the readback SHAPE changed rather than the behaviour."
-    );
-    assert_eq!(
-        nr_after_open, TABS_AFTER_OPEN,
-        "{SMOKE}: the second tabpage exists but Neovim is on tabpage {nr_after_open}, not \
-         {TABS_AFTER_OPEN}. `wolf_create_tabpage` runs `:tabnew`, which ENTERS the new tabpage, so \
-         this says something switched back — and leg (d) would then open the second file into the \
-         FIRST tab, making capture B's crossed pair describe the wrong page."
-    );
-
-    // Assertion 5 (precondition for leg (d)): `:tabnew` inherits the effective cwd, so it has no red;
-    // kept because leg (d)'s bare `:e` resolves here. Compared on the last component (symlinks).
+    // Assertion 5 (discriminator): compared on the last component, since /tmp may resolve
+    // through a symlink.
     let got_tail = leg_c_cwd.rsplit('/').next().unwrap_or_default();
     assert_eq!(
         got_tail, TABS_SUBDIR,
-        "{SMOKE}: the new tab's working directory is {leg_c_cwd:?}, whose final component is \
-         {got_tail:?} rather than {TABS_SUBDIR:?}. This is a PRECONDITION for leg (d), whose bare \
-         `:e {TABS_SECOND_NAME}` resolves against exactly this directory; it does NOT tell \
-         `create_tabpage(Some(cwd))` from `create_tabpage(None)`, because `:tabnew` copies the \
-         current window's effective directory and the new tab inherits leg (b)'s `:tcd` either way \
-         (measured — see `TABS_SUBDIR`). A component of {TEMP_CWD_BASENAME:?} means the tab landed \
-         at the PROJECT ROOT, i.e. something other than the window's live folder reached \
-         `create_tabpage` — a stale `tracked_cwd`, or the launch cwd. The scenario exits 23 on \
-         this, so reaching the assertion means the readback shape changed."
+        "{SMOKE}: the new tab's Neovim reports `getcwd()` = {leg_c_cwd:?}, whose final component \
+         is {got_tail:?} rather than {TABS_SUBDIR:?}, where leg (b) moved tab 1's Neovim. A \
+         component of {TEMP_CWD_BASENAME:?} means the new core started at the launch directory: \
+         `AppShell::new_tab` did not hand `new_tab_cwd` the selected tab's `live_cwd`. The \
+         scenario exits 23 on this, so reaching the assertion means the readback shape changed."
     );
 
     // Assertion 6 (discriminator): a strict inequality, no constant. Measured provenance only: H1 = 11
     // rows at one tab, H2 = 10 at two, 1280x720 at SMOKE_FONT_PT.
     assert!(
         winheight_two < winheight_one,
-        "{SMOKE}: the editor pane reports {winheight_two} row(s) with two tabs open against \
-         {winheight_one} with one, so the editor lost no row when the second tab appeared. \
-         Assertion 3 is GREEN, so Neovim is drawing no tabline of its own and this is entirely \
-         about the front-end. Two reverts land here and the COUNT tells them apart. EQUAL: \
-         `window::build` no longer appends `tabs.bar_widget()` to the content box between the \
-         header bar and the `gtk::Paned`, so the bar exists and is allocated nothing. GREATER than \
-         the one-tab count (measured 14 against 11): `open_tab` no longer calls \
-         `set_selected_page`, so the appended page is never mapped, its `DrawingArea` reports \
-         0x0, `pane_view::pending_resize` refuses that size, and the new tabpage's grid keeps a \
-         taller default nothing corrects — capture B would be red for the same cause if the run \
-         reached it. The scenario exits 24 on this, so reaching the assertion means the readback \
-         shape changed."
+        "{SMOKE}: the new tab's editor pane reports {winheight_two} row(s) with two tabs open \
+         against {winheight_one} with one, so the editor lost no row when the second tab \
+         appeared. EQUAL: `window::build` no longer appends `tabs.bar_widget()` to the content \
+         box between the header bar and the `gtk::Paned`, so the bar exists and is allocated \
+         nothing. GREATER: the new page was never selected, so its `DrawingArea` reports 0x0, \
+         `pane_view::pending_resize` refuses that size, and the new Neovim keeps the core's \
+         initial rows. The scenario exits 24 on this, so reaching the assertion means the \
+         readback shape changed."
     );
 
-    // Assertion 7 (discriminator): capture C stays green under this row's revert, so only this readback
-    // makes the claim. See the doc comment.
-    let leg_e = read_readback(&read_e, SMOKE);
-    let mut leg_e_lines = leg_e.lines();
-    let nr_after_click = parse_readback_int(
-        leg_e_lines.next().unwrap_or_default().trim(),
-        &read_e,
-        &leg_e,
-        SMOKE,
-    );
-    let buf_after_click = leg_e_lines.next().unwrap_or_default().trim().to_string();
-    assert_eq!(
-        nr_after_click, FIRST_TABPAGE_NR,
-        "{SMOKE}: after clicking the FIRST tab's entry the captive Neovim is on tabpage \
-         {nr_after_click}, not {FIRST_TABPAGE_NR}. GTK may well have selected the page — what this \
-         says is that the selection never reached Neovim, i.e. the selected-page notify no longer \
-         calls `set_current_tabpage`. The scenario exits 25 on this, so reaching the assertion \
-         means the readback shape changed."
-    );
+    // Assertion 7 (discriminator): capture C stays green when keys go to the wrong core, so only this
+    // readback makes the claim. See the doc comment.
+    let buf_after_click = read_readback(&read_e, SMOKE).trim().to_string();
     assert_eq!(
         buf_after_click, TABS_FIRST_FILE,
-        "{SMOKE}: Neovim is on tabpage {FIRST_TABPAGE_NR} but the tail of its current buffer's \
-         name is {buf_after_click:?} rather than {TABS_FIRST_FILE:?}. The two pages are not bound \
-         to the tabpages this smoke believes they are — a page holding the wrong handle switches \
-         to the wrong tabpage and still reports a plausible NUMBER, which is why the buffer name \
-         is asserted beside it. An empty value means the window is on an unnamed buffer, i.e. leg \
-         (a)'s `:e` never took effect and capture A's heading came from somewhere else."
+        "{SMOKE}: after clicking the FIRST tab's entry, the Neovim the keys reached has \
+         {buf_after_click:?} as its current buffer's tail, not {TABS_FIRST_FILE:?}. \
+         {TABS_SECOND_NAME:?} means keys still go to tab 2's core: `TabsHandle::selected_core` \
+         is not answering the selected tab. An empty value means an unnamed buffer, i.e. leg \
+         (a)'s `:e` never took effect. The scenario exits 25 on this, so reaching the assertion \
+         means the readback shape changed."
     );
 
-    let leg_f = read_ints(&read_f, LEG_F_TOKENS, SMOKE);
-    let (tabs_after_close, hidden) = (leg_f[0], leg_f[1]);
-
-    // --- Assertion 8 (PRECONDITION for assertion 9) --------------------------
+    // Assertion 10 (corroboration): the one Neovim left is tab 2's.
+    let buf_after_close = read_readback(&read_f, SMOKE).trim().to_string();
     assert_eq!(
-        hidden, HIDDEN_ON,
-        "{SMOKE}: the captive Neovim reports `&hidden` = {hidden}, not {HIDDEN_ON}. Every leg here \
-         parks its block cursor with `o`, which MODIFIES the buffer, and with `hidden` off Neovim \
-         refuses to abandon a modified buffer — so `_G.wolf_close_tabpage`'s `<n>tabclose` would \
-         fail, its `pcall` would swallow the error, and assertion 9 would report a tabpage count \
-         that never moved. That failure is indistinguishable from an unanswered `close-page` veto \
-         without this row. `hidden` is on by Neovim's own default; something turned it off."
+        buf_after_close, TABS_SECOND_NAME,
+        "{SMOKE}: after middle-clicking the first tab, the remaining Neovim's buffer is \
+         {buf_after_close:?}, not {TABS_SECOND_NAME:?}. {TABS_FIRST_FILE:?} means the close shut \
+         tab 2's core down and left tab 1's running behind a page that is gone. The scenario \
+         exits 28 on this, so reaching the assertion means the readback shape changed."
     );
 
-    // --- Assertion 9 (DISCRIMINATOR): the close-page veto was answered -------
-    assert_eq!(
-        tabs_after_close, TABS_AFTER_CLOSE,
-        "{SMOKE}: after middle-clicking the first tab the captive Neovim still reports \
-         {tabs_after_close} tabpage(s), not {TABS_AFTER_CLOSE}. Assertion 8 is GREEN, so Neovim \
-         would have accepted the close: what this names is the front-end never asking. \
-         `close-page` is a VETO — a handler that returns `Propagation::Proceed` without calling \
-         `close_page_finish` leaves the page on screen forever with no error and no message, and \
-         `close_tabpage` is never reached. The scenario exits 26 on this, so reaching the \
-         assertion means the readback shape changed."
-    );
-
-    // --- Assertion 10 (precondition): capture A is capture B's partner -------
+    // --- Assertion 11 (precondition): capture A is capture B's partner -------
     let ocr_a = ocr_to_lowercase(&out_png_a);
     assert!(
         ocr_a.contains(TABS_OCR_FIRST),
         "{SMOKE}: capture A did not contain {TABS_OCR_FIRST:?} — the heading of \
          {TABS_FIRST_FILE:?}, with ONE tab open and nothing tab-related having happened yet. This \
-         is a PRECONDITION with no revert of ours: without it, capture B's must-NOT-contain half \
-         below holds for a window that never drew the first file at all, and the sharpest claim \
-         this smoke makes would be vacuous. Read this red as \"assertion 12 cannot be trusted this \
-         run\". PNG kept at {}. OCR output was:\n{ocr_a}",
+         is a PRECONDITION with no falsifier: without it, capture B's must-NOT-contain half \
+         below holds for a window that never drew the first file at all. Read this red as \
+         \"assertion 13 cannot be trusted this run\". PNG kept at {}. OCR output was:\n{ocr_a}",
         out_png_a.display()
     );
 
-    // --- Assertions 11 and 12: exactly ONE page's pane view is on screen -----
+    // --- Assertions 12 and 13: exactly ONE page's pane view is on screen -----
     let ocr_b = ocr_to_lowercase(&out_png_b);
     assert!(
         ocr_b.contains(TABS_OCR_SECOND),
         "{SMOKE}: capture B did not contain {TABS_OCR_SECOND:?} — the heading of \
          {TABS_SECOND_FILE:?}, opened into the tab Ctrl+Shift+T created. Assertions 4 to 6 are \
-         GREEN, so the tabpage exists, it is rooted in {TABS_SUBDIR:?} and the editor lost a row; \
-         what is missing is the new page being SHOWN. The obvious suspect — `open_tab` no longer \
-         calling `set_selected_page`, since `adw::TabView::append` selects only the FIRST page — \
-         is MEASURED not to arrive here: an unselected page is never mapped, so its grid keeps a \
-         taller default and the scenario exits 24 in leg (c) long before this capture is taken. \
-         Reaching THIS red therefore means the page was selected and still not drawn, or that leg \
-         (d)'s `:e` opened nothing. PNG kept at {}. OCR output was:\n{ocr_b}",
+         GREEN, so the second Neovim exists, it started in {TABS_SUBDIR:?} and the editor lost a \
+         row; what is missing is the new page being SHOWN. An unselected page fails assertion 6 \
+         first, so reaching this red means the page was selected and still not drawn, or that \
+         leg (d)'s `:e` opened nothing. PNG kept at {}. OCR output was:\n{ocr_b}",
         out_png_b.display()
     );
     assert!(
         !ocr_b.contains(TABS_OCR_FIRST),
         "{SMOKE}: capture B contained {TABS_OCR_FIRST:?} — the FIRST tab's heading — while the \
          second tab was selected. Only one page's pane view may be on screen at a time, and \
-         assertion 10 proves the term really is drawable, so this says both tabs' widgets are \
+         assertion 11 proves the term really is drawable, so this says both tabs' widgets are \
          visible at once: the first suspect is the page's `gtk::Overlay` having been added to a \
-         container that shows every child rather than to the `adw::TabView`. Nothing in this binary \
-         has an isolated red for this row — what it catches is reachable only by a structural \
-         edit — and that is recorded rather than papered over. It is not vacuous in the other \
-         direction: no fixture NAME carries this term (the tab bar draws both filenames in this \
-         very capture), which the fixture guards enforce. PNG kept at {}. OCR output was:\n{ocr_b}",
+         container that shows every child rather than to the `adw::TabView`. No fixture NAME \
+         carries this term (the tab bar draws both filenames in this very capture), which the \
+         fixture guards enforce. PNG kept at {}. OCR output was:\n{ocr_b}",
         out_png_b.display()
     );
 
-    // Assertion 13: corroboration only; a frozen background grid repaints identically, so this stays
-    // green under assertion 7's revert.
+    // Assertion 14: corroboration only; tab 1's pane view repaints its own Neovim's grid, so this
+    // stays green under assertion 7's falsifier.
     let ocr_c = ocr_to_lowercase(&out_png);
     assert!(
         ocr_c.contains(TABS_OCR_FIRST),
         "{SMOKE}: capture C did not contain {TABS_OCR_FIRST:?} after the click selected the first \
-         tab. Assertion 7 is GREEN, so Neovim really is on tabpage {FIRST_TABPAGE_NR}; what this \
-         says is that the first page is not what GTK is drawing. Either the click selected some \
-         other page, or the page's pane view stopped painting when it was re-shown. PNG kept at \
-         {}. OCR output was:\n{ocr_c}",
+         tab. Assertion 7 is GREEN, so the keys reach tab 1's Neovim; what this says is that the \
+         first page is not what GTK is drawing. Either the click selected some other page, or the \
+         page's pane view stopped painting when it was re-shown. PNG kept at {}. OCR output \
+         was:\n{ocr_c}",
         out_png.display()
     );
     assert!(
         !ocr_c.contains(TABS_OCR_SECOND),
         "{SMOKE}: capture C contained {TABS_OCR_SECOND:?} — the SECOND tab's heading — after the \
-         click selected the FIRST tab. Together with assertion 12 this is the pair that says \
+         click selected the FIRST tab. Together with assertion 13 this is the pair that says \
          exactly one page is drawn; a term from the deselected page means both are. PNG kept at \
          {}. OCR output was:\n{ocr_c}",
         out_png.display()
+    );
+}
+
+// Reload smoke: a file saved by tab 2's Neovim reloads in tab 1's once tab 1 is selected again.
+// See notes/crates/wolf-gnome/tests/smoke_headless/panes.rs.md#reload-on-switch-smoke
+
+/// Reload smoke: the one file both tabs' Neovims open.
+///
+/// No capture is taken, so no name here can satisfy an OCR term; it is registered in
+/// `RELAUNCH_FIXTURE_NAMES` for the generic loop all the same, since the sidebar draws it.
+pub(crate) const RELOAD_FILE: &str = "arkilo.md";
+
+/// Line 1 of [`RELOAD_FILE`] on disk at launch, and what tab 1's buffer holds until it reloads.
+const RELOAD_HEADING_BEFORE: &str = "# RELOADBEFORE";
+
+/// What tab 2's Neovim writes over line 1 before its `:w`.
+///
+/// A different byte length from [`RELOAD_HEADING_BEFORE`] on purpose: Neovim's timestamp check
+/// compares the size as well as the mtime, so the change is seen even when the write lands in
+/// the same second tab 1's Neovim read the file.
+const RELOAD_HEADING_AFTER: &str = "# RELOADEDAFTERWRITE";
+
+/// Tab 1's Neovim writes its `getpid()` here, right after opening [`RELOAD_FILE`].
+pub(crate) const RELOAD_PID_ONE_NAME: &str = "ar_pida.txt";
+
+/// Tab 2's Neovim writes its `getpid()` here, right after opening [`RELOAD_FILE`].
+pub(crate) const RELOAD_PID_TWO_NAME: &str = "ar_pidb.txt";
+
+/// After the click on tab 1: `getpid() &modified` on line 1 and `getline(1)` on line 2, from
+/// whichever Neovim the keys reached.
+pub(crate) const RELOAD_READ_NAME: &str = "ar_read.txt";
+
+/// Body of [`a_file_saved_in_one_tab_reloads_in_another_on_switch_under_cage`], appended to
+/// [`POINTER_PREAMBLE`] and composed with `recovery::with_nvim_pid_helper`.
+///
+/// Tab 1 opens [`RELOAD_FILE`] and turns `CursorHold` off with a huge `'updatetime'`; Ctrl+Shift+T
+/// starts tab 2's Neovim, which opens the same file, rewrites line 1 and saves; the scenario
+/// waits for the write on disk, clicks tab 1 and reads tab 1's buffer back. Tab 1 enters no
+/// buffer after the write, so `BufEnter` cannot reload it either: the focus gain the switch
+/// sends is the one trigger left.
+///
+/// ## Exit codes it adds to [`POINTER_PREAMBLE`]'s 11-15
+///
+/// | code | meaning |
+/// | --- | --- |
+/// | `21` | Ctrl+Shift+T did not leave exactly two live Neovims |
+/// | `22` | tab 2's `:w` never put [`RELOAD_HEADING_AFTER`] on line 1 of the file on disk |
+///
+/// The last readback is re-issued until it reads the new heading or its budget is spent, since
+/// Neovim defers a `:checktime` run inside an autocommand to its next idle moment. A readback
+/// that settles on the old heading is left standing for the Rust side to name.
+const RELOAD_BODY: &str = r#"
+# The adw::TabBar animates its height in over about a second; see POINTER_TABS_BODY.
+TABS_BAR_SETTLE=2.0
+# How many times the last readback is re-issued while waiting for the reload.
+READBACK_TRIES=25
+
+# --- Step 1: tab 1 opens the file, with CursorHold out of reach -------------
+wtype -- ":e $RELOAD_FILE"
+wtype -k Return
+sleep "$SETTLE"
+wtype -- ":set updatetime=3600000"
+wtype -k Return
+wtype -- ":call writefile([printf('%d', getpid())], '$RELOAD_PID_ONE')"
+wtype -k Return
+wait_file "$RELOAD_PID_ONE" || exit 14
+
+# --- Step 2: a second tab, and with it a second Neovim ----------------------
+wtype -M ctrl -M shift -k t -m shift -m ctrl
+wait_nvim_count 2 21 "after Ctrl+Shift+T opened a second tab"
+sleep "$TABS_BAR_SETTLE"
+
+# --- Step 3: tab 2 opens the same file, rewrites line 1 and saves -----------
+#
+# Under shortmess+=A the swap tab 1's live Neovim holds raises no prompt here.
+wtype -- ":e $RELOAD_FILE"
+wtype -k Return
+sleep "$SETTLE"
+wtype -- ":call writefile([printf('%d', getpid())], '$RELOAD_PID_TWO')"
+wtype -k Return
+wait_file "$RELOAD_PID_TWO" || exit 14
+wtype -- ":call setline(1, '$RELOAD_HEADING_AFTER')"
+wtype -k Return
+wtype -- ":w"
+wtype -k Return
+
+# --- Step 4: the write is on disk -------------------------------------------
+t=0
+while [ "$(head -n 1 "$RELOAD_FILE_ABS" 2>/dev/null)" != "$RELOAD_HEADING_AFTER" ]; do
+    t=$((t + 1))
+    if [ "$t" -ge "$FILE_TRIES" ]; then
+        echo "wolf-gnome reload smoke: line 1 of $RELOAD_FILE_ABS never became" >&2
+        echo "  '$RELOAD_HEADING_AFTER'; it reads '$(head -n 1 "$RELOAD_FILE_ABS")'. Tab 2's" >&2
+        echo "  Neovim did not save, so nothing below is about reloading." >&2
+        exit 22
+    fi
+    sleep "$WAIT_INTERVAL"
+done
+
+# --- Step 5: back to tab 1 --------------------------------------------------
+hsend motion "$TABS_CLICK_X" "$TABS_CLICK_Y"
+hsend press "$BTN_LEFT"
+hsend release "$BTN_LEFT"
+sleep "$SETTLE"
+
+# --- Step 6: tab 1's buffer, re-read until it reloads -----------------------
+rb=0
+while [ "$rb" -lt "$READBACK_TRIES" ]; do
+    wtype -k Escape
+    wtype -- ":call writefile([printf('%d %d', getpid(), &modified), getline(1)], '$RELOAD_READ')"
+    wtype -k Return
+    rb=$((rb + 1))
+    sleep "$WAIT_INTERVAL"
+    if [ "$(sed -n 2p "$RELOAD_READ" 2>/dev/null)" = "$RELOAD_HEADING_AFTER" ]; then
+        break
+    fi
+done
+wait_file "$RELOAD_READ" || exit 14
+echo "wolf-gnome reload smoke: after $rb readback(s) tab 1 reads $(tr '\n' '|' < "$RELOAD_READ")" >&2
+
+hsend quit
+exit 0
+"#;
+
+/// A file saved by one tab's Neovim reloads in another tab's once that tab is selected again,
+/// through the focus gain the switch sends its Neovim.
+///
+/// ## What it proves
+///
+/// `TabsHandle::sync_ui_focus` sends `WolfCore::set_ui_focus(true)` to the tab a switch selects,
+/// whose `FocusGained` runs `init.lua`'s `WolfAutoRead` `:checktime`, which reloads an unmodified
+/// buffer whose file changed on disk. The two Neovims are separate processes, so nothing else
+/// carries tab 2's save into tab 1: `CursorHold` is pushed an hour away, and tab 1 enters no
+/// buffer after the write, so `BufEnter` never fires there.
+///
+/// ## Premises
+///
+/// That `nvim_ui_set_focus(true)` fires `FocusGained` is `WolfCore::set_ui_focus`'s documented
+/// contract. That a `:checktime` run from that autocommand reloads the buffer, after Neovim
+/// defers it to its next idle moment, is unmeasured here; the re-issued readback is what keeps
+/// a deferred reload from reading as none.
+///
+/// ## Assertions
+///
+/// | # | assertion | kind | falsifier | predicted red |
+/// | --- | --- | --- | --- | --- |
+/// | 1 | the scenario exited 0 | precondition | none | n/a |
+/// | 2 | the two tabs' Neovims have different pids | precondition — two processes, one per tab | none | n/a |
+/// | 3 | the last readback comes from tab 1's pid, not tab 2's | precondition — the switch routed keys to tab 1 | none | n/a |
+/// | 4 | tab 1's buffer is unmodified | precondition — `:checktime` never reloads a modified buffer | none | n/a |
+/// | 5 | tab 1's line 1 is [`RELOAD_HEADING_AFTER`] | **discriminator** | AR1a: in `TabsHandle::sync_ui_focus`, send only the edges whose `gained` is `false` | the old heading |
+#[test]
+fn a_file_saved_in_one_tab_reloads_in_another_on_switch_under_cage() {
+    const SMOKE: &str = "a_file_saved_in_one_tab_reloads_in_another_on_switch_under_cage";
+    // The inclusive band of scenario exit codes RELOAD_BODY adds to POINTER_PREAMBLE's 11-15.
+    const RELOAD_EXIT_FIRST: i32 = 21;
+    const RELOAD_EXIT_LAST: i32 = 22;
+    // `getpid() &modified`.
+    const READ_TOKENS: usize = 2;
+
+    let runtime_dir = require_smoke_env();
+    let cwd = make_temp_cwd();
+    write_relaunch_fixtures(SMOKE, &cwd, &[(RELOAD_FILE, RELOAD_HEADING_BEFORE)]);
+
+    let file = cwd.join(RELOAD_FILE);
+    let pid_one = cwd.join(RELOAD_PID_ONE_NAME);
+    let pid_two = cwd.join(RELOAD_PID_TWO_NAME);
+    let read = cwd.join(RELOAD_READ_NAME);
+    // Post-mortem only: no assertion reads a pixel.
+    let out_png = runtime_dir.join("wolf_gnome_reload.png");
+    for path in [&pid_one, &pid_two, &read, &out_png] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let output_w = exact_f64(CAGE_OUTPUT_W_EXPECTED, "the expected cage output width");
+    let click_x = pixel_target(
+        output_w * TABS_FIRST_TAB_CENTRE_FRACTION,
+        "the first tab's centre x",
+    );
+    let click_y = pixel_target(
+        OVERLAY_ORIGIN_Y_EXPECTED + TAB_BAR_HEIGHT_EXPECTED / 2.0,
+        "the tab bar's centre y",
+    );
+    let click_x_env = click_x.to_string();
+    let click_y_env = click_y.to_string();
+
+    let body = with_nvim_pid_helper(RELOAD_BODY);
+    let status = run_pointer_scenario(
+        &body,
+        &cwd,
+        &runtime_dir,
+        &out_png,
+        &[
+            ("RELOAD_FILE", OsStr::new(RELOAD_FILE)),
+            ("RELOAD_FILE_ABS", file.as_os_str()),
+            ("RELOAD_HEADING_AFTER", OsStr::new(RELOAD_HEADING_AFTER)),
+            ("RELOAD_PID_ONE", pid_one.as_os_str()),
+            ("RELOAD_PID_TWO", pid_two.as_os_str()),
+            ("RELOAD_READ", read.as_os_str()),
+            ("TABS_CLICK_X", OsStr::new(&click_x_env)),
+            ("TABS_CLICK_Y", OsStr::new(&click_y_env)),
+        ],
+    );
+
+    // Assertion 1 (precondition): this smoke's own codes first.
+    assert!(
+        !matches!(status.code(), Some(c) if (RELOAD_EXIT_FIRST..=RELOAD_EXIT_LAST).contains(&c)),
+        "{SMOKE}: the cage scenario exited with a reload-specific code ({status}).\n\
+         Exit 21: Ctrl+Shift+T did not leave exactly two live `nvim` children, so there is no \
+         second Neovim to save the file from; the native-tabs smoke covers that path directly.\n\
+         Exit 22: tab 2's `:w` never put {RELOAD_HEADING_AFTER:?} on line 1 of {}, so nothing was \
+         saved for tab 1 to reload.",
+        file.display()
+    );
+    assert_pointer_scenario_succeeded(SMOKE, status, &cwd, &out_png);
+
+    let extents = read_output_extents(&cwd, SMOKE);
+    assert_inside_extents(SMOKE, "the FIRST TAB's centre", (click_x, click_y), extents);
+
+    // Assertion 2 (precondition): one Neovim per tab.
+    let first = read_ints(&pid_one, 1, SMOKE)[0];
+    let second = read_ints(&pid_two, 1, SMOKE)[0];
+    assert_ne!(
+        first, second,
+        "{SMOKE}: tab 1 and tab 2 report the same Neovim pid {first}. Each tab must run a Neovim \
+         of its own; one pid means the second tab is a view of the first tab's Neovim, and the \
+         save below would reach tab 1's buffer directly rather than through a reload."
+    );
+
+    let raw = read_readback(&read, SMOKE);
+    let mut lines = raw.lines();
+    let numbers = lines.next().unwrap_or_default();
+    let line_one = lines.next().unwrap_or_default().trim().to_string();
+    let tokens: Vec<&str> = numbers.split_whitespace().collect();
+    assert!(
+        tokens.len() == READ_TOKENS,
+        "{SMOKE}: the last readback {} holds {} number(s) on its first line, expected \
+         {READ_TOKENS} (getpid, &modified). Raw contents were {raw:?}.",
+        read.display(),
+        tokens.len()
+    );
+    let reader = parse_readback_int(tokens[0], &read, &raw, SMOKE);
+    let modified = parse_readback_int(tokens[1], &read, &raw, SMOKE);
+
+    // Assertion 3 (precondition): tab 2's own buffer holds the new heading, so a readback
+    // from it would pass assertion 5 with no reload at all.
+    assert_eq!(
+        reader, first,
+        "{SMOKE}: after the click on tab 1 the keys reached the Neovim with pid {reader}, not tab \
+         1's {first} (tab 2's is {second}). Tab 2's pid means the click did not move the keys to \
+         tab 1: the derived point missed the bar, or `TabsHandle::selected_core` does not answer \
+         the selected tab. Either way assertion 5 would be reading tab 2's own edit."
+    );
+
+    // Assertion 4 (precondition): `:checktime` leaves a modified buffer alone.
+    assert_eq!(
+        modified, 0,
+        "{SMOKE}: tab 1's buffer reports `&modified` = {modified}, so something edited it after \
+         its `:e`. `:checktime` never reloads a modified buffer, so assertion 5 could not pass \
+         whatever the focus trigger did."
+    );
+
+    // Assertion 5 (discriminator): the reload.
+    assert_eq!(
+        line_one, RELOAD_HEADING_AFTER,
+        "{SMOKE}: tab 1's line 1 is {line_one:?}, not {RELOAD_HEADING_AFTER:?}, which tab 2's \
+         Neovim saved to disk. {RELOAD_HEADING_BEFORE:?} means tab 1's Neovim never re-checked the \
+         file when its tab was selected again: `TabsHandle::sync_ui_focus` sent tab 1 no \
+         `set_ui_focus(true)` on the switch, or `init.lua`'s `WolfAutoRead` no longer runs \
+         `:checktime` on `FocusGained`. The scenario re-issued this readback until the heading \
+         changed or its budget ran out, so this is no reload rather than a late one."
     );
 }

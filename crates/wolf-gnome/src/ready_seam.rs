@@ -9,14 +9,15 @@
 //!
 //! [`launch_readiness`] is the predicate, and each conjunct has a reason:
 //!
-//! - **The core is `Alive`.** `WolfCore::start` has already attached and run every
-//!   setup RPC, and a stalled or dead core would drop or strand typed keys.
+//! - **The selected tab's core is `Alive`.** It is the one typed keys reach.
+//!   `WolfCore::start` has already attached and run every setup RPC, and a stalled
+//!   or dead core would drop or strand typed keys.
 //! - **A tab is selected and at least one of its panes is bound.** A pane with no
 //!   grid paints nothing a pointer smoke can click.
-//! - **No saved layout is pending and no restore owes a page.** Both are consumed on
-//!   later wakes with blocking RPCs that would interleave with typed keys. An
-//!   abandoned restore ([`restore_owed`]'s `may_create == false`) issues no further
-//!   RPC, so it counts as finished.
+//! - **The selected tab's saved layout is not pending.** It is consumed on a later
+//!   wake with a blocking RPC that would interleave with typed keys. A background
+//!   tab's rebuild runs on its own Neovim, so it can delay a typed key but never
+//!   lands between two of them in the Neovim they reach.
 //! - **Every launch window has painted a frame.** The ordinal of its first
 //!   frame-clock `after-paint` is its map order: all windows share one Wayland
 //!   connection, so the compositor processes their first commits in that order.
@@ -59,12 +60,11 @@ pub struct PaneReadiness {
 /// One launch window, as far as readiness is concerned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WindowReadiness {
-    /// The core's liveness, `None` when the window has no core (or no longer exists).
+    /// The selected tab's core's liveness, `None` when no tab is selected, its core
+    /// has been taken out, or the window no longer exists.
     pub liveness: Option<Liveness>,
     /// The selected tab's panes, `None` when no tab is selected.
     pub panes: Option<PaneReadiness>,
-    /// Whether the window's restore still owes pages ([`restore_owed`]).
-    pub restore_owed: bool,
     /// The ordinal of this window's first `after-paint`, `None` before it.
     pub first_paint: Option<u32>,
     /// Whether the window's display's default seat exposes a keyboard device.
@@ -86,8 +86,6 @@ pub enum Blocker {
     NoPaneBound,
     /// A launch window's saved layout has not been realized.
     LayoutPending,
-    /// A launch window's restore still owes pages.
-    RestoreOwed,
     /// A launch window has not painted a frame.
     NotPainted,
     /// The last-mapped window has no focus widget.
@@ -100,13 +98,12 @@ pub enum Blocker {
 
 impl Blocker {
     /// Every blocker, in check order.
-    pub const ALL: [Blocker; 10] = [
+    pub const ALL: [Blocker; 9] = [
         Blocker::NoLaunchWindow,
         Blocker::CoreNotAlive,
         Blocker::NoSelectedTab,
         Blocker::NoPaneBound,
         Blocker::LayoutPending,
-        Blocker::RestoreOwed,
         Blocker::NotPainted,
         Blocker::NoFocusWidget,
         Blocker::GridsUnsized,
@@ -122,7 +119,6 @@ impl Blocker {
             Blocker::NoSelectedTab => "no-selected-tab",
             Blocker::NoPaneBound => "no-pane-bound",
             Blocker::LayoutPending => "layout-pending",
-            Blocker::RestoreOwed => "restore-owed",
             Blocker::NotPainted => "not-painted",
             Blocker::NoFocusWidget => "no-focus-widget",
             Blocker::GridsUnsized => "grids-unsized",
@@ -160,9 +156,6 @@ pub fn launch_readiness(windows: &[WindowReadiness]) -> Result<(), Blocker> {
         if panes.layout_pending {
             return Err(Blocker::LayoutPending);
         }
-        if window.restore_owed {
-            return Err(Blocker::RestoreOwed);
-        }
         if window.first_paint.is_none() {
             return Err(Blocker::NotPainted);
         }
@@ -196,14 +189,6 @@ pub fn grid_settled(requested: Option<(u16, u16)>, actual: Option<(usize, usize)
         }
         _ => false,
     }
-}
-
-/// Whether a restore queue still owes pages: it holds layouts AND may still create
-/// them. An abandoned queue (`may_create == false`) never creates again, so it owes
-/// nothing.
-#[must_use]
-pub fn restore_owed(queued: usize, may_create: bool) -> bool {
-    queued > 0 && may_create
 }
 
 /// The path `WOLF_READY_FILE` names, trimmed, or `None` when absent or blank — the
@@ -268,7 +253,7 @@ mod tests {
     const EXPECT_LINE_PREFIX: &str = "wolf-ready: ";
 
     /// [`Blocker::ALL`]'s length re-typed as a literal.
-    const EXPECT_BLOCKER_COUNT: usize = 10;
+    const EXPECT_BLOCKER_COUNT: usize = 9;
 
     /// A launch window that meets every condition, painted `first_paint`-th.
     ///
@@ -282,7 +267,6 @@ mod tests {
                 sized: 2,
                 layout_pending: false,
             }),
-            restore_owed: false,
             first_paint: Some(first_paint),
             has_keyboard: true,
             has_focus_widget: true,
@@ -378,7 +362,7 @@ mod tests {
     #[test]
     fn each_unmet_condition_names_its_own_blocker() {
         type Flip = fn(&mut WindowReadiness);
-        let rows: [(&str, Flip, Blocker); 11] = [
+        let rows: [(&str, Flip, Blocker); 10] = [
             (
                 "no core at all (liveness None)",
                 |w| w.liveness = None,
@@ -420,11 +404,6 @@ mod tests {
                     });
                 },
                 Blocker::LayoutPending,
-            ),
-            (
-                "the restore still owes pages",
-                |w| w.restore_owed = true,
-                Blocker::RestoreOwed,
             ),
             (
                 "no frame painted yet",
@@ -564,10 +543,6 @@ mod tests {
             }),
             ..ready_window(1)
         };
-        let older_restore_owed = WindowReadiness {
-            restore_owed: true,
-            ..ready_window(1)
-        };
         let older_core_dead = WindowReadiness {
             liveness: Some(Liveness::Dead),
             ..ready_window(1)
@@ -583,11 +558,6 @@ mod tests {
                 desc: "older window's saved layout pending, older last in the slice",
                 windows: vec![newest, older_layout_pending],
                 expected: Err(Blocker::LayoutPending),
-            },
-            LaunchCase {
-                desc: "older window's restore owes pages",
-                windows: vec![older_restore_owed, newest],
-                expected: Err(Blocker::RestoreOwed),
             },
             LaunchCase {
                 desc: "older window's core is dead",
@@ -680,13 +650,12 @@ mod tests {
         let mut window = WindowReadiness {
             liveness: None,
             panes: None,
-            restore_owed: true,
             first_paint: None,
             has_keyboard: false,
             has_focus_widget: false,
         };
         type Fix = fn(&mut WindowReadiness);
-        let steps: [(&str, Fix, Result<(), Blocker>); 10] = [
+        let steps: [(&str, Fix, Result<(), Blocker>); 9] = [
             ("nothing is met", |_| {}, Err(Blocker::CoreNotAlive)),
             (
                 "core alive",
@@ -724,11 +693,6 @@ mod tests {
                         layout_pending: false,
                     });
                 },
-                Err(Blocker::RestoreOwed),
-            ),
-            (
-                "restore finished",
-                |w| w.restore_owed = false,
                 Err(Blocker::NotPainted),
             ),
             (
@@ -761,7 +725,7 @@ mod tests {
             assert_eq!(
                 got, expected,
                 "after fixing \"{desc}\", launch_readiness must answer {expected:?}: the \
-                 conditions are checked core, tab, bound pane, layout, restore, paint, focus \
+                 conditions are checked core, tab, bound pane, layout, paint, focus \
                  widget, grids, keyboard. A different blocker means two checks swapped places, \
                  so a red run's `wolf-ready: waiting on` line names a later condition while an \
                  earlier one is still unmet.\nwindow: {window:#?}"
@@ -849,32 +813,6 @@ mod tests {
                 case.requested,
                 case.actual,
                 case.expected
-            );
-        }
-    }
-
-    /// T9. A restore owes pages only while it has queued layouts and may still create
-    /// them.
-    ///
-    /// Falsifying edit: ignore `may_create` (answer `queued > 0`) — the
-    /// `(2, false)` row fires: an abandoned restore would hold readiness forever.
-    #[test]
-    fn restore_owed_table() {
-        let cases: [(&str, usize, bool, bool); 5] = [
-            ("empty queue that may create", 0, true, false),
-            ("empty abandoned queue", 0, false, false),
-            ("one layout queued, may create", 1, true, true),
-            ("two layouts queued, may create", 2, true, true),
-            ("two layouts queued, abandoned", 2, false, false),
-        ];
-        for (desc, queued, may_create, expected) in cases {
-            assert_eq!(
-                restore_owed(queued, may_create),
-                expected,
-                "case: {desc} — restore_owed({queued}, {may_create}) must be {expected}. True \
-                 for an abandoned queue (may_create false) blocks readiness on pages that will \
-                 never be created, so the smoke exits 40; false for a live queue writes the file \
-                 while restore RPCs are still due."
             );
         }
     }
@@ -1051,13 +989,12 @@ mod tests {
     /// length assertion fires.
     #[test]
     fn blocker_labels_are_distinct_and_nonempty() {
-        let expected: [(Blocker, &str); 10] = [
+        let expected: [(Blocker, &str); 9] = [
             (Blocker::NoLaunchWindow, "no-launch-window"),
             (Blocker::CoreNotAlive, "core-not-alive"),
             (Blocker::NoSelectedTab, "no-selected-tab"),
             (Blocker::NoPaneBound, "no-pane-bound"),
             (Blocker::LayoutPending, "layout-pending"),
-            (Blocker::RestoreOwed, "restore-owed"),
             (Blocker::NotPainted, "not-painted"),
             (Blocker::NoFocusWidget, "no-focus-widget"),
             (Blocker::GridsUnsized, "grids-unsized"),

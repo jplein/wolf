@@ -11,38 +11,42 @@
 //! Because the menu, the accelerators and the drained commands all resolve through
 //! the same tables, they cannot drift apart.
 //!
-//! ## Two shell entry points per wake
+//! ## Two shell entry points per tab wake
 //!
-//! [`AppShell::on_liveness_wake`] runs FIRST on every wake — before the pane view
-//! and the tree — and [`AppShell::on_render_wake`] runs LAST. They are not
+//! Every tab has its own wake channel, and its drain runs
+//! [`AppShell::on_tab_wake`] with that tab. Inside it,
+//! [`AppShell::on_liveness_wake`] runs FIRST — before the tab's pane view and the
+//! tree — and [`AppShell::on_render_wake`] runs LAST. They are not
 //! interchangeable:
 //!
-//! - [`AppShell::on_liveness_wake`] reads the captive nvim's
+//! - [`AppShell::on_liveness_wake`] reads the tab's captive nvim's
 //!   [`wolf_core::Liveness`] ONCE, applies the pure [`crate::liveness_ui()`]
-//!   mapping, drives the crash/stall overlay, schedules an automatic restart for a
-//!   `Dead` core, and RETURNS whether the pane view and the tree should paint at
-//!   all. It must run before any handler that can early-return: liveness is
-//!   LEVEL-triggered (an atomic read), and putting the read behind
-//!   `pane_view::on_render_wake`'s `core.is_none()` guard would reintroduce an
-//!   edge-triggered swallow.
-//! - [`AppShell::on_render_wake`] reads the captive nvim's LIVE working directory
-//!   ONCE, settles the sidebar's root against it ([`AppShell::settle_reroot`] over
-//!   the pure [`workspace::reroot_decision`]), refreshes the window
-//!   TITLE from that same value ([`AppShell::refresh_title`] over the pure
-//!   [`crate::title`] seam), refreshes the header bar's and tab bar's background
+//!   mapping, drives the crash/stall overlay when the tab is the selected one,
+//!   schedules an automatic restart for a `Dead` core whatever its selection, and
+//!   RETURNS whether the pane view and the tree should paint at all. It must run
+//!   before any handler that can early-return: liveness is LEVEL-triggered (an
+//!   atomic read), and putting the read behind `pane_view::on_render_wake`'s
+//!   `core.is_none()` guard would reintroduce an edge-triggered swallow.
+//! - [`AppShell::on_render_wake`] commits the window's state, and for the SELECTED
+//!   tab alone reads its Neovim's LIVE working directory ONCE, settles the
+//!   sidebar's root against it ([`AppShell::settle_reroot`] over the pure
+//!   [`workspace::reroot_decision`]), refreshes the window TITLE from that same
+//!   value ([`AppShell::refresh_title`] over the pure [`crate::title`] seam),
+//!   refreshes the header bar's and tab bar's background
 //!   ([`AppShell::refresh_titlebar`] over the pure [`mod@crate::titlebar_background`]
-//!   seam), refreshes the two navigation buttons' sensitivity from
-//!   the FOCUSED pane ([`AppShell::refresh_nav_buttons`] over the pure
-//!   [`crate::nav_ui`] seam — the wake a `WinEnter` fires bumps no `seq`, so this is
-//!   what makes the toolbar follow the focus), asks [`crate::persistence`] for an
-//!   application-state
-//!   SNAPSHOT, and then drains [`wolf_core::WolfCore::drain_commands`] and
-//!   dispatches each command. A command `wolf-gnome` does not implement is
-//!   PRINTED with its recorded reason — never silently dropped. The drain runs
-//!   LAST because a drained `close_window` shuts the core down, and the state
-//!   snapshot must happen before that. The title and titlebar refreshes and the
-//!   snapshot run UNGATED like the drain: all are cheap, none issues an RPC, and the
-//!   snapshot's own `state_seam::may_snapshot` gate handles the non-`Alive` case.
+//!   seam), refreshes the two navigation buttons' sensitivity from the FOCUSED pane
+//!   ([`AppShell::refresh_nav_buttons`] over the pure [`crate::nav_ui`] seam — the
+//!   wake a `WinEnter` fires bumps no `seq`, so this is what makes the toolbar
+//!   follow the focus), and then drains that tab's
+//!   [`wolf_core::WolfCore::drain_commands`] and dispatches each command. A command
+//!   `wolf-gnome` does not implement is PRINTED with its recorded reason — never
+//!   silently dropped. The drain runs LAST because a drained `close_window` shuts
+//!   every core down, and the state commit must happen before that.
+//!
+//! **Commands drain from the selected tab only**, so every drained command acts on
+//! the tab whose Neovim queued it: the window-level actions it reaches resolve the
+//! selected tab. A background tab's queue waits for its selection, and the switch
+//! wakes it ([`AppShell::on_tab_selected`]).
 //!
 //! The drain keeps running in ALL THREE liveness states. The drain is the ONLY
 //! path by which a `close_window` / `quit_application` reaches
@@ -53,13 +57,16 @@
 //! ## The restart orchestration
 //!
 //! [`AppShell::restart_nvim`] is the ONE path both the automatic (`Dead`) restart
-//! and the overlay button take. It captures the Tier-1 open-file mirror BEFORE
-//! calling [`wolf_core::WolfCore::restart_nvim`] (a respawn wipes the mirror),
-//! then on an actual respawn resets the pane view, reopens the captured files with
-//! the ACTIVE one LAST, hides the overlay and flashes the banner. Automatic
-//! attempts are capped at [`crate::liveness_ui::MAX_AUTO_RESTART_ATTEMPTS`] per
-//! crash; an explicit button press RESETS that counter, because the cap exists to
-//! stop a retry loop, never to refuse a user.
+//! and the overlay button take, and it restarts ONE tab: its own Neovim, its own
+//! pane view and its own terminals, leaving every other tab untouched. It captures
+//! the Tier-1 open-file mirror BEFORE calling [`wolf_core::WolfCore::restart_nvim`]
+//! (a respawn wipes the mirror), then on an actual respawn resets that tab's pane
+//! view and reopens the captured files with the ACTIVE one LAST. The overlay and the
+//! banner follow the selected tab alone, so a background tab's crash restarts it
+//! silently. Automatic attempts are capped at
+//! [`crate::liveness_ui::MAX_AUTO_RESTART_ATTEMPTS`] per crash and per tab; the
+//! overlay's button restarts the selected tab and RESETS its counter, because the
+//! cap exists to stop a retry loop, never to refuse a user.
 //!
 //! ## Three entry paths, one namespace
 //!
@@ -85,8 +92,9 @@
 //! `drain_and_dispatch_commands` takes a SHORT `core.borrow()`, collects the
 //! commands into a `Vec`, and drops the borrow before dispatching any of them.
 //! `UiAction::CloseWindow` / `UiAction::QuitApplication` synchronously run
-//! `window::wire_close`'s `close-request` handler, which does `core.borrow_mut()
-//! .take()`; an outstanding `borrow()` there is a `RefCell` panic, not a warning.
+//! `window::wire_close`'s `close-request` handler, which takes every tab's core out
+//! with a `borrow_mut()`; an outstanding `borrow()` there is a `RefCell` panic, not a
+//! warning.
 //!
 //! The restart path adds a SECOND rule: **never hold a snapshot read guard across
 //! `open_files_for_tabpage`**. [`AppShell::capture_open_files`] binds
@@ -102,75 +110,48 @@
 //! `Snapshot::current_tabpage` field carries the same handle.
 //!
 //! The sidebar's re-root adds NO blocking call, which is worth stating
-//! because it is the one new per-wake core read this module makes:
+//! because it is the one per-wake core read this module makes:
 //! `WolfCore::live_cwd` is a `parking_lot` read of a tracked cell, taken once per
 //! wake in [`AppShell::on_render_wake`] and passed to both consumers.
 //!
-//! Exactly TEN blocking core calls are reachable from this crate, and the restart
-//! path issues none of them. `WolfCore::history_back` and `history_forward` count
-//! as the ONE navigation move they are, one per direction; nothing else is folded
-//! together, and [`crate::window`] and `notes/wolf-gnome/crash-and-stall-recovery.md` carry the same ten.
+//! ## The blocking calls
 //!
-//! The first is `WolfCore::rebuild_layout`, called at most once per launch from
-//! `pane_view::apply_layout_rebuild`, before the window
-//! is interactive. The second is `WolfCore::list_buffers`, the buffer picker's
-//! candidate snapshot — and it is reachable from a RUNNING application, which is
-//! what makes `Liveness::NotResponding` a state a user can actually reach here.
-//! [`crate::buffer_picker::open_decision`] guards it: the picker refuses to open
-//! unless the core reads `Alive`, so the snapshot can raise a stall ONCE and can
-//! never re-probe a core already known to be wedged.
+//! The blocking core calls this crate can reach, and the gate in front of each, are
+//! inventoried in `notes/wolf-gnome/crash-and-stall-recovery.md`; the restart path
+//! issues none of them. This module issues these, each gated on the selected
+//! tab's core reading `Alive` with the buffer picker's argument and its limits: it
+//! cannot prevent the FIRST stall and must not be strengthened into something that
+//! never raises one; what it prevents is re-probing a Neovim already known to be
+//! wedged.
 //!
-//! The third is the NAVIGATION press. [`AppShell::navigate`] funnels through
-//! `WolfCore::history_back` / `history_forward` into `block_on_rpc`, so a Back or
-//! Forward against a wedged Neovim costs a full RPC timeout budget of frozen main
-//! loop. [`crate::nav_ui::nav_press`] guards it with exactly the buffer picker's
-//! argument and exactly its limits: it cannot prevent the FIRST stall and must not
-//! be strengthened into something that never raises one; what it prevents is the
-//! repeat freeze on every later press. One difference is worth writing down — a
-//! press against a LIVE core with nothing to go back to issues no RPC at all,
-//! because the nav mutex answers `None` before the RPC is reached. The button
-//! sensitivity ([`crate::nav_ui::nav_buttons`]) is therefore an affordance and the
-//! liveness arm is the guard.
+//! - The NAVIGATION press: [`AppShell::navigate`] funnels through
+//!   `WolfCore::history_back` / `history_forward`, gated by
+//!   [`crate::nav_ui::nav_press`]. A press against a LIVE core with nothing to go
+//!   back to issues no RPC at all, because the nav mutex answers `None` before the
+//!   RPC is reached, so the button sensitivity ([`crate::nav_ui::nav_buttons`]) is
+//!   an affordance and the liveness arm is the guard.
+//! - The COPY yank: [`AppShell::copy_selection`] funnels through
+//!   `WolfCore::copy_visual_selection`, gated by
+//!   [`crate::clipboard_ui::copy_decision`]; in a terminal pane Copy reads the
+//!   session's selection, which issues no RPC and is not gated on liveness.
+//! - The MARKDOWN PREVIEW's: [`AppShell::open_preview`] and
+//!   [`AppShell::edit_source`] funnel through `WolfCore::open_preview` /
+//!   `WolfCore::edit_source`, gated through [`crate::preview_ui`]
+//!   ([`preview_ui::preview_press`], [`preview_ui::edit_press`]), and
+//!   [`AppShell::preview_in_browser`] renders the document for the loopback server
+//!   through `WolfCore::open_in_browser`, gated by [`preview_ui::browser_press`].
+//!   Neither press has an [`crate::actions`] accelerator row, so their only routes
+//!   are the command palette and the `:WolfPreview` / `:WolfEdit` Ex commands.
 //!
-//! The fourth is the COPY yank. [`AppShell::copy_selection`] funnels through
-//! `WolfCore::copy_visual_selection` into `block_on_rpc`, so a Ctrl+Shift+C against
-//! a wedged Neovim costs a full RPC timeout budget of frozen main loop.
-//! [`crate::clipboard_ui::copy_decision`] guards it with the buffer picker's
-//! argument and its limits; in a terminal pane Copy reads the session's selection,
-//! which issues no RPC and is not gated on liveness. PASTE adds none: `gdk::Clipboard::read_text_async`
-//! resolves on a later main-loop turn and `WolfCore::paste` is fire-and-forget on
-//! the ordered input channel, so nothing on that path can time out and nothing on
-//! it can mark the core `NotResponding`. [`crate::clipboard_ui::paste_decision`]
-//! gates it anyway, for a reason that is not about blocking — see that module's
-//! docs.
+//! PASTE adds none: `gdk::Clipboard::read_text_async` resolves on a later main-loop
+//! turn and `WolfCore::paste` is fire-and-forget on the ordered input channel, so
+//! nothing on that path can time out. [`crate::clipboard_ui::paste_decision`] gates
+//! it anyway, for a reason that is not about blocking — see that module's docs.
 //!
-//! The fifth is NEW TAB. [`AppShell::new_tab`] funnels through
-//! `WolfCore::create_tabpage` into `block_on_rpc`, so a Ctrl+Shift+T against a
-//! wedged Neovim costs a full RPC timeout budget of frozen main loop and then hands
-//! back the `0` handle an error produces. [`crate::tabs_ui::new_tab_press`] guards
-//! it with the buffer picker's argument and its limits. Switching and closing a tab
-//! add none: `WolfCore::set_current_tabpage` and `close_tabpage` are
-//! fire-and-forget on the ordered input channel.
-//!
-//! The last five are the MARKDOWN PREVIEW's. [`AppShell::open_preview`] and
-//! [`AppShell::edit_source`] funnel through `WolfCore::open_preview` /
-//! `WolfCore::edit_source`, and `pane_view::run_preview_render_pass` issues
-//! `WolfCore::render_preview` for a changed source — the only one of the ten that can
-//! repeat while the user simply types, and so the only one that is COALESCED
-//! ([`mod@crate::preview_coalescer`]): a burst of edits costs one render on its
-//! leading edge, one per [`crate::preview_coalescer::PREVIEW_MAX_STALENESS`] while it
-//! continues, and one trailing render after it ends. All three are gated through
-//! [`crate::preview_ui`] ([`preview_ui::preview_press`], [`preview_ui::edit_press`],
-//! `preview_ui::may_render`) with the buffer picker's argument and its limits.
-//! Neither press has an [`crate::actions`] accelerator row, so their only routes are
-//! the command palette and the `:WolfPreview` / `:WolfEdit` Ex commands.
-//!
-//! The remaining two need a preview that already exists, so neither is reachable
-//! at launch. `pane_view::on_preview_link` repoints a bound preview at a linked
-//! file through `WolfCore::preview_file`, which only a click inside a RENDERED
-//! preview reaches, gated by [`preview_ui::preview_file_press`]; and
-//! [`AppShell::preview_in_browser`] renders the document for the loopback server
-//! through `WolfCore::open_in_browser`, gated by [`preview_ui::browser_press`].
+//! NEW TAB adds none either: it starts a new Neovim process for the new tab and
+//! asks the selected one nothing but `WolfCore::live_cwd`, a lock read, so it has
+//! no liveness gate. Starting a tab's core stays outside the inventory, as starting
+//! a window's does.
 //!
 //! Neither clipboard action is disabled in the empty state, for the buffer
 //! picker's recorded reason: the captive Neovim runs in a project-less window too.
@@ -186,7 +167,7 @@
 //!
 //! SAVE and SAVE AS add none either. Both send on the ordered input channel
 //! (`InputEvent::Save` / `InputEvent::SaveAs`) and the native dialog resolves on a
-//! later main-loop turn, so nothing on either path can time out and the ten stand.
+//! later main-loop turn, so nothing on either path can time out.
 //! [`crate::save_ui::save_press`] and [`crate::save_ui::save_as_press`] gate them
 //! anyway, for [`crate::clipboard_ui::paste_decision`]'s reason and NOT the blocking
 //! one: a save queued behind an opaque crash overlay would be applied by a RESTARTED
@@ -199,10 +180,9 @@
 //! suggests otherwise: `start_search` resolves its root from the tracked-cwd cell
 //! and `spawn_blocking`s, `open_at` is fire-and-forget on the ordered input channel,
 //! and `liveness` is an atomic read. A result activated over a preview pane reaches
-//! the already-counted `WolfCore::preview_file`, behind
-//! [`crate::search_panel::activation_route`]'s `Alive` arm.
-//! `WolfCore::ignorecase()` IS a `block_on_rpc` and is deliberately never called
-//! from this crate.
+//! `WolfCore::preview_file`, behind [`crate::search_panel::activation_route`]'s
+//! `Alive` arm. `WolfCore::ignorecase()` IS a `block_on_rpc` and is deliberately
+//! never called from this crate.
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -238,8 +218,8 @@ use crate::search_panel::{self, SearchPanelHandle, ShowDecision};
 use crate::sidebar::{SidebarHandle, SidebarPage};
 use crate::sidebar_toggles::{self, ToggleClick};
 use crate::state_seam;
-use crate::tab_view::{TabParts, TabsHandle};
-use crate::tabs_ui::{self, NewTabPress};
+use crate::tab_view::{CoreCell, TabHandle, TabParts, TabsHandle};
+use crate::tabs_ui;
 use crate::title;
 use crate::titlebar_background::{titlebar_background, TitlebarStyle};
 use crate::tree_view::TreeHandle;
@@ -355,8 +335,6 @@ struct SaveShape {
 /// The widgets and handles [`build`] needs, as one struct rather than eight
 /// positional parameters (`clippy::too_many_arguments` bites at seven).
 pub struct ShellParts<'a> {
-    /// The live core, shared with the rest of the app.
-    pub core: &'a Rc<RefCell<Option<WolfCore>>>,
     /// The application window the `win.*` actions are installed on.
     pub window: &'a adw::ApplicationWindow,
     /// The file picker, opened by `win.go-to-file`.
@@ -383,16 +361,17 @@ pub struct ShellParts<'a> {
     /// ([`crate::state_seam::RestorePlan::sidebar_visible`]). The empty state
     /// overrides it at apply time, never at restore time.
     pub sidebar_shown: bool,
-    /// The working directory the captive nvim was launched in — the seed for
+    /// The working directory the window's tabs were launched in — the seed for
     /// [`ShellInner::rooted_cwd`]. Taken by value; `window::build` already clones
-    /// `RestorePlan::core_cwd` for the core config and for persistence.
+    /// `RestorePlan::core_cwd` for each tab.
     pub launch_cwd: PathBuf,
     /// The crash/stall overlay + banner, driven by the liveness read.
     pub crash_overlay: &'a CrashOverlay,
     /// This window's TABS. Every fan-out this module performs per tab — the empty
-    /// state, the sidebar preference, the focus return, the restart collapse — goes
-    /// through here, and so does the New Tab press. No cycle:
-    /// [`crate::tab_view`] does not reference the shell.
+    /// state, the sidebar preference, the focus return — goes through here, every
+    /// window-level action resolves the selected tab's core here, and so does the New
+    /// Tab press. No cycle: [`crate::tab_view`] holds the shell's callbacks only
+    /// through `Weak`s.
     pub tabs: &'a TabsHandle,
     /// The header bar's and tab bar's provider, fed on every render wake by
     /// [`AppShell::refresh_titlebar`].
@@ -403,13 +382,14 @@ pub struct ShellParts<'a> {
     /// This window's identity, so the coordinator knows which window is waking or
     /// closing.
     pub window_id: WindowId,
+    /// Whether the test-only readiness probe is pending, read once by
+    /// `window::build`: only then does the end of each wake check readiness.
+    pub ready_armed: bool,
 }
 
 /// The shell's shared state. All access happens on the single GTK main thread, so
 /// `RefCell` (not a `Mutex`) is sufficient.
 struct ShellInner {
-    /// The live core, shared with the rest of the app.
-    core: Rc<RefCell<Option<WolfCore>>>,
     /// The application window (`win.*` action scope, dialog parent, close target).
     window: adw::ApplicationWindow,
     /// The file picker opened by `win.go-to-file`.
@@ -470,14 +450,14 @@ struct ShellInner {
     tabs: TabsHandle,
     /// The header bar's and tab bar's provider; see [`ShellParts::titlebar`].
     titlebar: TitlebarStyle,
-    /// The cwd the captive nvim was LAUNCHED in, retained beside
+    /// The cwd the window's tabs were LAUNCHED in, retained beside
     /// [`ShellInner::rooted_cwd`] rather than consumed into it.
     ///
     /// Both are needed and they are not the same value: `rooted_cwd` is canonical
     /// and follows every re-root, while this one never moves and is the fallback
-    /// [`crate::tabs_ui::new_tab_cwd`] uses when Neovim has not reported a live cwd
-    /// yet — the same seed [`crate::state_seam::snapshot_cwd`] persists, so a new
-    /// tab cannot be rooted somewhere the window would not have saved.
+    /// [`crate::tabs_ui::new_tab_cwd`] uses when the selected Neovim has not reported
+    /// a live cwd yet — the same seed [`crate::state_seam::snapshot_cwd`] persists, so
+    /// a new tab cannot be rooted somewhere the window would not have saved.
     launch_cwd: PathBuf,
     /// The process-scoped coordinator, upgraded per use.
     coordinator: Weak<CoordinatorInner>,
@@ -491,19 +471,8 @@ struct ShellInner {
     /// The last title actually pushed to the window, so
     /// [`AppShell::refresh_title`] calls `set_title` only on a real change.
     last_title: RefCell<String>,
-    /// FRONT-END re-entrancy guard for [`AppShell::restart_nvim`].
-    ///
-    /// Needed IN ADDITION to the core's own CAS: the core's guard returns
-    /// `Ok(false)`, which this front-end would otherwise misread as "no respawn
-    /// happened" and act on.
-    restarting: Cell<bool>,
-    /// Whether an idle callback that will call [`AppShell::restart_nvim`] is
-    /// already pending, so a burst of `Dead` wakes schedules exactly one.
-    restart_scheduled: Cell<bool>,
-    /// AUTOMATIC restart attempts made since the core was last seen `Alive`,
-    /// capped at [`MAX_AUTO_RESTART_ATTEMPTS`]. Reset to 0 on an `Alive` reading,
-    /// on a successful respawn, and on an explicit button press.
-    restart_attempts: Cell<u32>,
+    /// See [`ShellParts::ready_armed`].
+    ready_armed: bool,
 }
 
 /// A cloneable handle to the application shell: the action namespace, the primary
@@ -590,7 +559,6 @@ pub fn build_empty_state() -> gtk::Widget {
 #[must_use]
 pub fn build(parts: ShellParts<'_>) -> AppShell {
     let inner = Rc::new(ShellInner {
-        core: parts.core.clone(),
         window: parts.window.clone(),
         picker: parts.picker.clone(),
         palette: parts.palette.clone(),
@@ -624,9 +592,7 @@ pub fn build(parts: ShellParts<'_>) -> AppShell {
             .map(|home| home.to_string_lossy().into_owned())
             .unwrap_or_default(),
         last_title: RefCell::new(String::new()),
-        restarting: Cell::new(false),
-        restart_scheduled: Cell::new(false),
-        restart_attempts: Cell::new(0),
+        ready_armed: parts.ready_armed,
     });
     let shell = AppShell { inner };
 
@@ -635,8 +601,10 @@ pub fn build(parts: ShellParts<'_>) -> AppShell {
     let weak = Rc::downgrade(&shell.inner);
     shell.inner.crash_overlay.connect_restart(move || {
         if let Some(shell) = upgrade(&weak) {
-            shell.inner.restart_attempts.set(0);
-            shell.restart_nvim();
+            if let Some(tab) = shell.inner.tabs.selected() {
+                tab.restart().attempts.set(0);
+                shell.restart_nvim(&tab);
+            }
         }
     });
 
@@ -646,6 +614,20 @@ pub fn build(parts: ShellParts<'_>) -> AppShell {
     shell.inner.tabs.connect_selected(move || {
         if let Some(shell) = upgrade(&weak_tabs) {
             shell.on_tab_selected();
+        }
+    });
+
+    let weak_wake = Rc::downgrade(&shell.inner);
+    shell.inner.tabs.connect_wake(move |tab| {
+        if let Some(shell) = upgrade(&weak_wake) {
+            shell.on_tab_wake(tab);
+        }
+    });
+
+    let weak_closing = Rc::downgrade(&shell.inner);
+    shell.inner.tabs.connect_closing(move |tab| {
+        if let Some(shell) = upgrade(&weak_closing) {
+            shell.on_tab_closing(tab);
         }
     });
 
@@ -939,9 +921,6 @@ impl AppShell {
         for tab in self.inner.tabs.entries() {
             tab.set_sidebar_shown(shown);
         }
-        // ...and the queued tabs `entries` does not reach: the value is both the seed each contributes
-        // and the one its persistence opens with.
-        self.inner.tabs.set_pending_sidebar_shown(shown);
     }
 
     /// Yanks the focused Neovim's visual-mode selection and writes it to the
@@ -969,7 +948,8 @@ impl AppShell {
             }
             CopyPress::Terminal(session) => {
                 let selection = {
-                    let core_ref = self.inner.core.borrow();
+                    let cell = self.selected_core();
+                    let core_ref = cell.borrow();
                     core_ref
                         .as_ref()
                         .and_then(|core| core.terminal_selection_text(session))
@@ -980,7 +960,8 @@ impl AppShell {
             }
             CopyPress::Copy => {
                 let selection = {
-                    let core_ref = self.inner.core.borrow();
+                    let cell = self.selected_core();
+                    let core_ref = cell.borrow();
                     core_ref.as_ref().and_then(WolfCore::copy_visual_selection)
                 };
                 if let Some(text) = clipboard_ui::clipboard_write(selection.as_deref()) {
@@ -992,8 +973,9 @@ impl AppShell {
 
     /// Reads the system clipboard and inserts it through `nvim_paste`, or into the
     /// active terminal pane's session through `WolfCore::terminal_paste`, or prints
-    /// why it did not. The target is captured at the press, so a focus change while
-    /// the read is in flight cannot redirect the text.
+    /// why it did not. The target — the selected tab's core and its session — is
+    /// captured at the press, so a focus change or a tab switch while the read is in
+    /// flight cannot redirect the text.
     ///
     /// **Nothing on this path blocks**, so it adds no entry to the module docs'
     /// blocking inventory: `gdk::Clipboard::read_text_async` hands GLib a
@@ -1002,9 +984,9 @@ impl AppShell {
     /// different reason, which that module's docs state and which must not be
     /// collapsed into the copy gate's.
     ///
-    /// The callback holds a `Weak<ShellInner>` and takes the core borrow in a
-    /// statement of its own, so a read landing after `window::wire_close` has taken
-    /// the core out performs nothing rather than colliding with its `borrow_mut`.
+    /// The callback holds that core's cell as a `Weak` and borrows it in a statement
+    /// of its own, so a read landing after the tab's core has been taken out
+    /// performs nothing rather than colliding with its `borrow_mut`.
     /// An `Err` is printed, never swallowed, and then flattened to `None` for the
     /// pure rule.
     fn paste_clipboard(&self) {
@@ -1016,12 +998,9 @@ impl AppShell {
             }
             PastePress::Read => {
                 let terminal = self.inner.tabs.active_terminal();
-                let weak = Rc::downgrade(&self.inner);
+                let core = Rc::downgrade(&self.selected_core());
                 self.clipboard()
                     .read_text_async(gio::Cancellable::NONE, move |result| {
-                        let Some(shell) = upgrade(&weak) else {
-                            return;
-                        };
                         let read = match result {
                             Ok(text) => text,
                             Err(err) => {
@@ -1032,7 +1011,10 @@ impl AppShell {
                         let Some(text) = clipboard_ui::paste_payload(read.as_deref()) else {
                             return;
                         };
-                        let core_ref = shell.inner.core.borrow();
+                        let Some(cell) = core.upgrade() else {
+                            return;
+                        };
+                        let core_ref = cell.borrow();
                         if let Some(core) = core_ref.as_ref() {
                             match terminal {
                                 Some(session) => core.terminal_paste(session, text),
@@ -1076,7 +1058,8 @@ impl AppShell {
                 eprintln!("wolf-gnome: navigation not performed: {reason}");
             }
             NavPress::Move(win) => {
-                let core_ref = self.inner.core.borrow();
+                let cell = self.selected_core();
+                let core_ref = cell.borrow();
                 if let Some(core) = core_ref.as_ref() {
                     if forward {
                         core.history_forward(win);
@@ -1109,7 +1092,8 @@ impl AppShell {
         // is what makes taking the nav mutex below safe.
         let history = match nav_ui::nav_query_win(active_win) {
             Some(win) => {
-                let core_ref = self.inner.core.borrow();
+                let cell = self.selected_core();
+                let core_ref = cell.borrow();
                 core_ref.as_ref().map(|core| NavAvailability {
                     can_back: core.history_can_back(win),
                     can_forward: core.history_can_forward(win),
@@ -1128,7 +1112,8 @@ impl AppShell {
     /// The `SnapshotReadGuard` is bound to a local so it is dropped at the end of
     /// THIS function, before any caller takes another core lock.
     fn read_active_win(&self) -> Option<i64> {
-        let core_ref = self.inner.core.borrow();
+        let cell = self.selected_core();
+        let core_ref = cell.borrow();
         let core = core_ref.as_ref()?;
         let snapshot = core.read_snapshot();
         snapshot.active_win
@@ -1151,7 +1136,8 @@ impl AppShell {
     /// [`Snapshot::is_markdown_active`]: wolf_core::Snapshot::is_markdown_active
     /// [`Snapshot::is_preview_active`]: wolf_core::Snapshot::is_preview_active
     fn preview_shape(&self) -> Option<PreviewShape> {
-        let core_ref = self.inner.core.borrow();
+        let cell = self.selected_core();
+        let core_ref = cell.borrow();
         let core = core_ref.as_ref()?;
         let snapshot = core.read_snapshot();
         Some(PreviewShape {
@@ -1182,7 +1168,8 @@ impl AppShell {
                 eprintln!("wolf-gnome: preview not opened: {reason}");
             }
             PreviewPress::Open => {
-                let core_ref = self.inner.core.borrow();
+                let cell = self.selected_core();
+                let core_ref = cell.borrow();
                 if let Some(core) = core_ref.as_ref() {
                     // The bufnr is discarded: the next wake's `wolf_preview` notification carries the new bind.
                     let _ = core.open_preview();
@@ -1209,7 +1196,8 @@ impl AppShell {
                 eprintln!("wolf-gnome: source not edited: {reason}");
             }
             EditPress::Edit => {
-                let core_ref = self.inner.core.borrow();
+                let cell = self.selected_core();
+                let core_ref = cell.borrow();
                 if let Some(core) = core_ref.as_ref() {
                     // Discarded for the same reason `open_preview`'s is: the bind the
                     // source lands in arrives with the next wake's notifications.
@@ -1251,7 +1239,8 @@ impl AppShell {
                     );
                     return;
                 };
-                let core_ref = self.inner.core.borrow();
+                let cell = self.selected_core();
+                let core_ref = cell.borrow();
                 if let Some(core) = core_ref.as_ref() {
                     // Discarded for `open_preview`'s reason: the pane's new contents, or
                     // the new pane, arrive with the next wake's notifications.
@@ -1285,7 +1274,8 @@ impl AppShell {
                     );
                     return;
                 };
-                let core_ref = self.inner.core.borrow();
+                let cell = self.selected_core();
+                let core_ref = cell.borrow();
                 if let Some(core) = core_ref.as_ref() {
                     let _ = core.edit_in_other(target);
                 }
@@ -1335,7 +1325,8 @@ impl AppShell {
                 // The core borrow is taken in a statement of its own and dropped
                 // before the launcher runs, `copy_selection`'s discipline.
                 let url = {
-                    let core_ref = self.inner.core.borrow();
+                    let cell = self.selected_core();
+                    let core_ref = cell.borrow();
                     core_ref.as_ref().map(WolfCore::open_in_browser)
                 };
                 let url = url.unwrap_or_default();
@@ -1368,7 +1359,8 @@ impl AppShell {
     /// reason: that method takes its own guard, and a re-entrant read can deadlock
     /// behind a queued writer.
     fn save_shape(&self) -> Option<SaveShape> {
-        let core_ref = self.inner.core.borrow();
+        let cell = self.selected_core();
+        let core_ref = cell.borrow();
         let core = core_ref.as_ref()?;
         let snapshot = core.read_snapshot();
         Some(SaveShape {
@@ -1386,7 +1378,7 @@ impl AppShell {
     ///
     /// **Neither branch blocks.** `InputEvent::Save` is fire-and-forget on the ordered
     /// input channel and the dialog resolves on a later main-loop turn, so this adds
-    /// none of the ten; see the module docs for why it is gated anyway.
+    /// no blocking call; see the module docs for why it is gated anyway.
     ///
     /// [`AppShell::open_preview`]'s shape: the two reads happen first, each in its own
     /// short borrow, before anything else touches the core.
@@ -1485,8 +1477,52 @@ impl AppShell {
         );
     }
 
-    /// Reads the captive nvim's [`Liveness`] ONCE per wake, applies the pure
-    /// [`liveness_ui`] mapping, and reports whether the pane view and the file
+    /// The body of one tab's drain: runs once per wake that tab's core fires,
+    /// registered through [`crate::tab_view::TabsHandle::connect_wake`].
+    ///
+    /// The order is fixed: liveness first, gating the tab's paint and the tree;
+    /// the UI-focus sync; then [`AppShell::on_render_wake`], last and ungated. See
+    /// notes/wolf-gnome-decisions.md#threading-and-the-wake for why each step sits
+    /// where it does.
+    pub fn on_tab_wake(&self, tab: &TabHandle) {
+        // `count(wake) == wakes` by construction: this counter and the region below share one pass.
+        frame_metrics::note_wake();
+        {
+            let _wake_guard = frame_metrics::scope(Bucket::Wake);
+            let paint = self.on_liveness_wake(tab);
+            if paint {
+                {
+                    let _guard = frame_metrics::scope(Bucket::WakeTabs);
+                    tab.refresh();
+                    self.inner
+                        .tabs
+                        .sync_terminal_focus(self.inner.window.is_active());
+                }
+                // The tree shows the selected tab's files; a background tab's wake has nothing for it.
+                if tab.is_selected() {
+                    let _guard = frame_metrics::scope(Bucket::WakeTree);
+                    self.inner.tree.on_render_wake();
+                }
+            }
+            self.inner.tabs.sync_ui_focus(self.inner.window.is_active());
+            {
+                let _guard = frame_metrics::scope(Bucket::WakeShell);
+                self.on_render_wake(tab);
+            }
+        }
+        // After the `wake` region closes, so the emit's cost is never measured. No timer: see
+        // notes/wolf-gnome/frame-time-instrumentation.md
+        frame_metrics::maybe_emit();
+        // The end of a wake is when a pane binds and a grid is resized, so it is a readiness trigger.
+        if self.inner.ready_armed {
+            if let Some(coordinator) = coordinator::upgrade(&self.inner.coordinator) {
+                coordinator.check_ready();
+            }
+        }
+    }
+
+    /// Reads `tab`'s captive nvim's [`Liveness`] ONCE per wake, applies the pure
+    /// [`liveness_ui`] mapping, and reports whether the tab's pane view and the file
     /// tree should run.
     ///
     /// Called FIRST on every wake, before `panes.on_render_wake()`. The placement
@@ -1499,31 +1535,32 @@ impl AppShell {
     /// `core.borrow().is_none()` guard; reading liveness behind it would turn a
     /// level-triggered signal back into an edge-triggered one.
     ///
-    /// Returns `false` (do not paint) when there is no core at all.
-    pub fn on_liveness_wake(&self) -> bool {
-        // Short borrow in its own statement; `Liveness` is `Copy`, and
-        // `WolfCore::liveness` is a lock-free atomic read, never an RPC.
-        let liveness = {
-            let core_ref = self.inner.core.borrow();
-            let Some(core) = core_ref.as_ref() else {
-                return false;
-            };
-            core.liveness()
+    /// The overlay is per window and shows the SELECTED tab, so it is applied only
+    /// for that tab; the automatic restart is scheduled for any tab, so a
+    /// background tab's crash restarts it without the user seeing an overlay.
+    ///
+    /// Returns `false` (do not paint) when the tab has no core at all.
+    pub fn on_liveness_wake(&self, tab: &TabHandle) -> bool {
+        let Some(liveness) = tab.liveness() else {
+            return false;
         };
+        let restart = tab.restart();
 
-        let may_auto_restart = self.inner.restart_attempts.get() < MAX_AUTO_RESTART_ATTEMPTS;
+        let may_auto_restart = restart.attempts.get() < MAX_AUTO_RESTART_ATTEMPTS;
         let ui = liveness_ui(liveness, may_auto_restart);
 
         // A healthy core clears the budget, so a LATER, unrelated crash gets its
         // own automatic attempt rather than inheriting an exhausted counter.
         if liveness == Liveness::Alive {
-            self.inner.restart_attempts.set(0);
+            restart.attempts.set(0);
         }
 
-        self.apply_overlay(ui.overlay);
+        if tab.is_selected() {
+            self.apply_overlay(ui.overlay);
+        }
 
-        if ui.auto_restart && !self.inner.restarting.get() && !self.inner.restart_scheduled.get() {
-            self.schedule_restart();
+        if ui.auto_restart && !restart.restarting.get() && !restart.scheduled.get() {
+            self.schedule_restart(tab);
         }
 
         ui.paint
@@ -1571,8 +1608,8 @@ impl AppShell {
         }
     }
 
-    /// Schedules ONE automatic restart attempt [`RESTART_DEFER`] after the wake
-    /// handler returns.
+    /// Schedules ONE automatic restart attempt of `tab` [`RESTART_DEFER`] after the
+    /// wake handler returns.
     ///
     /// **Deferred rather than called inline, deliberately.**
     /// [`WolfCore::restart_nvim`] is synchronous — a `runtime.block_on` over a
@@ -1581,47 +1618,48 @@ impl AppShell {
     /// overlay shown-but-never-presented. Deferring also guarantees the
     /// restart runs with no `RefCell` borrow live anywhere and lets
     /// [`AppShell::on_render_wake`]'s command drain have its turn first.
-    fn schedule_restart(&self) {
-        self.inner.restart_scheduled.set(true);
-        self.inner
-            .restart_attempts
-            .set(self.inner.restart_attempts.get().saturating_add(1));
+    fn schedule_restart(&self, tab: &TabHandle) {
+        let restart = tab.restart();
+        restart.scheduled.set(true);
+        restart
+            .attempts
+            .set(restart.attempts.get().saturating_add(1));
 
         let weak = Rc::downgrade(&self.inner);
+        let weak_tab = tab.downgrade();
         glib::timeout_add_local_once(RESTART_DEFER, move || {
-            let Some(shell) = upgrade(&weak) else {
+            let (Some(shell), Some(tab)) = (upgrade(&weak), weak_tab.upgrade()) else {
                 return;
             };
-            shell.inner.restart_scheduled.set(false);
-            shell.restart_nvim();
+            tab.restart().scheduled.set(false);
+            shell.restart_nvim(&tab);
         });
     }
 
-    /// Restarts the captive Neovim in place and restores the Tier-1 file set.
+    /// Restarts `tab`'s captive Neovim in place and restores its Tier-1 file set
+    /// and its terminals, into that tab alone.
     ///
     /// The ONE path shared by the automatic (`Dead`) restart and the overlay
     /// button. Order matters: the open-file mirror is captured BEFORE the call
     /// (a respawn wipes it), the front-end re-entrancy flag is cleared BEFORE
     /// anything is acted on (so a re-entrant call from a widget callback cannot
-    /// strand it set), and the banner is flashed on the SUCCESS path only.
-    fn restart_nvim(&self) {
-        if self.inner.restarting.get() {
+    /// strand it set), and the banner is flashed on the SUCCESS path only, and only
+    /// when the restarted tab is the one on screen.
+    fn restart_nvim(&self, tab: &TabHandle) {
+        let restart = tab.restart();
+        if restart.restarting.get() {
             return;
         }
-        self.inner.restarting.set(true);
+        restart.restarting.set(true);
 
-        let captured = self.capture_open_files();
-        let drawer_open = self
-            .inner
-            .tabs
-            .selected()
-            .is_some_and(|tab| tab.panes().drawer_is_open());
-        let respawned = self.perform_restart();
-        let fresh = self.read_liveness();
+        let captured = self.capture_open_files(tab);
+        let drawer_open = tab.panes().drawer_is_open();
+        let respawned = self.perform_restart(tab);
+        let fresh = tab.liveness();
 
         // Cleared before acting on the outcome, so every exit path below — early
         // return included — leaves the guard down.
-        self.inner.restarting.set(false);
+        restart.restarting.set(false);
 
         let Some(fresh) = fresh else {
             return;
@@ -1629,24 +1667,28 @@ impl AppShell {
         match restart_outcome(respawned, fresh) {
             // No respawn (self-recovered, a concurrent restart held the CAS, or it failed): re-apply the
             // overlay and nothing else; acting on a `Refresh`'s `auto_restart` would loop forever.
-            RestartOutcome::Refresh(ui) => self.apply_overlay(ui.overlay),
+            RestartOutcome::Refresh(ui) => {
+                if tab.is_selected() {
+                    self.apply_overlay(ui.overlay);
+                }
+            }
             RestartOutcome::Respawned => {
-                self.inner.restart_attempts.set(0);
-                // Collapses to the selected tab: a respawned Neovim owns one tabpage, and tabs bound to dead
-                // handles make `tabs_ui::tab_wake` answer `Hold` forever over a healthy Neovim.
-                self.inner.tabs.reset_after_restart();
-                self.reopen_captured(captured.as_ref());
-                self.restore_terminals(drawer_open);
-                self.apply_overlay(OverlayMode::Hidden);
-                self.inner.crash_overlay.flash_banner();
+                restart.attempts.set(0);
+                tab.panes().reset_after_restart();
+                self.reopen_captured(tab, captured.as_ref());
+                self.restore_terminals(tab, drawer_open);
+                if tab.is_selected() {
+                    self.apply_overlay(OverlayMode::Hidden);
+                    self.inner.crash_overlay.flash_banner();
+                }
                 // Belt and braces, as `app.rs` does: a no-op if the fresh nvim has not reported `win_pos` yet.
-                self.inner.tabs.on_render_wake();
+                tab.refresh();
             }
         }
     }
 
-    /// Captures the Tier-1 open-file mirror for the current tabpage BEFORE a
-    /// restart wipes it. Both reads are RPC-free.
+    /// Captures `tab`'s Tier-1 open-file mirror BEFORE a restart wipes it. Both
+    /// reads are RPC-free.
     ///
     /// **Never `WolfCore::current_tabpage()`**: that is a `block_on_rpc`, and
     /// against a dead nvim it would freeze the GTK main loop for the whole timeout
@@ -1654,26 +1696,26 @@ impl AppShell {
     /// as a plain field, emitted once at setup by `runtime/nvim/init.lua`'s
     /// `wolf_setup_tabs`. A `current_tabpage` of `0` simply yields `None` — that
     /// is "nothing to reopen", not an error.
-    fn capture_open_files(&self) -> Option<TabFiles> {
+    fn capture_open_files(&self, tab: &TabHandle) -> Option<TabFiles> {
         let tabpage = {
-            let core_ref = self.inner.core.borrow();
+            let core_ref = tab.core().borrow();
             let core = core_ref.as_ref()?;
             // Bound to a local so the `SnapshotReadGuard` is dropped at the end of
             // THIS block, before `open_files_for_tabpage` takes the same lock.
             let snapshot = core.read_snapshot();
             snapshot.current_tabpage
         };
-        let core_ref = self.inner.core.borrow();
+        let core_ref = tab.core().borrow();
         core_ref.as_ref()?.open_files_for_tabpage(tabpage)
     }
 
-    /// Hands the selected tab, the one a restart keeps, the steps that put the live terminal
-    /// sessions back: every one but the drawer's as a split, then the drawer when it was
-    /// open. RPC-free; the tab runs them on its first wake with a pane.
+    /// Hands `tab`, the one restarted, the steps that put its live terminal sessions
+    /// back: every one but the drawer's as a split, then the drawer when it was open.
+    /// RPC-free; the tab runs them on its first wake with a pane.
     /// See notes/crates/wolf-gnome/src/pane_view.rs.md#terminal-restore
-    fn restore_terminals(&self, drawer_open: bool) {
+    fn restore_terminals(&self, tab: &TabHandle, drawer_open: bool) {
         let (splits, live) = {
-            let core_ref = self.inner.core.borrow();
+            let core_ref = tab.core().borrow();
             let Some(core) = core_ref.as_ref() else {
                 return;
             };
@@ -1686,21 +1728,19 @@ impl AppShell {
                 .collect();
             (splits, live)
         };
-        if let Some(tab) = self.inner.tabs.selected() {
-            tab.panes()
-                .request_terminal_restore(terminal_restore(&splits, drawer_open, &live));
-        }
+        tab.panes()
+            .request_terminal_restore(terminal_restore(&splits, drawer_open, &live));
     }
 
-    /// Calls [`WolfCore::restart_nvim`] under a short borrow and reports whether an
-    /// ACTUAL respawn happened.
+    /// Calls [`WolfCore::restart_nvim`] on `tab`'s core under a short borrow and
+    /// reports whether an ACTUAL respawn happened.
     ///
     /// An `Err` is logged, never swallowed, and reported as "no respawn" — the
     /// core has already re-marked liveness `Dead`, so the caller's fresh read
     /// keeps the overlay up.
-    fn perform_restart(&self) -> bool {
+    fn perform_restart(&self, tab: &TabHandle) -> bool {
         let result = {
-            let core_ref = self.inner.core.borrow();
+            let core_ref = tab.core().borrow();
             core_ref.as_ref().map(WolfCore::restart_nvim)
         };
         match result {
@@ -1713,24 +1753,30 @@ impl AppShell {
         }
     }
 
-    /// The captive nvim's current [`Liveness`], or `None` when there is no core.
-    fn read_liveness(&self) -> Option<Liveness> {
-        let core_ref = self.inner.core.borrow();
-        Some(core_ref.as_ref()?.liveness())
+    /// The selected tab's core, or an empty cell when no tab is selected, so a
+    /// caller borrows it exactly as it would a core that has been taken out.
+    fn selected_core(&self) -> CoreCell {
+        self.inner.tabs.selected_core().unwrap_or_default()
     }
 
-    /// Reopens a captured Tier-1 file set in [`reopen_order`] — non-active files
-    /// first, the ACTIVE one LAST so it lands focused.
+    /// The selected tab's core's [`Liveness`], or `None` when there is no core.
+    fn read_liveness(&self) -> Option<Liveness> {
+        self.inner.tabs.selected().and_then(|tab| tab.liveness())
+    }
+
+    /// Reopens a captured Tier-1 file set in `tab`'s own Neovim, in
+    /// [`reopen_order`] — non-active files first, the ACTIVE one LAST so it lands
+    /// focused.
     ///
     /// `InputEvent::Open` is the same event the picker and the file tree send, so
     /// the MRU is recorded identically: one path, no drift. Nothing in the loop can
     /// re-enter the `RefCell`, so one short borrow covers the whole reopen.
-    fn reopen_captured(&self, captured: Option<&TabFiles>) {
+    fn reopen_captured(&self, tab: &TabHandle, captured: Option<&TabFiles>) {
         let Some(captured) = captured else {
             return;
         };
         let order = reopen_order(&captured.files, captured.active.as_deref());
-        let core_ref = self.inner.core.borrow();
+        let core_ref = tab.core().borrow();
         let Some(core) = core_ref.as_ref() else {
             return;
         };
@@ -1739,35 +1785,41 @@ impl AppShell {
         }
     }
 
-    /// Reacts to a render wake: settles a pending re-root, then drains and
-    /// dispatches every queued command.
+    /// Reacts to the end of `tab`'s wake: commits the window's state, and for the
+    /// SELECTED tab settles a pending re-root, refreshes the title, the bars and the
+    /// navigation buttons, then drains and dispatches that tab's queued commands.
     ///
-    /// The app calls this LAST on each wake (after the pane view and the tree),
-    /// because a drained `close_window` tears the core down. Unlike the paint, it
-    /// runs in ALL THREE liveness states — see the module docs.
-    pub fn on_render_wake(&self) {
-        // One read of the tracked-cwd cell per wake, shared by re-root and title; `live_cwd` is a
-        // `parking_lot` read, never an RPC, so the blocking-RPC inventory is unchanged.
-        let live = {
-            let core_ref = self.inner.core.borrow();
-            core_ref.as_ref().and_then(WolfCore::live_cwd)
-        };
-        self.settle_reroot(live.as_deref());
-        self.refresh_title(live.as_deref());
-        self.refresh_titlebar();
-        self.refresh_nav_buttons();
+    /// Runs LAST on each wake (after the pane view and the tree), because a drained
+    /// `close_window` tears every core down. Unlike the paint, it runs in ALL THREE
+    /// liveness states — see the module docs.
+    pub fn on_render_wake(&self, tab: &TabHandle) {
+        let selected = tab.is_selected();
+        if selected {
+            // One read of the tracked-cwd cell per wake, shared by re-root and title; `live_cwd` is a
+            // `parking_lot` read, never an RPC.
+            let live = {
+                let core_ref = tab.core().borrow();
+                core_ref.as_ref().and_then(WolfCore::live_cwd)
+            };
+            self.settle_reroot(live.as_deref());
+            self.refresh_title(live.as_deref());
+            self.refresh_titlebar();
+            self.refresh_nav_buttons();
+        }
         // The coordinator re-gathers this window and commits the whole tree: one window's wake must not
         // commit a tree that forgot the others.
         if let Some(coordinator) = coordinator::upgrade(&self.inner.coordinator) {
             let _guard = frame_metrics::scope(Bucket::WakeState);
             coordinator.commit(self.inner.window_id);
         }
-        // LAST: a drained `close_window` tears the core down, so the state
-        // snapshot above must already have happened.
-        self.drain_and_dispatch_commands();
+        // LAST: a drained `close_window` tears every core down, so the state commit
+        // above must already have happened.
+        if selected {
+            self.drain_and_dispatch_commands(tab);
+        }
     }
 
-    /// Sets the window title from `live` — the captive nvim's working directory,
+    /// Sets the window title from `live` — the selected tab's Neovim's working directory,
     /// read once per wake by [`AppShell::on_render_wake`] — through the pure
     /// [`title::window_title`] seam.
     ///
@@ -1796,11 +1848,13 @@ impl AppShell {
     /// [`titlebar_background`] picks from the snapshot's `WolfTitlebar` and `Normal`.
     ///
     /// `Normal` is `resolve(0)`'s background, the one `PaneView::draw_pane` fills the grid
-    /// from, so the bars match the grid. The snapshot guard and the core borrow are dropped
-    /// before the provider is touched. With no core the bars keep their last colour.
+    /// from, so the bars match the grid. Read from the selected tab's core. The snapshot guard
+    /// and the core borrow are dropped before the provider is touched. With no core the bars
+    /// keep their last colour.
     fn refresh_titlebar(&self) {
         let wanted = {
-            let core_ref = self.inner.core.borrow();
+            let cell = self.selected_core();
+            let core_ref = cell.borrow();
             let Some(core) = core_ref.as_ref() else {
                 return;
             };
@@ -1810,13 +1864,13 @@ impl AppShell {
         self.inner.titlebar.apply(wanted);
     }
 
-    /// Drains the core's command queue and dispatches each command.
+    /// Drains `tab`'s core's command queue and dispatches each command.
     ///
     /// The borrow is released in its own statement BEFORE anything is dispatched;
     /// see the module docs.
-    fn drain_and_dispatch_commands(&self) {
+    fn drain_and_dispatch_commands(&self, tab: &TabHandle) {
         let commands: Vec<Command> = {
-            let core_ref = self.inner.core.borrow();
+            let core_ref = tab.core().borrow();
             let Some(core) = core_ref.as_ref() else {
                 return;
             };
@@ -2022,77 +2076,43 @@ impl AppShell {
         self.inner.window.close();
     }
 
-    /// Opens a new TAB in this window, over this window's EXISTING core, rooted at
-    /// this window's folder — or prints why it did not.
+    /// Opens a new TAB in this window, with a Neovim of its own, rooted at the
+    /// selected tab's folder.
     ///
-    /// **`WolfCore::create_tabpage` is a BLOCKING RPC on the GTK main thread**, so
-    /// it is gated by [`tabs_ui::new_tab_press`] exactly as the buffer picker's
-    /// candidate snapshot and a navigation move are; see the module docs. It is the
-    /// TENTH such call this crate can reach and the NINTH a running window can
-    /// issue.
+    /// No liveness gate and no blocking call: it starts a new process and asks the
+    /// selected Neovim nothing but `WolfCore::live_cwd`, a lock read, so a wedged or
+    /// dead selected tab does not stop the user opening another. The directory is
+    /// [`tabs_ui::new_tab_cwd`]'s answer, falling back to the window's launch cwd
+    /// where that answers `None` — the empty state, where the new tab is project-less
+    /// too.
     ///
     /// The exact opposite of [`AppShell::new_window`] in what it inherits, and the
-    /// pair is easy to confuse: a tab shares this window's Neovim, its project, its
-    /// sidebar and its overlays; a window shares nothing at all. The directory is
-    /// [`tabs_ui::new_tab_cwd`]'s answer, which is `None` in the empty state — a
-    /// `:tcd` there would silently declare the user's home directory a project.
-    ///
-    /// [`AppShell::copy_selection`]'s borrow shape: the two reads happen first, each
-    /// in its own short borrow, and the borrow for the RPC is taken and dropped in a
-    /// statement of its own — `open_tab` builds a whole pane view and a persistence
-    /// handle, both of which borrow the core again.
-    ///
-    /// **The tabpage handle is passed INTO `open_tab` rather than adopted.**
-    /// `Snapshot::current_tabpage` still reports the tabpage this one was opened
-    /// FROM until Neovim's `wolf_tabpage` notification lands, so a new page left to
-    /// adopt would bind itself to its parent's handle and two pages would claim one
-    /// tabpage.
+    /// pair is easy to confuse: a tab shares this window's project, its sidebar and
+    /// its overlays; a window shares nothing at all. No tab shares another's
+    /// Neovim.
     fn new_tab(&self) {
-        let liveness = self.read_liveness();
-
-        match tabs_ui::new_tab_press(liveness) {
-            NewTabPress::Refuse(reason) => {
-                eprintln!("wolf-gnome: new tab not opened: {reason}");
-            }
-            NewTabPress::Open => {
-                let empty = self.inner.empty.get();
-                let live = {
-                    let core_ref = self.inner.core.borrow();
-                    core_ref.as_ref().and_then(WolfCore::live_cwd)
-                };
-                let cwd = tabs_ui::new_tab_cwd(empty, &self.inner.launch_cwd, live.as_deref());
-
-                let Some(tabpage) = ({
-                    let core_ref = self.inner.core.borrow();
-                    core_ref
-                        .as_ref()
-                        .map(|core| core.create_tabpage(cwd.as_deref()))
-                }) else {
-                    return;
-                };
-
-                // The persisted seed, a real directory even where `:tcd` was skipped: `snapshot_cwd` answers
-                // `""` for an empty-state window regardless.
-                let seed = cwd.unwrap_or_else(|| self.inner.launch_cwd.clone());
-                if !self.inner.tabs.open_tab(TabParts {
-                    tabpage,
-                    cwd: seed,
-                    empty,
-                    sidebar_shown: self.inner.sidebar_shown.get(),
-                    layout: None,
-                }) {
-                    eprintln!(
-                        "wolf-gnome: New Tab not completed: the tabpage was created inside Neovim \
-                         but no page could be opened for it, so that tabpage is now unreachable \
-                         from the tab bar"
-                    );
-                }
-            }
-        }
+        let empty = self.inner.empty.get();
+        let live = {
+            let cell = self.selected_core();
+            let core_ref = cell.borrow();
+            core_ref.as_ref().and_then(WolfCore::live_cwd)
+        };
+        let cwd = tabs_ui::new_tab_cwd(empty, &self.inner.launch_cwd, live.as_deref())
+            .unwrap_or_else(|| self.inner.launch_cwd.clone());
+        // A refusal has already printed why; the window keeps its tabs as they were.
+        let _ = self.inner.tabs.open_tab(TabParts {
+            cwd,
+            empty,
+            sidebar_shown: self.inner.sidebar_shown.get(),
+            layout: None,
+        });
     }
 
-    /// Closes all three transient overlays after a tab switch. The sidebar's search
-    /// panel is per window and stays as it is.
+    /// Reacts to a tab switch: closes all three transient overlays, re-applies the
+    /// crash overlay for the newly selected tab, moves the UI focus to its Neovim,
+    /// and wakes it, so the title, the bars, the navigation buttons, the drawer
+    /// divider, the sidebar's root and its queued commands follow on its drain. The
+    /// sidebar's search panel is per window and stays as it is.
     ///
     /// Wired through [`crate::tab_view::TabsHandle::connect_selected`], which fires
     /// only on a REAL selection change. Every `close()` is idempotent, and each
@@ -2106,11 +2126,25 @@ impl AppShell {
         self.inner.picker.close();
         self.inner.palette.close();
         self.inner.buffers.close();
+        let Some(selected) = self.inner.tabs.selected() else {
+            return;
+        };
+        self.on_liveness_wake(&selected);
+        self.inner.tabs.sync_ui_focus(self.inner.window.is_active());
+        selected.wake();
+    }
+
+    /// Drops the sidebar sessions running on a closing tab's core, before that core
+    /// is shut down. Wired through
+    /// [`crate::tab_view::TabsHandle::connect_closing`].
+    fn on_tab_closing(&self, tab: &TabHandle) {
+        self.inner.tree.release_core(tab.core());
+        self.inner.search.release_core(tab.core());
     }
 
     /// Opens a fresh, empty window through
     /// [`crate::coordinator::Coordinator::open_new_window`], which is the process's
-    /// job rather than this window's: the new window gets its own core, its own
+    /// job rather than this window's: the new window gets its own tab and core, its own
     /// [`AppShell`] and its own subtree of the persisted tree.
     ///
     /// Nothing of THIS window is passed along — not its working directory, not its
@@ -2169,7 +2203,7 @@ impl AppShell {
         coordinator.quit(&app);
     }
 
-    /// Opens a native folder chooser; on success `:tcd`s the core there and records
+    /// Opens a native folder chooser; on success `:tcd`s the selected tab's core there and records
     /// the choice as a pending re-root.
     ///
     /// The sidebar is NOT re-rooted synchronously: `start_file_search` resolves its
@@ -2200,7 +2234,7 @@ impl AppShell {
         );
     }
 
-    /// Opens a native file chooser; on success asks the core to `:e` the file.
+    /// Opens a native file chooser; on success asks the selected tab's core to `:e` the file.
     fn open_file_dialog(&self) {
         let dialog = gtk::FileDialog::builder()
             .title(OPEN_FILE_DIALOG_TITLE)
@@ -2224,7 +2258,7 @@ impl AppShell {
         );
     }
 
-    /// Changes the core's working directory to `path` and records the pending
+    /// Changes the selected tab's core's working directory to `path` and records the pending
     /// re-root (canonicalized, because `reroot_ready` compares it against the
     /// core's already-canonical `live_cwd`).
     ///
@@ -2280,9 +2314,12 @@ impl AppShell {
         }
     }
 
-    /// Sends one input event to the core, holding the borrow only for the call.
+    /// Sends one input event to the selected tab's core, holding the borrow only for
+    /// the call.
     fn send_input(&self, event: InputEvent) {
-        if let Some(core) = self.inner.core.borrow().as_ref() {
+        let cell = self.selected_core();
+        let core_ref = cell.borrow();
+        if let Some(core) = core_ref.as_ref() {
             core.send_input(event);
         }
     }
@@ -2301,10 +2338,6 @@ impl AppShell {
     fn toggle_terminal(&self) {
         if let Some(tab) = self.inner.tabs.selected() {
             tab.panes().toggle_terminal();
-            return;
-        }
-        if let Some(core) = self.inner.core.borrow().as_ref() {
-            core.toggle_terminal();
         }
     }
 }

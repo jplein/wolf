@@ -228,7 +228,7 @@ The front-end pushes `InputEvent`s onto an ordered FIFO channel that a single co
 - Input proper — `Key`, `Mouse`, `Scroll`. A mouse or scroll event carries its target grid with grid-local row and column, because under `ext_multigrid` each pane has its own window grid.
 - Geometry — `Resize { cols, rows }` for the outer UI, `ResizeGrid { grid, cols, rows }` per pane, and `FocusWin { win }` for click-to-focus and resolved focus moves.
 - Documents — `Open { path }`, `OpenAt { path, line, col }`, `Save`, `SaveAs { path, force }`, `NewBuffer`, `Paste { text }`, `SwitchBuffer { win, bufnr }`, `ClosePane`.
-- Views — `Chdir { path }`, `SetTabpage { handle }`, `CloseTabpage { handle }`. `Chdir` applies `:tcd`, so in a Neovim that holds several tabpages it moves only the current one. On macOS every tab runs its own Neovim with one tabpage, so `:tcd` moves that tab alone.
+- Views — `Chdir { path }`, `SetTabpage { handle }`, `CloseTabpage { handle }`. `Chdir` applies `:tcd`, so in a Neovim that holds several tabpages it moves only the current one. On both front-ends every tab runs its own Neovim with one tabpage, so `:tcd` moves that tab alone.
 - Toggles — `SetBackground { dark }`, `ToggleTerminal { id }`, `ToggleFullWidth`, `SetUiFocus { gained }`.
 - Terminals — `BindTerminal { id, target }`, which shows a running session in a window behind the input queued before it.
 
@@ -246,7 +246,7 @@ Core owns a tokio runtime on its own threads and updates the render-state snapsh
 
 The wake is the one piece each front-end implements. The snapshot and the RPC are entirely in core. Core's locking discipline around that snapshot is in [`wolf-core-decisions.md`](../notes/wolf-core-decisions.md).
 
-On macOS the wake is routed rather than global, because one process-global callback per channel serves every tab's core. Each wake carries its core's token, which the front-end resolves to the owning tab. The mechanism, and why identity crosses the boundary as a plain scalar, is in [`wolf-ffi-decisions.md`](../notes/wolf-ffi-decisions.md); how a tab's core hands a wake to its view is in [`wolf-macos-decisions.md`](../notes/wolf-macos-decisions.md). `wolf-gnome` runs one core per window, so its wake closure belongs to that core alone, carries no token, and needs no routing at all.
+On macOS the wake is routed rather than global, because one process-global callback per channel serves every tab's core. Each wake carries its core's token, which the front-end resolves to the owning tab. The mechanism, and why identity crosses the boundary as a plain scalar, is in [`wolf-ffi-decisions.md`](../notes/wolf-ffi-decisions.md); how a tab's core hands a wake to its view is in [`wolf-macos-decisions.md`](../notes/wolf-macos-decisions.md). `wolf-gnome` gives each tab's core a wake closure of its own, so a wake carries no token and needs no routing at all.
 
 ## Theming
 

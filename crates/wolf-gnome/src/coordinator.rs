@@ -84,7 +84,6 @@ const STATE_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
 const MISSING_WINDOW: WindowReadiness = WindowReadiness {
     liveness: None,
     panes: None,
-    restore_owed: false,
     first_paint: None,
     has_keyboard: false,
     has_focus_widget: false,
@@ -295,9 +294,9 @@ impl Coordinator {
     /// order, or exactly one empty-state window when there is nothing to
     /// restore.
     ///
-    /// A window whose core fails to start is skipped and does not abort the
-    /// others. If none opens at all the application has no window and exits,
-    /// which is the single-window behaviour unchanged.
+    /// A window opens when at least one of its tabs' cores starts; one where none
+    /// does is skipped and does not abort the others. If none opens at all the
+    /// application has no window and exits.
     pub fn restore_session(&self, app: &adw::Application) {
         // Canonicalized so `launch_decision`'s comparisons hold: `Path` equality resolves no symlinks.
         let process_cwd = std::env::current_dir()
@@ -327,7 +326,7 @@ impl Coordinator {
         self.check_ready();
     }
 
-    /// Opens a FRESH, EMPTY window with its own core.
+    /// Opens a FRESH, EMPTY window: one tab, with a Neovim of its own.
     ///
     /// The plan is built from no saved state AND no process cwd, which by
     /// construction is the empty state at `$HOME` with no layout and no restored
@@ -357,7 +356,9 @@ impl Coordinator {
             return;
         };
         if self.open_window(app.upcast_ref(), &plan).is_none() {
-            eprintln!("wolf-gnome: the new window's core failed to start; no window was opened");
+            eprintln!(
+                "wolf-gnome: the new window's tab failed to start its core; no window was opened"
+            );
         }
     }
 
@@ -535,7 +536,7 @@ impl Coordinator {
         match state_seam::close_commit(self.inner.shutting_down.get(), others) {
             CloseCommit::Skip => {}
             CloseCommit::KeepSubtree => {
-                // Gathered while the core and panes are alive: after `core.borrow_mut().take()` the gate refuses
+                // Gathered while the cores and panes are alive: after a core is taken out the gate refuses
                 // the subtree and the session is silently not saved.
                 self.refresh(id);
                 self.commit_tree();

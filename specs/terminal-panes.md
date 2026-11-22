@@ -84,11 +84,11 @@ The front-end focuses a terminal pane like any other and sends `FocusWin` for it
 
 `<C-w>c` or `<C-w>q` in the pane, Close Pane, or `:close` from elsewhere closes the placeholder window, and the last window is refused as `wolf_do_close` refuses it. Core observes the close through `win_close`, and the buffer's wipe hangs up the session.
 
-Terminal panes default to full width, and the existing full-width command toggles it. The front-end sizes the session from the pane's framed content area. A session shown in more than one pane, which only a drawer shared by several tabpages of one core can be, is sized by the most recently focused of its panes, and the others paint it clipped or padded.
+Terminal panes default to full width, and the existing full-width command toggles it. The front-end sizes the session from the pane's framed content area. A session shown in more than one pane is sized by the most recently focused of its panes, and the others paint it clipped or padded.
 
 ## The drawer
 
-There is one drawer session per core: per window on GNOME and per tab on macOS. `WolfCore::toggle_terminal()` starts a drawer session if none is live, in the current tabpage's cwd, before it queues `ToggleTerminal { id }`; starting one is a pty and a fork, never an RPC, and the event carries the id because the input pump has no registry. `drawer_terminal()` names the live drawer session. `wolf_toggle_terminal(id)` then opens or closes the drawer window in the current tabpage: a `botright` split a third of the height, tagged `w:wolf_drawer`, showing the drawer's placeholder, focused, and emitting the `drawer_open` intent. Closing the drawer window never ends the session.
+There is one drawer session per core, and so one per tab on both front-ends. `WolfCore::toggle_terminal()` starts a drawer session if none is live, in the current tabpage's cwd, before it queues `ToggleTerminal { id }`; starting one is a pty and a fork, never an RPC, and the event carries the id because the input pump has no registry. `drawer_terminal()` names the live drawer session. `wolf_toggle_terminal(id)` then opens or closes the drawer window in the current tabpage: a `botright` split a third of the height, tagged `w:wolf_drawer`, showing the drawer's placeholder, focused, and emitting the `drawer_open` intent. Closing the drawer window never ends the session.
 
 Both front-ends keep the drawer outside their pane trees, as their existing decisions say. Core's router ignores split chords from the drawer's session, and `<C-w>c` or `<C-w>q` in the drawer closes it.
 
@@ -150,7 +150,7 @@ Sessions live in the core beside the Neovim process state, never in the snapshot
 
 After a respawn, the front-end puts every live session back through `live_terminals()` and `queue_bind_terminal(id, target)`, which queues the bind on the input pump and returns `false` for an id that is not live. Each live split session goes into a new vertical split of the restored view, in id order, and then the drawer reopens through `toggle_terminal()` if the view had it open. Pane topology does not survive a restart, a limitation every pane shares.
 
-The bind is queued rather than blocking because a blocking bind reaches Neovim ahead of the reopened files queued before it, so the next `:edit` lands in the new split and wipes its placeholder. The front-end runs the steps only once the view's first pane is bound, because both front-ends bind their first pane to the active window, and a split or drawer opened before then would become the first pane in place of the editor window. GNOME puts `live_terminals()` minus `drawer_terminal()` into its one restored tab, because a restart collapses the window to its selected tab. macOS captures each view's terminal leaves and drawer state before the restart and restores each view's own.
+The bind is queued rather than blocking because a blocking bind reaches Neovim ahead of the reopened files queued before it, so the next `:edit` lands in the new split and wipes its placeholder. The front-end runs the steps only once the view's first pane is bound, because both front-ends bind their first pane to the active window, and a split or drawer opened before then would become the first pane in place of the editor window. GNOME puts `live_terminals()` minus `drawer_terminal()` back into the restarted tab, the only tab those sessions belong to. macOS captures each view's terminal leaves and drawer state before the restart and restores each view's own.
 
 ## The pane status bar
 

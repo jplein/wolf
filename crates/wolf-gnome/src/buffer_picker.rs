@@ -54,6 +54,7 @@ use gtk::glib;
 use wolf_core::{rank_buffers, BufInfo, BufferRow, Liveness, WolfCore};
 
 use crate::picker::{activation_index, next_selection, restored_index, FocusTarget};
+use crate::tab_view::{with_core, CoreSource};
 
 /// The maximum number of ranked rows shown in the buffer list.
 const BUFFER_MAX_ROWS: usize = 200;
@@ -201,8 +202,9 @@ struct BufferPickerInner {
     /// Where focus returns when the picker closes: the SELECTED tab's cmdline
     /// strip, resolved at close time. See [`crate::picker::FocusTarget`].
     area: FocusTarget,
-    /// The live core, shared with the rest of the app.
-    core: Rc<RefCell<Option<WolfCore>>>,
+    /// Resolves the SELECTED tab's core, whose buffers the picker lists and
+    /// switches. The picker closes on every tab switch, so one open never spans two.
+    core: CoreSource,
     /// The query string used by the previous [`BufferPickerInner::refresh`]. It
     /// decides whether the next refresh resets the selection to the top (query
     /// changed) or preserves it. `None` forces a reset and is set on `open`.
@@ -225,10 +227,7 @@ impl BufferPickerInner {
         if self.open.get() {
             return;
         }
-        let liveness = {
-            let core_ref = self.core.borrow();
-            core_ref.as_ref().map(WolfCore::liveness)
-        };
+        let liveness = with_core(&self.core, WolfCore::liveness);
         match open_decision(liveness) {
             OpenDecision::Refuse(reason) => {
                 eprintln!("wolf-gnome: buffer picker not opened: {reason}");
@@ -239,12 +238,7 @@ impl BufferPickerInner {
 
         // A blocking RPC, one of those notes/wolf-gnome/crash-and-stall-recovery.md lists.
         // The cwd read is RPC-free, under a borrow of its own.
-        let snapshot = {
-            let core_ref = self.core.borrow();
-            core_ref
-                .as_ref()
-                .map(|core| (core.list_buffers(), core.live_cwd()))
-        };
+        let snapshot = with_core(&self.core, |core| (core.list_buffers(), core.live_cwd()));
         let Some((buffers, cwd)) = snapshot else {
             return;
         };
@@ -371,13 +365,11 @@ impl BufferPickerInner {
     /// precedent: a re-entrant read can deadlock behind a queued writer).
     fn activate_selection(&self) {
         let selected = self.list.selected_row().map(|row| row.index());
-        let active_win = {
-            let core_ref = self.core.borrow();
-            let Some(core) = core_ref.as_ref() else {
-                return;
-            };
+        let Some(active_win) = with_core(&self.core, |core| {
             let snapshot = core.read_snapshot();
             snapshot.active_win
+        }) else {
+            return;
         };
         let target = {
             let rows = self.rows.borrow();
@@ -386,9 +378,7 @@ impl BufferPickerInner {
         let Some((win, bufnr)) = target else {
             return;
         };
-        if let Some(core) = self.core.borrow().as_ref() {
-            core.switch_buffer(win, bufnr);
-        }
+        with_core(&self.core, |core| core.switch_buffer(win, bufnr));
         self.close();
     }
 }
@@ -432,11 +422,7 @@ impl BufferPickerHandle {
 /// cmdline strip, never a pane drawing area (`notes/wolf-gnome/window-structure.md`).
 /// See [`crate::picker::FocusTarget`] for why it is a closure.
 #[must_use]
-pub fn build(
-    overlay: &gtk::Overlay,
-    area: FocusTarget,
-    core: &Rc<RefCell<Option<WolfCore>>>,
-) -> BufferPickerHandle {
+pub fn build(overlay: &gtk::Overlay, area: FocusTarget, core: CoreSource) -> BufferPickerHandle {
     let entry = gtk::SearchEntry::new();
     entry.set_hexpand(true);
 
@@ -471,7 +457,7 @@ pub fn build(
         entry: entry.clone(),
         list: list.clone(),
         area,
-        core: core.clone(),
+        core,
         last_query: RefCell::new(None),
         initial_open: Cell::new(false),
     });
@@ -556,9 +542,8 @@ mod tests {
     const ALL_LIVENESS: [Liveness; 3] = [Liveness::Alive, Liveness::NotResponding, Liveness::Dead];
 
     /// Every input [`open_decision`] is total over: the three liveness readings
-    /// plus the ABSENT core (`None`), which the post-shutdown
-    /// `Rc<RefCell<Option<WolfCore>>>` yields once `wire_close` has taken the core
-    /// out.
+    /// plus the ABSENT core (`None`), which a tab's `Rc<RefCell<Option<WolfCore>>>`
+    /// yields once its core has been taken out.
     ///
     /// `None` is a CLASSIFIED arm rather than an early return at the call site
     /// precisely so it appears in this table; a `let Some(core) = …else { return }`

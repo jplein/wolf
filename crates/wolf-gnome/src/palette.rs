@@ -65,7 +65,7 @@
 //! module adds no `block_on_rpc` route at all (see
 //! `notes/wolf-gnome/crash-and-stall-recovery.md`). The window walk
 //! in particular reads each window's already-cached persisted subtree, so no other
-//! window's core is touched.
+//! window's cores are touched.
 //!
 //! Almost all of this module is GTK widget wiring, which cannot be unit-tested
 //! headlessly. Its pure, display-free seams are [`open_recent_candidates`],
@@ -85,6 +85,7 @@ use wolf_core::{rank_palette, Command, PaletteRow, PaletteRowKind, PaletteWindow
 
 use crate::command_action::{ui_action_for, UiAction};
 use crate::picker::{activation_index, next_selection, restored_index, FocusTarget};
+use crate::tab_view::{with_core, CoreSource};
 
 /// The maximum number of ranked rows shown in the palette list. Applied AFTER the
 /// classification filter — see [`palette_rows`].
@@ -321,8 +322,9 @@ struct PaletteInner {
     /// Where focus returns when the palette closes: the SELECTED tab's cmdline
     /// strip, resolved at close time. See [`crate::picker::FocusTarget`].
     area: FocusTarget,
-    /// The live core, shared with the rest of the app. Read for the command MRU.
-    core: Rc<RefCell<Option<WolfCore>>>,
+    /// Resolves the SELECTED tab's core, read for the command MRU and the recent
+    /// directories.
+    core: CoreSource,
     /// The query string used by the previous [`PaletteInner::refresh`]. It decides
     /// whether the next refresh resets the selection to the top (query changed, or
     /// first refresh after open) or preserves it. `None` forces a reset and is set
@@ -348,17 +350,14 @@ impl PaletteInner {
         }
         // One short core borrow for both snapshots. `recent_dirs` (a SQLite SELECT plus a stat per row)
         // runs inside it: it cannot re-enter the `RefCell`; splitting it out costs a second borrow.
-        let (mru, recorded, live) = {
-            let core_ref = self.core.borrow();
-            match core_ref.as_ref() {
-                Some(core) => (
-                    Some(core.command_mru()),
-                    core.recent_dirs(),
-                    core.live_cwd(),
-                ),
-                None => (None, Vec::new(), None),
-            }
-        };
+        let (mru, recorded, live) = with_core(&self.core, |core| {
+            (
+                Some(core.command_mru()),
+                core.recent_dirs(),
+                core.live_cwd(),
+            )
+        })
+        .unwrap_or((None, Vec::new(), None));
         let recent = mru.map(|mru| mru.recent()).unwrap_or_default();
         *self.mru_recent.borrow_mut() = recent;
         *self.recent_dirs.borrow_mut() =
@@ -521,10 +520,7 @@ impl PaletteInner {
 
         // (1) RECORD. Short core borrow in its own statement; the SQLite write
         // happens with no borrow live.
-        let mru = {
-            let core_ref = self.core.borrow();
-            core_ref.as_ref().map(WolfCore::command_mru)
-        };
+        let mru = with_core(&self.core, WolfCore::command_mru);
         if let Some(mru) = mru {
             mru.record(&mru_key);
         }
@@ -594,7 +590,7 @@ impl PaletteHandle {
 pub fn build(
     overlay: &gtk::Overlay,
     area: FocusTarget,
-    core: &Rc<RefCell<Option<WolfCore>>>,
+    core: CoreSource,
     windows: WindowSource,
 ) -> PaletteHandle {
     let entry = gtk::SearchEntry::new();
@@ -633,7 +629,7 @@ pub fn build(
         entry: entry.clone(),
         list: list.clone(),
         area,
-        core: core.clone(),
+        core,
         last_query: RefCell::new(None),
         on_activate: RefCell::new(None),
     });

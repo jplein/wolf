@@ -402,33 +402,22 @@ exit 0
 // S5 fixtures: three tabs. No OCR runs, so names may match the compared strings; the fixture
 // guard's exemption block says why. They stay in `RELAUNCH_FIXTURE_NAMES` all the same.
 
-/// The file opened in TAB 0 — the tab the launch selects, and the only one whose
-/// gather is certain to run.
+/// The file opened in TAB 0 — the tab the relaunch selects.
 pub(crate) const TABS_RESTORE_FILE_ONE: &str = "talfa.md";
 
 /// Heading inside [`TABS_RESTORE_FILE_ONE`]. Nothing reads it: this smoke takes no
 /// capture, and the fixture bodies exist only so the `:e` opens a real file.
 const TABS_RESTORE_HEADING_ONE: &str = "# TABKEEPONE";
 
-/// The file opened in TAB 1 — **the deterministically never-selected tab**, and the
-/// whole subject of assertion 3.
-///
-/// After materialization Neovim is current on the LAST tabpage created until the
-/// queued `set_current_tabpage` for tab 0 lands, so the last tab may or may not get
-/// one refresh; only a MIDDLE tab is guaranteed never to be Neovim-current at launch.
-/// This name therefore reaches run 2's `state.json` only if the gather resolved the
-/// leaf from the window-keyed snapshot maps, which are global across tabpages, rather
-/// than through the current tabpage's `Snapshot::windows`. That is why the smoke opens
-/// three tabs rather than two, and
-/// `restore_fixture_names_cannot_satisfy_their_own_assertions` asserts the count so a
-/// later trim cannot quietly take the guarantee away.
+/// The file opened in TAB 1 — the tab that is neither the first nor the one selected
+/// when run 1 quits, so no shortcut that keeps a single tab can keep it.
 pub(crate) const TABS_RESTORE_FILE_TWO: &str = "tbravo.md";
 
 /// Heading inside [`TABS_RESTORE_FILE_TWO`]. See [`TABS_RESTORE_HEADING_ONE`].
 const TABS_RESTORE_HEADING_TWO: &str = "# TABKEEPTWO";
 
-/// The file opened in TAB 2 — the last tab created, and the one Neovim is current on
-/// when the launch finishes materializing.
+/// The file opened in TAB 2 — the last tab created, and the one selected when run 1
+/// quits.
 pub(crate) const TABS_RESTORE_FILE_THREE: &str = "tcharlie.md";
 
 /// Heading inside [`TABS_RESTORE_FILE_THREE`]. See [`TABS_RESTORE_HEADING_ONE`].
@@ -445,20 +434,14 @@ pub(crate) const TABS_RESTORE_FILES: [&str; 3] = [
     TABS_RESTORE_FILE_THREE,
 ];
 
-/// Name of the file RUN 1's Neovim writes its own tabpage COUNT into.
-///
-/// A precondition rather than an observable: without it, a `state.json` holding one
-/// tab cannot be told apart from a run in which Ctrl+Shift+T never opened a tab at
-/// all, and the smoke would report a persistence bug for a keyboard failure.
-pub(crate) const TABS_RESTORE_RUN1_READBACK_NAME: &str = "tabs_run1.txt";
-
-/// Name of the file RUN 2's restored Neovim writes its per-tabpage buffer names into,
-/// one line per tabpage in tabpage order.
+/// Name of the file RUN 2's scenario writes its map into: one line `<pid> <fixture>` for
+/// every fixture whose swap file a live `nvim` child of the app holds open.
 pub(crate) const TABS_RESTORE_READBACK_NAME: &str = "tabs_run2.txt";
 
 /// The two-launch THREE-TAB RELAUNCH scenario, run as one `sh -c` string inside ONE
-/// `cage`. Structurally [`RESTORE_SOLO_SCENARIO`] with two `Ctrl+Shift+T` chords and
-/// a second frozen state file.
+/// `cage` and composed with [`with_nvim_pid_helper`]. Structurally
+/// [`RESTORE_SOLO_SCENARIO`] with two `Ctrl+Shift+T` chords and a second frozen state
+/// file.
 ///
 /// **Two files are frozen, and that is what keeps three reds distinguishable.**
 /// `$TABS_STATE_COPY_1` is run 1's save, taken before run 2 can write over it, so the
@@ -468,11 +451,12 @@ pub(crate) const TABS_RESTORE_READBACK_NAME: &str = "tabs_run2.txt";
 /// that dropped tabs and a second run that lost them would produce the same one
 /// observable.
 ///
-/// **Run 2 selects nothing.** No chord, no click, no `:tabnext` — the only thing
-/// typed is the readback. That is the whole point of assertion 3: tab 1 is never
-/// Neovim's current tabpage for a single wake of that run, so its file reaches run 2's
-/// save only through a gather that resolved the leaf by the pane's own Neovim window
-/// handle.
+/// **Run 2 selects nothing and types nothing but the quit.** Each tab runs a Neovim of
+/// its own, so the restore is read from the process table rather than from one
+/// Neovim: three live `nvim` children, then which fixture's swap file each holds open,
+/// read from `/proc/<pid>/fd`. A Neovim keeps a loaded buffer's swap file open under
+/// `WOLF_SWAP_DIR`, its name the file's path with `%` for each `/` and `.swp` after it.
+/// Live pids rather than files on disk keep a stale swap from answering for a tab.
 ///
 /// ## Exit codes
 ///
@@ -482,44 +466,37 @@ pub(crate) const TABS_RESTORE_READBACK_NAME: &str = "tabs_run2.txt";
 /// | `12` | run 1 was still alive after `:qa` |
 /// | `13` | run 1 exited NON-ZERO — it went away, but not cleanly |
 /// | `14` | run 2's app died before it was ready for input |
-/// | `15` | run 1's tabpage-count readback file never appeared |
 /// | `16` | run 2 was still alive after `:qa` |
 /// | `17` | run 2 exited NON-ZERO |
-/// | `21` | run 1 did not reach THREE tabpages, so Ctrl+Shift+T failed and nothing below is about persistence |
+/// | `21` | run 1 did not reach THREE live Neovims, so Ctrl+Shift+T failed and nothing below is about persistence |
 /// | `22` | run 1 wrote no `state.json` at all |
 /// | `23` | run 2 wrote no `state.json` at all |
-/// | `24` | run 2's readback never got ANY content, across every re-issue — the `:call` keystrokes never reached Neovim |
+/// | `24` | run 2 did not restore THREE live Neovims |
 ///
-/// **A run-2 readback that is present but SHORT is deliberately not an exit code.**
-/// The materialization budget is spent by re-issuing the `writefile` (see
-/// `READBACK_TRIES`), and a readback that has settled at one line IS the restore
-/// side's red — so the scenario leaves it standing and lets the Rust side's assertion
-/// 2 name it, which is a far better diagnosis than any code here could carry. Exit 24
-/// covers only the case where nothing was read back at all, which cannot be a
-/// persistence defect.
+/// **A map short of three rows is deliberately not an exit code.** The map is re-read
+/// until it holds three rows or `READBACK_TRIES` is spent, and a map that settled
+/// short is left standing for the Rust side's assertion 2 to name, row by row.
 const RESTORE_TABS_SCENARIO: &str = r#"
 set -eu
 
-# SETTLE is the settle between steps; see SCENARIO.
+# SETTLE is the settle between steps; see SCENARIO. FILE_TRIES is also
+# `wait_nvim_count`'s budget, since that function reads it.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 QUIT_TRIES=75
 FILE_TRIES=100
 
 # How long to wait after each Ctrl+Shift+T. The adw::TabBar ANIMATES its height in
-# over roughly a second, and the chord itself issues a BLOCKING create_tabpage RPC
-# before the page is appended and selected. Twice the measured animation, the
-# native-tabs smoke's constant. A timing knob only: every observable below is polled
-# for or checked with its own exit code.
+# over roughly a second, and the new tab's Neovim is started before the page is
+# appended and selected. Twice the measured animation, the native-tabs smoke's
+# constant. A timing knob only: every observable below is polled for or checked with
+# its own exit code.
 TABS_BAR_SETTLE=2.0
 
-# How many times RUN 2 re-issues its readback while waiting for the restored tabs to
-# exist. `wait_ready` already holds until no restore owes a page, so the first try
-# normally answers; the retries are the backstop for a readiness that released too
-# early, spent by ASKING AGAIN rather than by sleeping. At $WAIT_INTERVAL plus two
-# wtype round trips per try this is well over ten seconds of retrying, and it is only
-# ever paid in full on a run that is already failing.
-READBACK_TRIES=60
+# How many times RUN 2 re-reads the swap map while waiting for each restored Neovim to
+# load its file. Each restored tab's Neovim rebuilds its layout on its own first wake,
+# so the count of three can come before the last file is open.
+READBACK_TRIES=50
 
 cleanup() {
     set +e
@@ -530,18 +507,25 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM HUP
 
-wait_file() {
-    f=$1
-    t=0
-    while [ "$t" -lt "$FILE_TRIES" ]; do
-        if [ -s "$f" ]; then
-            return 0
+# One line `<pid> <fixture>` per fixture swap file a live nvim child of the app holds
+# open, on stdout.
+swap_map() {
+    for p in $(app_children); do
+        pid_is_live "$p" || continue
+        name=$(sed -n 's/^Name:[[:space:]]*//p' "/proc/$p/status" 2>/dev/null) || continue
+        if [ "$name" != "nvim" ]; then
+            continue
         fi
-        t=$((t + 1))
-        sleep "$WAIT_INTERVAL"
+        for fd in /proc/"$p"/fd/*; do
+            link=$(readlink "$fd" 2>/dev/null) || continue
+            for f in "$TABS_FILE_ONE" "$TABS_FILE_TWO" "$TABS_FILE_THREE"; do
+                case "$link" in
+                    *"%$f.swp") echo "$p $f" ;;
+                esac
+            done
+        done
     done
-    echo "wolf-gnome three-tab smoke: readback file $f never appeared (or stayed empty)." >&2
-    return 1
+    return 0
 }
 
 # =========================================================================
@@ -563,34 +547,21 @@ wtype -- ":e $TABS_FILE_TWO"
 wtype -k Return
 sleep "$SETTLE"
 
-# Tab 2: the last tab created.
+# Tab 2: the last tab created, selected at the quit.
 wtype -M ctrl -M shift -k t -m shift -m ctrl
 sleep "$TABS_BAR_SETTLE"
 wtype -- ":e $TABS_FILE_THREE"
 wtype -k Return
 sleep "$SETTLE"
 
-# PRECONDITION, before anything is saved: the run really did reach three tabpages.
-# Without this, a one-tab state.json cannot be told apart from a run in which the
-# chord never opened a tab, and the Rust side would report a persistence bug for a
-# keyboard failure.
-wtype -- ":call writefile([printf('%d', len(gettabinfo()))], '$TABS_RUN1_READBACK')"
-wtype -k Return
-wait_file "$TABS_RUN1_READBACK" || exit 15
-run1_tabs=$(cat "$TABS_RUN1_READBACK")
-echo "wolf-gnome three-tab smoke: run 1 tabpages=$run1_tabs" >&2
-if [ "$run1_tabs" != "3" ]; then
-    echo "wolf-gnome three-tab smoke: run 1 has $run1_tabs tabpage(s), not 3." >&2
-    echo "  Ctrl+Shift+T did not open a tab, so nothing below would be about PERSISTENCE:" >&2
-    echo "  either win.new-tab is not installed (Command::NewTab demoted back to Deferred, in" >&2
-    echo "  which case the chord fell through to Neovim as <C-t>), or the liveness gate refused," >&2
-    echo "  or create_tabpage answered 0. The native-tabs smoke covers that path directly." >&2
-    exit 21
-fi
+# PRECONDITION, before anything is saved: the run really did reach three tabs, one
+# Neovim each. Without this, a one-tab state.json cannot be told apart from a run in
+# which the chord never opened a tab.
+wait_nvim_count 3 21 "after two Ctrl+Shift+T chords in run 1"
 
-# Quit. `Coordinator::on_window_closing` gathers this window's subtree -- now once per
-# TAB -- commits the tree and blocks on `StateStore::flush`, so state.json is on disk
-# before the process goes.
+# Quit. `Coordinator::on_window_closing` gathers this window's subtree -- once per
+# TAB, each from its own Neovim -- commits the tree and blocks on `StateStore::flush`,
+# so state.json is on disk before the process goes.
 wtype -- ":qa"
 wtype -k Return
 
@@ -612,9 +583,9 @@ rc=0
 wait "$app_pid" || rc=$?
 if [ "$rc" -ne 0 ]; then
     echo "wolf-gnome three-tab smoke: run 1 (pid $app_pid) exited $rc, not 0." >&2
-    echo "  It went away, but NOT cleanly. Three tabs close in sequence here, so a borrow" >&2
-    echo "  discipline that held at one tab is the first suspect: the close path gathers every" >&2
-    echo "  tab's subtree while the panes and the core are still alive." >&2
+    echo "  It went away, but NOT cleanly. Three tabs close in sequence here, each shutting" >&2
+    echo "  its own Neovim down, so a borrow discipline that held at one tab is the first" >&2
+    echo "  suspect: the close path gathers every tab's subtree while its core is alive." >&2
     exit 13
 fi
 app_pid=
@@ -630,72 +601,36 @@ fi
 cp "$TABS_STATE_SRC" "$TABS_STATE_COPY_1"
 
 # =========================================================================
-# RUN 2 -- relaunch in the SAME cwd with the SAME state dir, read back, and
-# quit WITHOUT EVER SELECTING another tab.
+# RUN 2 -- relaunch in the SAME cwd with the SAME state dir, read the process
+# table, and quit WITHOUT EVER SELECTING another tab.
 # =========================================================================
 "$WOLF_BIN" &
 app_pid=$!
 wait_ready "$app_pid" 14 "wolf-gnome three-tab smoke"
 
-# THE load-bearing observable: one line per TABPAGE, in tabpage order, holding that
-# tabpage's buffer tail names. `:t` sidesteps any question of how /tmp resolves.
-#
-# The mapping uses LAMBDAS rather than the usual `'…v:val…'` string expressions so
-# that no double quote appears anywhere in the typed command: the whole line is
-# already inside a double-quoted shell word, and nesting quotes through
-# sh -> wtype -> the Neovim cmdline is exactly where these scenarios have
-# historically broken.
-#
-# POLLED and RE-ISSUED, rather than written once after a fixed settle. `writefile`
-# truncates, so each re-issue replaces the whole file with the answer as of now and
-# the loop simply stops once three tabpages exist. Writing once would rest the whole
-# observable on `wait_ready`'s restore conjunct: if that ever released before
-# materialization ran, the Rust side would read one line and assertion 2 would report
-# a deleted queue_restore for what is only a readiness defect.
-#
-# Exhausting the budget is deliberately NOT fatal. A readback that has settled at one
-# line across every re-issue IS assertion 2's red, and assertion 2's message names
-# what is in the file and what each shape means; replacing that with an exit code
-# here would throw the diagnosis away. Only "nothing was read back at all" aborts,
-# with exit 24, because that cannot be a persistence defect.
+wait_nvim_count 3 24 "after run 2 restored the saved three-tab session"
+
+# THE load-bearing observable: which restored Neovim holds which fixture open.
+# Re-read until three rows, or the budget is spent; a short map is assertion 2's red.
+nl='
+'
 rb=0
-tab_lines=0
+rows=0
 while [ "$rb" -lt "$READBACK_TRIES" ]; do
-    # Escape first: a half-typed cmdline left behind by a lost keystroke would
-    # otherwise swallow the whole :call and the file would never change again.
-    wtype -k Escape
-    wtype -- ":call writefile(map(gettabinfo(), {_, t -> join(map(tabpagebuflist(t.tabnr), {_, b -> fnamemodify(bufname(b), ':t')}), ' ')}), '$TABS_READBACK')"
-    wtype -k Return
-    # Counted BEFORE the check, so the number reported below is re-issues ISSUED
-    # rather than re-issues that failed -- a green run reports 1, not 0.
+    map=$(swap_map)
     rb=$((rb + 1))
-    sleep "$WAIT_INTERVAL"
-    if [ -s "$TABS_READBACK" ]; then
-        tab_lines=$(wc -l < "$TABS_READBACK" | tr -d ' ')
-        if [ "$tab_lines" -ge 3 ]; then
-            break
-        fi
+    rows=$(printf '%s' "$map" | grep -c . || true)
+    if [ "$rows" -ge 3 ]; then
+        break
     fi
+    sleep "$WAIT_INTERVAL"
 done
+printf '%s%s' "$map" "$nl" > "$TABS_READBACK"
+echo "wolf-gnome three-tab smoke: run 2 swap map has $rows row(s) after $rb read(s):" >&2
+cat "$TABS_READBACK" >&2
 
-if [ ! -s "$TABS_READBACK" ]; then
-    echo "wolf-gnome three-tab smoke: run 2's readback $TABS_READBACK never got ANY content," >&2
-    echo "  across $READBACK_TRIES re-issues. Nothing was read back, so this is not the restore:" >&2
-    echo "  the :call keystrokes never reached Neovim (wtype focus, or an nvim wedged from the" >&2
-    echo "  first wake), and the Rust side has no readback to assert on at all." >&2
-    exit 24
-fi
-echo "wolf-gnome three-tab smoke: run 2 readback lines=$tab_lines after $rb re-issue(s)" >&2
-if [ "$tab_lines" -lt 3 ]; then
-    echo "wolf-gnome three-tab smoke: run 2's readback settled at $tab_lines line(s), not 3." >&2
-    echo "  NOT aborting, deliberately. The file HAS content, so assertion 2 on the Rust side" >&2
-    echo "  can name exactly what is in it; and a readback that stayed short across" >&2
-    echo "  $READBACK_TRIES re-issues is a restore that never happened rather than one that" >&2
-    echo "  had not happened YET, which is the distinction this loop exists to make." >&2
-fi
-
-# NOTHING selects another tab: no chord, no click, no :tabnext. Tabs 1 and 2 keep
-# whatever the restore gave them, which is the whole subject of the third assertion.
+# NOTHING selects another tab: no chord, no click. Tabs 1 and 2 keep whatever the
+# restore gave them, which is the whole subject of the third assertion.
 wtype -- ":qa"
 wtype -k Return
 
@@ -717,10 +652,8 @@ rc=0
 wait "$app_pid" || rc=$?
 if [ "$rc" -ne 0 ]; then
     echo "wolf-gnome three-tab smoke: run 2 (pid $app_pid) exited $rc, not 0." >&2
-    echo "  It went away, but NOT cleanly. Run 2 is the one that RESTORED tabs, so suspect the" >&2
-    echo "  materialization: a panic inside TabsInner::materialize_restore, or an entries" >&2
-    echo "  borrow held across open_tab / create_tabpage / set_selected_page (the last fires" >&2
-    echo "  on_selected_changed synchronously, which borrows entries and the core again)." >&2
+    echo "  It went away, but NOT cleanly. Run 2 is the one that RESTORED tabs, so suspect" >&2
+    echo "  window::build opening the planned tabs, each starting a core of its own." >&2
     exit 17
 fi
 app_pid=
@@ -1245,8 +1178,8 @@ const TWOWIN_FIRST_HEADING: &str = "# WINALFA";
 /// The subdirectory of the temp cwd that is window B's SEPARATE project.
 ///
 /// It has to be a real directory that is neither the temp cwd (or the two windows
-/// share a project, and with it the durable swap directory) nor the app's `$HOME`
-/// (which `workspace::is_usable_project` refuses, so the restored plan would fall
+/// share a project, and their saved `cwd`s can no longer say which session is which)
+/// nor the app's `$HOME` (which `workspace::is_usable_project` refuses, so the restored plan would fall
 /// through to the empty state and carry no layout). A CHILD of the temp cwd
 /// satisfies both by construction; a sibling would be a child of `$HOME` and would
 /// satisfy them too, so the choice is the tidier of two correct ones rather than a
@@ -1513,8 +1446,6 @@ if [ "${b_cwd##*/}" = "$TWOWIN_PROJECT_BASE" ]; then
     echo "  (or the invoking window's) inherits a project -- the behaviour New TAB has, and" >&2
     echo "  the one that looks right exactly half the time it is tried by hand, because from" >&2
     echo "  a desktop launcher the process cwd IS \$HOME." >&2
-    echo "  A second consequence, not visible here: two windows on one project share the" >&2
-    echo "  durable swap directory, so the next step would meet W325." >&2
     exit 22
 fi
 
@@ -2455,8 +2386,9 @@ fn assert_frozen_tabs(smoke: &str, stage: &str, state_dir: &Path, diagnosis: &st
 }
 
 /// Proves the whole per-tab persistence claim in one scenario: **three tabs, saved
-/// in tab order with their layouts, restored in tab order at relaunch, and still all
-/// three after a second quit in which two of them were never selected.**
+/// in tab order with their layouts, restored at relaunch as three Neovims each holding
+/// its own tab's file, and still all three after a second quit in which two of them were
+/// never selected.**
 ///
 /// Two app launches run inside ONE `cage` instance (see [`RESTORE_TABS_SCENARIO`]),
 /// so the smoke holds one cage slot and no second compositor is started.
@@ -2467,89 +2399,61 @@ fn assert_frozen_tabs(smoke: &str, stage: &str, state_dir: &Path, diagnosis: &st
 /// neither is visible. A background tab's pane view is not drawn at all, so no
 /// capture could show more than one tab's content whatever the file holds; and a tab
 /// TITLE is the current file's name, which the per-pane statusbar strip and nvim's
-/// `:e` echo also draw, so no OCR term could discriminate one. The two observables
-/// that DO discriminate are both techniques this binary already proves it can read: a
-/// `writefile` readback from the restored Neovim, and a `state.json` frozen before
-/// anything can write over it.
+/// `:e` echo also draw, so no OCR term could discriminate one. The observables that
+/// DO discriminate are the process table, read through `/proc`, and a `state.json`
+/// frozen before anything can write over it.
 ///
-/// ## Why THREE tabs, and why that is load-bearing
+/// ## Why THREE tabs
 ///
-/// Materialization creates the queued tabpages in order and each `create_tabpage`
-/// leaves Neovim current on the tabpage it made, so at the end of the loop Neovim is
-/// on the LAST one until the queued `set_current_tabpage` for tab 0 lands. The last
-/// tab may therefore get one refresh and the first certainly does — only a MIDDLE tab
-/// is guaranteed never to be Neovim-current at launch. Tab 1 is that tab, and it is
-/// the only one whose persisted leaf in assertion 3 can ONLY have been resolved from
-/// the window-keyed snapshot maps: run 2 types nothing but the readback, so the
-/// current tabpage's `Snapshot::windows` never held tab 1's windows for a single wake
-/// of that run.
-/// `restore_fixture_names_cannot_satisfy_their_own_assertions` asserts the count so
-/// a later trim to two tabs cannot quietly take the guarantee away.
+/// Tab 0 is the first saved tab and tab 2 the one selected when run 1 quits, so each
+/// is what some shortcut keeps when it keeps one tab. Tab 1 is neither, and is kept
+/// only by a save and a restore that walk every tab.
+/// `restore_fixture_names_cannot_satisfy_their_own_assertions` asserts the count so a
+/// later trim to two tabs cannot quietly take that tab away.
 ///
 /// ## What it asserts
 ///
 /// The scenario's own checks run inside `cage` and carry their own exit codes (see
-/// [`RESTORE_TABS_SCENARIO`]'s table); in particular exit 21 proves run 1 really
-/// reached three tabpages, so a one-tab save cannot be confused with a chord that
-/// never fired. Three more are the Rust side's:
+/// [`RESTORE_TABS_SCENARIO`]'s table): run 1 reaches three live Neovims before it
+/// quits (exit 21), and run 2 restores three (exit 24). Three more are the Rust side's:
 ///
 /// 1. **The SAVE side.** `$TABS_STATE_COPY_1` — run 1's file, frozen before run 2
 ///    could touch it — holds one window with THREE tabs whose layouts are single
 ///    non-preview leaves named `talfa.md` / `tbravo.md` / `tcharlie.md`, in that
-///    order. Two different reverts leave ONE tab here, and the survivor's NAME is what
-///    tells them apart: F1 and F1' in the table below.
-/// 2. **The RESTORE side.** The readback is exactly three lines, `talfa.md` /
-///    `tbravo.md` / `tcharlie.md` (F2). The scenario re-issues that readback until
-///    three tabpages exist or its budget is spent, so a short answer reaching this
-///    assertion is a restore that never happened rather than one that had not happened
-///    YET — the false diagnosis a single write after a fixed settle would produce on a
-///    slow host. F2's red is distinguishable from assertion 1's, which is why run 1's
-///    file is frozen — the two-revert structure
-///    [`single_pane_file_survives_relaunch_under_cage`] documents.
+///    order.
+/// 2. **The RESTORE side.** The swap map has exactly three rows, each fixture held by
+///    exactly one live Neovim, and the three pids distinct: three Neovims, each with
+///    its own tab's file loaded.
 /// 3. **The BACKGROUND tabs' gather.** `$TABS_STATE_COPY_2` — run 2's file, after a
 ///    quit in which tabs 1 and 2 were never selected — still holds the same three
-///    tabs with the same three layouts, in order. F3 is the revert this stage owns,
-///    and it reddens at assertion 1 rather than here, for the reason its row gives.
-///    **The seed is NOT what this measures**, and F4 is the measurement that says so.
+///    tabs with the same three layouts, in order, each gathered from its own Neovim.
 ///
-/// ## Red-run falsifiers (each run alone)
+/// ## Premise
 ///
-/// | # | edit | predicted red | isolated | measured |
-/// | --- | --- | --- | --- | --- |
-/// | F1 | in `state_seam.rs`, make `window_subtree` truncate its `tabs` vec to one | assertion 1: run 1's frozen file holds ONE tab, and since `truncate(1)` keeps the FIRST entry it names `talfa.md` | within the smoke, yes — the scenario's exit-21 check proves run 1 really reached three tabpages first; across the suite no (`window_subtree_writes_every_tab_in_order` reddens too) | **AS PREDICTED.** Run 1's frozen `state.json` carried **1 tab, naming `talfa.md`**. |
-/// | F1' | in `window.rs`, make `cached_subtree` gather `tabs.selected()` alone rather than every entry | assertion 1: ONE tab naming **`tcharlie.md`**, the tab the user was on when run 1 quit | yes | **DERIVED, not measured.** The name follows from `selected()` being tab 2 at the quit. It is in the table because assertion 1's message promises the two one-tab reds are tellable apart, and that promise is only worth anything if both names are written down. |
-/// | F2 | in `window.rs`, delete `build`'s `queue_restore` call | assertion 2: the readback is ONE line | yes — assertion 1 reads run 1's FROZEN file and passes first, which is exactly what the freeze is for | **AS PREDICTED.** The readback was **exactly one line, `talfa.md`**, and assertion 1 passed before it. |
-/// | F3 | in `pane_view.rs`, replace `leaf_contents`' `win_buffers[win]` lookup with the current-tabpage-only join `WolfCore::pane_status` performs | the background tabs lose their layouts — reported at **assertion 1**, because run 1's own background tabs are gathered the same way and its file is read first | no, and deliberately so: this is the one revert whose red arrives above the stage that owns it | **AS PREDICTED, at assertion 1.** The frozen run-1 file read `0 None / 1 None / 2 tcharlie.md` — the two background tabs lost their files while the current one kept its. Run 2's copy is expected to lose its own the same way, unmeasured because the test aborts above it. |
-/// | F4 | in `state_seam.rs`, make `seeded_tab_state` return `None` unconditionally | none — this smoke does not rest on a seed | n/a | **MEASURED GREEN**, and recorded so a later reader does not mistake this smoke for the seed's coverage. All three assertions passed: `realize_layout` creates a restored tab's panes synchronously, so every restored tab is gathered LIVE from then on and never falls back to its seed. |
+/// That a Neovim holds a loaded buffer's swap file open, under `WOLF_SWAP_DIR` with a
+/// `%`-mangled name ending in the file's name and `.swp`, is unmeasured here. A green
+/// run measures it; a red assertion 2 with every count right is the first place to
+/// read `/proc/<pid>/fd` by hand.
 ///
-/// ## How it discriminates RESTORATION from COINCIDENCE
+/// ## Falsifiers (each run alone)
 ///
-/// A fresh launch of `wolf-gnome` shows exactly ONE tab holding `Untitled.md`: the
-/// binary takes no CLI arguments, opens no file at startup, and has no MRU-reopen
-/// path. Neovim's own behaviour cannot produce three tabpages either — the captive
-/// nvim is spawned fresh with `-u init.lua`, there is no `:mksession`, and
-/// `:tabnew` / `:tabnext` / `:tabclose` are locked out in the shared runtime, so the
-/// current tabpage moves only because this front-end asked. Three tabpages holding
-/// three DISTINCT files cannot arise from any single-file reopen, any MRU, or any
-/// swap recovery, all of which give one tab and one name.
+/// | # | edit | predicted red |
+/// | --- | --- | --- |
+/// | TR1a | in `WindowHandle::cached_subtree`, collect `tabs.selected()` alone | assertion 1: run 1's file holds one tab, `tcharlie.md` |
+/// | TR1b | in `state_seam::window_subtree`, truncate `tabs` to one | assertion 1: one tab, `talfa.md` |
+/// | TR2a | in `window::build`, open only `plan.tabs[0]` | scenario exit 24: run 2's count is 1 |
+/// | TR2b | in `window::build`, pass `layout: None` for every planned tab after the first | assertion 2: no `tbravo.md` or `tcharlie.md` row |
 ///
 /// ## What it does NOT prove
-///
-/// **Nothing here reaches `tabs_ui::restore_press`'s `Wait` arm.** Arranging a
-/// wedged or absent core at the one wake where tabs are still queued is not something
-/// a compositor scenario can schedule; that arm is table-tested only.
 ///
 /// **Nothing here observes a REFUSED gather.** `pane_layout::resolve_leaves`'
 /// all-or-nothing rule needs a leaf whose Neovim window has left both snapshot maps
 /// while its pane survives, which is timing-dependent under a compositor. Its table
 /// is what covers it.
 ///
-/// **Nothing here rests on a SEED.** Both seeded paths are table-tested only, in
-/// `state_seam.rs`: `seeded_tab_state_table` for a tab whose own gather never
-/// succeeds, which under a compositor needs `realize_layout` itself to fail, and
-/// `pending_tab_states_table` for a tab still sitting in the restore queue, whose
-/// window is sub-second on a healthy launch and unbounded only behind a Neovim wedged
-/// from the first wake.
+/// **Nothing here rests on a SEED.** `state_seam`'s `seeded_tab_state_table` covers a
+/// tab whose own gather never succeeds, which under a compositor needs its layout to
+/// bind no pane at all.
 #[test]
 fn three_tabs_survive_a_relaunch_under_cage() {
     const SMOKE: &str = "three_tabs_survive_a_relaunch_under_cage";
@@ -2588,33 +2492,30 @@ fn three_tabs_survive_a_relaunch_under_cage() {
         });
     }
 
-    let run1_readback = cwd.join(TABS_RESTORE_RUN1_READBACK_NAME);
     let readback = cwd.join(TABS_RESTORE_READBACK_NAME);
     let run1_state_file = run1_state_dir.join(STATE_FILE_NAME);
     let run2_state_file = run2_state_dir.join(STATE_FILE_NAME);
     // Start from a clean slate: evidence that could be a previous run's leftover is
     // not evidence. `clear_evidence` removes AND asserts absent.
-    for path in [
-        &run1_readback,
-        &readback,
-        &run1_state_file,
-        &run2_state_file,
-    ] {
+    for path in [&readback, &run1_state_file, &run2_state_file] {
         clear_evidence(path, SMOKE);
     }
 
-    let status = cage_command(RESTORE_TABS_SCENARIO, &cwd, &runtime_dir)
-        .env("WOLF_BIN", bin)
-        .env("TABS_FILE_ONE", TABS_RESTORE_FILE_ONE)
-        .env("TABS_FILE_TWO", TABS_RESTORE_FILE_TWO)
-        .env("TABS_FILE_THREE", TABS_RESTORE_FILE_THREE)
-        .env("TABS_RUN1_READBACK", &run1_readback)
-        .env("TABS_READBACK", &readback)
-        .env("TABS_STATE_SRC", &smoke_state_file)
-        .env("TABS_STATE_COPY_1", &run1_state_file)
-        .env("TABS_STATE_COPY_2", &run2_state_file)
-        .status()
-        .expect("failed to spawn `cage` for the headless three-tab relaunch scenario");
+    let status = cage_command(
+        &with_nvim_pid_helper(RESTORE_TABS_SCENARIO),
+        &cwd,
+        &runtime_dir,
+    )
+    .env("WOLF_BIN", bin)
+    .env("TABS_FILE_ONE", TABS_RESTORE_FILE_ONE)
+    .env("TABS_FILE_TWO", TABS_RESTORE_FILE_TWO)
+    .env("TABS_FILE_THREE", TABS_RESTORE_FILE_THREE)
+    .env("TABS_READBACK", &readback)
+    .env("TABS_STATE_SRC", &smoke_state_file)
+    .env("TABS_STATE_COPY_1", &run1_state_file)
+    .env("TABS_STATE_COPY_2", &run2_state_file)
+    .status()
+    .expect("failed to spawn `cage` for the headless three-tab relaunch scenario");
     assert!(
         status.success(),
         "{SMOKE}: the cage three-tab relaunch scenario exited unsuccessfully ({status}). Read the \
@@ -2624,20 +2525,18 @@ fn three_tabs_survive_a_relaunch_under_cage() {
          Exit 13: run 1 exited NON-ZERO — it went away, but not cleanly. Three tabs close in \
          sequence here, so a borrow discipline that held at one tab is the first suspect.\n\
          Exit 14: run 2's app died before it was ready for input.\n\
-         Exit 15: run 1's TABPAGE-COUNT readback file never appeared.\n\
          Exit 16: run 2 was still alive after `:qa`.\n\
-         Exit 17: run 2 exited NON-ZERO — it RESTORED tabs, so suspect `materialize_restore`.\n\
-         Exit 21: run 1 never reached three tabpages, so Ctrl+Shift+T failed and nothing here is \
-         about persistence. That is deliberately separated from the assertions below, because a \
-         one-tab save.json and a chord that never fired look identical in the file.\n\
+         Exit 17: run 2 exited NON-ZERO — it RESTORED tabs, so suspect `window::build` opening \
+         the planned tabs.\n\
+         Exit 21: run 1 never reached three live Neovims, so Ctrl+Shift+T failed and nothing \
+         here is about persistence. That is deliberately separated from the assertions below, \
+         because a one-tab state.json and a chord that never fired look identical in the file.\n\
          Exit 22: run 1 wrote NO state.json at all at {} — upstream of anything about tabs.\n\
          Exit 23: run 2 wrote NO state.json at all, so assertion 3's evidence is missing (run 1's \
          copy is already frozen, so assertion 1 is unaffected).\n\
-         Exit 24: run 2's readback got NO content at all across every re-issue, so the `:call` \
-         keystrokes never reached Neovim. Note what this code does NOT mean: a readback that \
-         appeared but stayed SHORT is not an exit at all — the scenario leaves it standing so \
-         assertion 2 below can name what is in it, because a short readback is the restore side's \
-         own red rather than a harness failure.\n\
+         Exit 24: run 2 did not restore three live Neovims: `window::build` did not open every \
+         planned tab, or a tab's `WolfCore::start` failed (its stderr line says so). Assertion 1 \
+         is unread on this exit, so check run 1's frozen file before blaming the restore.\n\
          The scenario's own stderr names the candidate causes for each in order.",
         smoke_state_file.display()
     );
@@ -2647,58 +2546,72 @@ fn three_tabs_survive_a_relaunch_under_cage() {
         SMOKE,
         "run 1",
         &run1_state_dir,
-        "The scenario's exit-21 check already proved the window really held THREE tabpages when it \
-         quit, so this is the SAVE side and nothing else. ONE tab is the red for two different \
-         reverts, and the NAME the survivor carries is what tells them apart: talfa.md means \
-         `state_seam::window_subtree` truncated its tabs vec, since `truncate(1)` keeps the FIRST \
-         entry — that pairing is MEASURED, not predicted; tcharlie.md means \
-         `window::cached_subtree` gathered `tabs.selected()` alone instead of every entry, since \
-         that is the tab the user was on at the quit. A tab whose order or whose layout is wrong \
-         rather than missing is a different defect again, and the per-tab check names it.",
+        "The scenario's exit-21 check already proved the window really held THREE tabs, one \
+         Neovim each, when it quit, so this is the SAVE side and nothing else. ONE tab is the \
+         red for two different defects, and the NAME the survivor carries tells them apart: \
+         talfa.md means `state_seam::window_subtree` truncated its tabs vec, since `truncate(1)` \
+         keeps the FIRST entry; tcharlie.md means `window::cached_subtree` gathered \
+         `tabs.selected()` alone instead of every entry, since that is the tab the user was on at \
+         the quit.",
     );
 
-    // Assertion 2: the restore side. The scenario polled until three tabpages existed, so a short
-    // readback is a missing tab, not a slow host.
+    // Assertion 2: the restore side, read from the process table rather than any one Neovim.
     let raw = read_readback(&readback, SMOKE);
-    // No filtering: an unnamed buffer's tab writes an empty line, which must stay visible.
-    let got: Vec<&str> = raw.lines().map(str::trim).collect();
-    assert_eq!(
-        got.as_slice(),
-        TABS_RESTORE_FILES.as_slice(),
-        "{SMOKE}: after the relaunch the restored Neovim reports {got:?}, not \
-         {TABS_RESTORE_FILES:?}. One line per tabpage in tabpage order, each holding that \
-         tabpage's buffer tail names — so this one comparison covers the tab COUNT, the buffer \
-         IDENTITIES and their ORDER at once. Read it this way: a SINGLE line means no tab was \
-         restored beyond the first, which is what deleting `window::build`'s `queue_restore` call \
-         produces (assertion 1 above already proved all three were SAVED, so with that green this \
-         points squarely at the restore side); the three right names in the WRONG ORDER means the \
-         queued layouts were materialized out of order, and since the next gather writes that back \
-         the swap compounds every run; `Untitled.md` on a line means that tab was created but its \
-         layout never realized, i.e. `realize_layout` did not run while its tabpage was current; \
-         and MORE than three lines means materialization ran twice, which the taken queue is \
-         supposed to make impossible. A SHORT answer here is NOT a slow launch: the scenario \
-         re-issued this readback until three tabpages existed or its budget ran out, and its \
-         stderr reports the line count it settled at and how many re-issues that took. Readback \
-         file kept at {}.",
+    let rows: Vec<(&str, &str)> = raw
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| line.split_once(' ').unwrap_or((line, "")))
+        .collect();
+    let mut pids: Vec<&str> = Vec::new();
+    for expected in TABS_RESTORE_FILES {
+        let holders: Vec<&str> = rows
+            .iter()
+            .filter(|(_, name)| *name == expected)
+            .map(|(pid, _)| *pid)
+            .collect();
+        assert!(
+            holders.len() == 1,
+            "{SMOKE}: after the relaunch, {} live Neovim(s) hold {expected:?}'s swap file open \
+             ({holders:?}), not exactly one. The whole map was {rows:?}. NONE for a tab past the \
+             first means its restored Neovim never loaded its layout: `window::build` handed that \
+             tab no layout, or its pane view never rebuilt it. NONE for every fixture with three \
+             Neovims live means the premise failed instead: read `/proc/<pid>/fd` by hand. MORE \
+             than one means two tabs' Neovims loaded the same file, i.e. layouts were crossed \
+             between tabs. The scenario re-read the map until three rows or its budget ran out, \
+             so a short map is a missing restore, not a slow one. Map kept at {}.",
+            holders.len(),
+            readback.display()
+        );
+        pids.push(holders[0]);
+    }
+    assert!(
+        rows.len() == TABS_RESTORE_FILES.len(),
+        "{SMOKE}: the swap map has {} rows, not {}, though each fixture has one holder: some row \
+         names something else. The whole map was {rows:?}.",
+        rows.len(),
+        TABS_RESTORE_FILES.len()
+    );
+    let distinct: std::collections::HashSet<&str> = pids.iter().copied().collect();
+    assert!(
+        distinct.len() == TABS_RESTORE_FILES.len(),
+        "{SMOKE}: the three fixtures are held by the Neovims {pids:?}, which are not three \
+         distinct processes. One Neovim holding several tabs' files is the restore putting \
+         several tabs into one core rather than starting a Neovim per tab. Map kept at {}.",
         readback.display()
     );
 
-    // Assertion 3: tab 1 was never current in run 2, so its file gets in only by `leaf_contents`
-    // resolving it from `Snapshot::win_buffers` by the pane's window handle.
+    // Assertion 3: tabs 1 and 2 were never selected in run 2, so each is gathered from its own
+    // background Neovim.
     assert_frozen_tabs(
         SMOKE,
         "run 2",
         &run2_state_dir,
-        "Assertion 2 above already proved all three tabs were RESTORED, so a tab missing here was \
-         lost between the restore and the quit — by the very act of running. What this stage \
-         measures is the BACKGROUND tabs' gather: tab 1 is never Neovim-current in run 2, so its \
-         leaf can only have been resolved from `Snapshot::win_buffers` by the pane's own window \
-         handle. Reverting that to the current-tabpage-only join `pane_status` performs shows up \
-         as `layout: None` on the background tabs rather than as a wrong count, so the per-tab \
-         check below is what reports it; a wrong COUNT here means a tab dropped out of the \
-         contribution set altogether. It is NOT the seed: `state_seam::seeded_tab_state` returning \
-         None leaves this green, because a restored tab's panes are created synchronously and it \
-         is gathered live from then on.",
+        "Assertion 2 above already proved all three tabs were RESTORED, each into a Neovim of its \
+         own, so a tab missing here was lost between the restore and the quit — by the very act \
+         of running. Tabs 1 and 2 are never selected in run 2, so their leaves can only come from \
+         a gather that reads every tab's own Neovim; `layout: None` on them, with tab 0 intact, \
+         is a gather that reads the selected tab alone.",
     );
 }
 
@@ -2825,8 +2738,8 @@ fn two_windows_two_neovims_and_two_saved_sessions_under_cage() {
     // A fresh temp cwd shared by BOTH launches, holding window A's file and — in a
     // subdirectory of its own — window B's SECOND project.
     let cwd = make_temp_cwd();
-    // `write_relaunch_fixtures` creates no parents. Two projects, since one would share a swap dir and
-    // meet Neovim's `W325` warning.
+    // `write_relaunch_fixtures` creates no parents. Two projects, so the two saved `cwd`s tell the
+    // windows' sessions apart.
     let subdir = cwd.join(TWOWIN_SUBDIR);
     std::fs::create_dir_all(&subdir).unwrap_or_else(|e| {
         panic!(
@@ -2911,7 +2824,7 @@ fn two_windows_two_neovims_and_two_saved_sessions_under_cage() {
          Exit 15: a Neovim readback file never appeared.\n\
          Exit 16: run 1 wrote NO state.json at all at {} — upstream of anything about windows.\n\
          Exit 21: run 1 did not have EXACTLY TWO live `nvim` children after the palette \
-         activation. This is the smoke's central claim: one core per window, so a count of 1 means \
+         activation. Each window's one tab runs a core of its own, so a count of 1 means \
          no second window was built (check `ui_action_for(Command::NewWindow)`, \
          `AppShell::perform`'s arm, and `Coordinator::open_new_window`).\n\
          Exit 22: the new window INHERITED the invoking window's project directory. New Window \

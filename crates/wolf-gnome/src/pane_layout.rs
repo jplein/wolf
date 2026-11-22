@@ -76,10 +76,9 @@ pub struct LeafContent {
 
 /// What ONE leaf's Neovim window resolves to in the live snapshot.
 ///
-/// The input half of [`resolve_leaves`], and the reason a background tab's gather
-/// is trustworthy: every variant is read from a map that is GLOBAL across
-/// tabpages, keyed by the pane's own `PaneWidgets::win`, so a tab Neovim is not
-/// currently on answers exactly what a foreground one would.
+/// The input half of [`resolve_leaves`]: every variant is read from a map keyed by
+/// the pane's own `PaneWidgets::win`, in the snapshot of the tab's own Neovim, so a
+/// background tab answers exactly what a foreground one would.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WinContent {
     /// The window is a Markdown PREVIEW of the carried source path
@@ -606,8 +605,8 @@ mod tests {
     /// The variant NAME of one leaf's answer, matched TOTALLY with no `_` arm.
     ///
     /// A new [`WinContent`] variant is an `E0004` here rather than an input the table
-    /// below silently stops covering — the `may_snapshot_table` / `new_tab_press`
-    /// convention, applied to an enum this module owns.
+    /// below silently stops covering — the `may_snapshot_table` convention, applied
+    /// to an enum this module owns.
     fn win_content_kind(content: &WinContent) -> &'static str {
         match content {
             WinContent::Preview(_) => "Preview",

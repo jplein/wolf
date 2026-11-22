@@ -50,7 +50,7 @@
 //! - [`mod@preview_link`]: the URI arithmetic behind a link clicked inside the preview.
 //! - [`mod@preview_ui`]: the Markdown preview's guards, reloads and statusbar lines.
 //! - [`mod@preview_coalescer`]: when the preview's render runs during a typing burst.
-//! - [`mod@tabs_ui`]: the native tabs one window's captive Neovim serves.
+//! - [`mod@tabs_ui`]: the native tabs of one window, each with a captive Neovim of its own.
 //! - [`mod@terminal`]: how a terminal pane paints its session and routes its input.
 //! - [`mod@save_ui`]: the Save and Save As rules.
 //! - [`actions`]: the action namespace and accelerator table as data.
@@ -60,10 +60,9 @@
 //! `wolf_core::StateStore` over `state.json` before any widget exists and turns
 //! the loaded tree into one [`RestorePlan`] per saved window (working directory,
 //! window size, and one [`state_seam::TabPlan`] per saved tab). Each
-//! [`mod@window`] realizes its first tab's saved layout through
-//! `WolfCore::rebuild_layout`, materializes the rest on a later render wake — one
-//! `WolfCore::create_tabpage` and one rebuild each — and, via [`persistence`],
-//! gathers EVERY tab on every render wake and at `close-request`; the window
+//! [`mod@window`] opens every saved tab with its own Neovim, each realizing its saved
+//! layout through `WolfCore::rebuild_layout` on its own first wake, and, via
+//! [`persistence`], gathers EVERY tab on every commit and at `close-request`; the window
 //! assembles its tabs into a subtree and the coordinator assembles those subtrees
 //! into the tree and commits it.
 //!

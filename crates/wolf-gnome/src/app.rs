@@ -9,7 +9,7 @@
 //!
 //! Everything a window is lives in [`mod@crate::window`]; everything the process
 //! owns exactly once lives in [`mod@crate::coordinator`], which calls four of the
-//! helpers below; [`mod@crate::window`] calls [`init_lua_path`] once per window.
+//! helpers below; [`mod@crate::tab_view`] calls [`init_lua_path`] once per tab.
 //! The split is `notes/wolf-gnome/the-coordinator-and-its-windows.md`'s to justify.
 //!
 //! The coordinator is held in an `Rc<RefCell<Option<_>>>` captured by the

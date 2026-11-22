@@ -63,24 +63,17 @@
 //!   `state_seam::may_snapshot` gates on, so a snapshot taken before the first
 //!   pane binds can never wipe a good save.
 //!
-//!   Those two maps are global across tabpages, so this reads no per-pane cache and
-//!   makes no core call beyond one snapshot read — which is what lets a BACKGROUND
-//!   tab be gathered at all, and it reads live rather than last-known-good. A leaf
-//!   whose window is in neither map refuses the whole tab's gather
-//!   ([`crate::pane_layout::LayoutGather::Refuse`]), and the tab then contributes
-//!   its cached subtree.
-//! - **Restore.** Two routes, and which one applies is decided by whether the tab
-//!   has any panes yet. Tab 0 takes [`PaneHandle::request_layout_rebuild`], which
-//!   queues the saved tree at launch for the first wake at which a window grid
-//!   exists ([`PaneInner::consume_pending_layout`]). A tab created by the restore
-//!   materialization takes [`PaneHandle::realize_layout`], which realizes
-//!   immediately, because the tabpage its `create_tabpage` just returned is current
-//!   only at that instant — and which DROPS the queued copy first, since
-//!   `tab_view::TabsInner::open_tab` queues one for every tab it builds and a
-//!   rebuild left queued would fire a SECOND time on that tab's first unheld wake.
-//!   Both end in [`PaneInner::apply_layout_rebuild`] and
-//!   `WolfCore::rebuild_layout`, one of the ten blocking RPCs this front-end
-//!   issues, documented there; each restored tab costs exactly one.
+//!   This reads no per-pane cache and makes no core call beyond one snapshot read of
+//!   the tab's own Neovim, so a BACKGROUND tab is gathered live rather than
+//!   last-known-good. A leaf whose window is in neither map refuses the whole tab's
+//!   gather ([`crate::pane_layout::LayoutGather::Refuse`]), and the tab then
+//!   contributes its cached subtree.
+//! - **Restore.** One route: [`PaneHandle::request_layout_rebuild`] queues the saved
+//!   tree at launch for the tab's first wake at which a window grid exists
+//!   ([`PaneInner::consume_pending_layout`]). It ends in
+//!   [`PaneInner::apply_layout_rebuild`] and `WolfCore::rebuild_layout`, a blocking
+//!   RPC against the tab's own Neovim and documented there; each restored tab costs
+//!   at most one.
 //!
 //! A user's DIVIDER DRAG feeds the save half. [`install_paned_position`] writes the
 //! dragged `gtk::Paned` position back into the tree's weights through
@@ -759,8 +752,8 @@ impl PaneInner {
     /// running session, from the frame's.
     ///
     /// A session shown in several panes is sized by [`terminal_geometry::sizer`]'s pick: the
-    /// active pane, else the previous sizer. Only the current tab's pane view runs on a wake,
-    /// so the current tab's panes size their sessions.
+    /// active pane, else the previous sizer. Each tab's wakes size the sessions that tab
+    /// shows, and an unallocated pane, such as a background tab's, sends nothing.
     fn sync_terminal_sizes(&self) {
         let mut showing: BTreeMap<TerminalId, Vec<PaneId>> = BTreeMap::new();
         let mut areas: HashMap<PaneId, (i32, i32, bool)> = HashMap::new();
@@ -943,14 +936,13 @@ impl PaneInner {
     /// 2. Render the spec via `wolf_core::state::rebuild_layout_spec`.
     /// 3. Call `rebuild_layout` under a SHORT borrow in its own statement.
     ///
-    ///    **This is a BLOCKING RPC**, one of the ten this crate issues
-    ///    (`notes/wolf-gnome/crash-and-stall-recovery.md`). Every
-    ///    other core call this crate makes is a snapshot read or a queued input. It
-    ///    is acceptable HERE for a reason the others do not share: it happens on
-    ///    the LAUNCH path only — at most once per restored tab, bounded by
-    ///    `state_seam::MAX_RESTORE_TABS`, before the window is interactive — and
-    ///    never on the crash/restart path, see `shell.rs`'s "never call a
-    ///    `block_on_rpc` on the restart path" rule, which stands unchanged. A
+    ///    **This is a BLOCKING RPC**, one of those this crate issues
+    ///    (`notes/wolf-gnome/crash-and-stall-recovery.md`). It is acceptable HERE
+    ///    because it happens on the LAUNCH path only — at most once per restored
+    ///    tab, on that tab's first wake with a window grid and against that tab's
+    ///    own Neovim, bounded by `state_seam::MAX_RESTORE_TABS` and
+    ///    `state_seam::MAX_RESTORE_NEOVIMS` — and never on the crash/restart path,
+    ///    see `shell.rs`'s "never call a `block_on_rpc` on the restart path" rule. A
     ///    wedged nvim at launch marks the core `NotResponding`, and the crash
     ///    overlay presents it.
     /// 4. A handle count that does not match the decoded leaf count aborts,
@@ -1156,13 +1148,9 @@ impl PaneInner {
     /// maps by the pane's own Neovim window handle — or `None` if any leaf is
     /// unresolvable.
     ///
-    /// `Snapshot::previews` and `Snapshot::win_buffers` are GLOBAL across tabpages
-    /// (`runtime/nvim/init.lua` sweeps `nvim_list_wins()`), so this answers the same
-    /// values for a background tab as for the selected one, with no RPC and no
-    /// refresh. That is the whole reason a window may persist every tab: the
-    /// `[No Name]` reading is a property of `WolfCore::pane_status`, which joins
-    /// through the current-tabpage-only `Snapshot::windows`, and which this does not
-    /// call.
+    /// `Snapshot::previews` and `Snapshot::win_buffers` are filled from
+    /// `nvim_list_wins()` by `runtime/nvim/init.lua`, so this answers with no RPC and
+    /// no refresh.
     ///
     /// **There is no grid filter here, deliberately.** The grid is irrelevant to a
     /// window-keyed read, and a leaf whose grid has not resolved is now covered by
@@ -1658,8 +1646,7 @@ impl PaneInner {
     /// cursor's grid).
     ///
     /// Neovim's own move to another pane (`<C-w>w`, `:wincmd`) is a focus move, which unzooms
-    /// and rebuilds the pane area. A window that resolves to no pane, as on another tab's
-    /// tabpage, keeps the zoom.
+    /// and rebuilds the pane area. A window that resolves to no pane keeps the zoom.
     fn update_active_pane(&self) {
         let target = {
             let core_ref = self.core.borrow();
@@ -3858,37 +3845,12 @@ impl PaneHandle {
     /// Queues a saved pane tree to be realized ONCE, on the first wake at which a
     /// window grid exists.
     ///
-    /// Called from `window::build` before `present()`, with the layout carried on
-    /// that window's `state_seam::RestorePlan`. It cannot be applied here: no Neovim
+    /// Called from `tab_view::TabsHandle::open_tab` before `present()`, with the
+    /// layout carried on that tab's `state_seam::TabPlan`. It cannot be applied here: no Neovim
     /// window has appeared yet, so there is nothing to rebuild from. See
     /// [`PaneInner::consume_pending_layout`] for the three outcomes.
     pub fn request_layout_rebuild(&self, saved: PaneNode) {
         *self.inner.pending_layout.borrow_mut() = Some(saved);
-    }
-
-    /// Realizes a saved pane tree IMMEDIATELY, with no pending step and no
-    /// one-pane precondition.
-    ///
-    /// **The tabpage this rebuilds into is whichever one Neovim is current on right
-    /// now.** `WolfCore::rebuild_layout` acts on the current tabpage, so the only
-    /// legal caller is the restore materialization
-    /// ([`crate::tab_view::TabsHandle::queue_restore`]), immediately after that
-    /// tab's `create_tabpage` returned — the one instant at which this front-end
-    /// knows for certain which tabpage that is. Calling it from anywhere else
-    /// rebuilds some other tab's windows.
-    ///
-    /// [`PaneHandle::request_layout_rebuild`] is the OTHER route and the one tab 0
-    /// takes: it defers to the first wake at which a window grid exists, which is
-    /// what a tab that has no panes yet needs.
-    ///
-    /// This is a BLOCKING RPC; see [`PaneInner::apply_layout_rebuild`] for the
-    /// budget it belongs to. Exactly ONE per restored tab, which is why the queued
-    /// copy is dropped below.
-    pub fn realize_layout(&self, saved: &PaneNode) {
-        // `open_tab` queues the same layout for every tab; dropping that copy keeps this one rebuild,
-        // not a second blocking RPC on the selection path, outside the blocking-call inventory.
-        self.inner.pending_layout.borrow_mut().take();
-        self.inner.apply_layout_rebuild(saved);
     }
 
     /// The tab's gather answer for `state.json` (see

@@ -193,7 +193,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         ctrl_fold: None,
         command: Some(Command::NewTab),
         status: BindingStatus::Bound,
-        note: "opens a native tab over this window's core, and gives up only the \
+        note: "opens a native tab with a Neovim of its own, and gives up only the \
                Ctrl+Shift alias for <C-t>",
     },
     ActionBinding {

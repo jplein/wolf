@@ -12,8 +12,8 @@
 //!
 //! Every function here RECEIVES `active_win` as an argument rather than reading it
 //! from anywhere. `wolf-core`'s `Snapshot::active_win` is per-core and there is one
-//! core per window, so a seam that takes the handle already generalises to many
-//! windows; `state_seam::snapshot_state` assembles the whole window tree.
+//! core per tab, so a seam that takes the handle already generalises to many tabs
+//! and windows; `state_seam::snapshot_state` assembles the whole window tree.
 //! [`nav_query_win`] is the single place the "which
 //! window" question is answered, and both the press path and the button-refresh
 //! path go through it, so the two cannot diverge on a focus change.

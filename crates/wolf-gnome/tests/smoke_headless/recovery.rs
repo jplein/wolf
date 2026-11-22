@@ -1,5 +1,5 @@
-//! Recovery smokes: a crashed Neovim restarted, a stalled one raising the stall overlay, and
-//! the crash overlay's Restart button.
+//! Recovery smokes: a crashed Neovim restarted, a stalled one raising the stall overlay, the
+//! crash overlay's Restart button, and one tab's crash restarting that tab alone.
 
 use super::*;
 
@@ -331,7 +331,7 @@ const STALL_RPC_TIMEOUT_MS: &str = "800";
 /// definitions.
 ///
 /// Its stderr echoes are prefixed `wolf-gnome smoke:` rather than naming one
-/// scenario, because three share it and a message claiming to come from the
+/// scenario, because several share it and a message claiming to come from the
 /// crash smoke while the stall smoke was running would mis-route the first minute
 /// of every diagnosis. No assertion reads those strings.
 ///
@@ -654,12 +654,11 @@ wait_nvim_count() {
     done
     echo "wolf-gnome smoke: expected EXACTLY $want live Neovim child(ren) of the app" >&2
     echo "  (pid $app_pid) $moment; the last scan counted ${count:-0}." >&2
-    echo "  FEWER means a window that should exist has no core of its own: it was never" >&2
-    echo "  built, or WolfCore::start failed and window::build answered None (which is" >&2
-    echo "  logged and does NOT abort the others). One core per window is the whole" >&2
-    echo "  architecture, so a short count is the claim itself failing, not a symptom." >&2
-    echo "  MORE means a window was opened more than once, or a closed window's core was" >&2
-    echo "  never shut down." >&2
+    echo "  Every tab runs one core, so this counts the tabs of every window. FEWER means" >&2
+    echo "  a tab that should exist has no core: it was never opened, or its" >&2
+    echo "  WolfCore::start failed and open_tab opened no page (which is logged and does" >&2
+    echo "  NOT abort the others). MORE means a tab was opened more than once, or a closed" >&2
+    echo "  tab's core was never shut down." >&2
     if ! pid_is_live "$app_pid"; then
         echo "  READ THIS FIRST: THE APP ITSELF IS GONE (pid $app_pid is not a live process)," >&2
         echo "  so the count is 0 for a reason that has nothing to do with windows -- the" >&2
@@ -669,14 +668,12 @@ wait_nvim_count() {
 }
 "#;
 
-/// Prepends [`FIND_NVIM_PID_HELPER`] to a keyboard-only scenario ([`CRASH_SCENARIO`],
-/// [`STALL_SCENARIO`], `TERMRESTART_SCENARIO`, `TWOWIN_SCENARIO`) or to a
-/// pointer body ([`POINTER_RESTART_BUTTON_BODY`]).
+/// Prepends [`FIND_NVIM_PID_HELPER`] to a keyboard-only scenario, such as
+/// [`CRASH_SCENARIO`], or to a pointer body, such as [`POINTER_RESTART_BUTTON_BODY`].
 /// `Command::arg` and [`run_pointer_scenario`] both accept the result.
 ///
-/// The last of those calls only `find_nvim_pid` (through `wait_nvim_count`) and
-/// `pid_is_live`, never a function that exits, which is what keeps the fragment's
-/// exit codes out of its table.
+/// A scenario that calls only `wait_nvim_count` and `pid_is_live` never reaches a
+/// function that exits, which is what keeps the fragment's exit codes out of its table.
 pub(crate) fn with_nvim_pid_helper(scenario: &str) -> String {
     format!("{FIND_NVIM_PID_HELPER}\n{scenario}\n")
 }
@@ -2230,5 +2227,348 @@ fn crash_overlay_and_restart_button_recover_under_cage() {
          this heading, which is the same defect the dwell assertion above proves the overlay is \
          capable of. PNG kept at {}. OCR output was:\n{ocr_after}",
         out_png.display()
+    );
+}
+
+// Per-tab crash smoke: killing a background tab's Neovim restarts that tab alone.
+// No capture is taken; the fixtures are in `RELAUNCH_FIXTURE_NAMES` for the generic loop.
+
+/// The file the FIRST tab opens: the tab whose Neovim is killed while it is in the background.
+pub(crate) const TABCRASH_FILE_A: &str = "crmike.md";
+
+/// The file the SECOND tab opens: the selected tab, whose Neovim must survive.
+pub(crate) const TABCRASH_FILE_B: &str = "crnovem.md";
+
+/// Heading inside [`TABCRASH_FILE_A`]. Nothing reads it.
+const TABCRASH_HEADING_A: &str = "# TABCRASHONE";
+
+/// Heading inside [`TABCRASH_FILE_B`]. Nothing reads it.
+const TABCRASH_HEADING_B: &str = "# TABCRASHTWO";
+
+/// After the background restart, the selected tab's Neovim writes the tail of `bufname('%')`
+/// here.
+pub(crate) const TABCRASH_READ_NAME: &str = "cr_after.txt";
+
+/// The per-tab crash scenario for [`one_tabs_neovim_crash_restarts_only_that_tab_under_cage`],
+/// one `sh -c` string inside `cage`, keyboard only, composed with [`with_nvim_pid_helper`].
+///
+/// Tab 1 opens [`TABCRASH_FILE_A`] and its Neovim's pid is recorded while it is the only one;
+/// Ctrl+Shift+T starts tab 2's Neovim, whose pid is the other live `nvim` child, and tab 2
+/// opens [`TABCRASH_FILE_B`]. With tab 2 selected, tab 1's Neovim is SIGKILLed. A third pid
+/// must appear, tab 2's must stay live and the app with it; then tab 2's buffer is read back,
+/// `:qa` saves the session and `state.json` is frozen.
+///
+/// ## Exit codes
+///
+/// | code | meaning |
+/// | --- | --- |
+/// | `11` | the app died before it was ready for input |
+/// | `12` | the app was still alive after `:qa` |
+/// | `13` | the app exited non-zero after `:qa` |
+/// | `14` | the readback never appeared |
+/// | `16` | THE APP DIED after the kill (see [`FIND_NVIM_PID_HELPER`]) |
+/// | `17` | tab 1's Neovim could not be identified as the one live `nvim` child |
+/// | `18` | the SIGKILLed Neovim never left the process table |
+/// | `21` | Ctrl+Shift+T did not leave exactly two live Neovims |
+/// | `22` | no live `nvim` child other than tab 1's could be named as tab 2's |
+/// | `23` | no new Neovim appeared after the kill: the background tab was not restarted |
+/// | `24` | tab 2's Neovim died with tab 1's, or was closed by its restart |
+/// | `25` | the app wrote no `state.json` |
+const TABCRASH_SCENARIO: &str = r#"
+set -eu
+
+# SETTLE is the settle between steps; see SCENARIO.
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+QUIT_TRIES=75
+FILE_TRIES=100
+# The adw::TabBar animates its height in over about a second; see POINTER_TABS_BODY.
+TABS_BAR_SETTLE=2.0
+# After the respawn, the restarted Neovim runs its setup chain and reopens tab 1's file before
+# the quit gathers it. The crash smoke measured the whole restart under 200ms.
+RESTART_SETTLE=3.0
+
+cleanup() {
+    set +e
+    if [ -n "${app_pid:-}" ]; then
+        kill "$app_pid" 2>/dev/null
+        wait "$app_pid" 2>/dev/null
+    fi
+}
+trap cleanup EXIT INT TERM HUP
+
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome per-tab crash smoke: readback file $f never appeared (or stayed empty)." >&2
+    return 1
+}
+
+# Print the live `nvim` children of the app other than the pids given as arguments.
+other_nvims() {
+    for p in $(app_children); do
+        pid_is_live "$p" || continue
+        name=$(sed -n 's/^Name:[[:space:]]*//p' "/proc/$p/status" 2>/dev/null) || continue
+        if [ "$name" != "nvim" ]; then
+            continue
+        fi
+        known=0
+        for k in "$@"; do
+            if [ "$p" = "$k" ]; then
+                known=1
+            fi
+        done
+        if [ "$known" -eq 0 ]; then
+            echo "$p"
+        fi
+    done
+    return 0
+}
+
+"$WOLF_BIN" &
+app_pid=$!
+wait_ready "$app_pid" 11 "wolf-gnome per-tab crash smoke"
+
+# --- Step 1: tab 1's file, and tab 1's Neovim while it is the only one -------
+wtype -- ":e $TABCRASH_FILE_A"
+wtype -k Return
+sleep "$SETTLE"
+wait_nvim_pid
+pid_a=$nvim_pid
+
+# --- Step 2: a second tab, and its Neovim ------------------------------------
+wtype -M ctrl -M shift -k t -m shift -m ctrl
+wait_nvim_count 2 21 "after Ctrl+Shift+T opened a second tab"
+pid_b=$(other_nvims "$pid_a" | head -n 1)
+if [ -z "$pid_b" ]; then
+    echo "wolf-gnome per-tab crash smoke: two nvim children were counted, but none other than" >&2
+    echo "  tab 1's pid $pid_a is live now, so tab 2's Neovim cannot be named." >&2
+    exit 22
+fi
+echo "wolf-gnome per-tab crash smoke: tab 1's Neovim is $pid_a, tab 2's is $pid_b" >&2
+sleep "$TABS_BAR_SETTLE"
+
+# --- Step 3: tab 2, the selected tab, opens its own file ---------------------
+wtype -- ":e $TABCRASH_FILE_B"
+wtype -k Return
+sleep "$SETTLE"
+
+# --- Step 4: kill the BACKGROUND tab's Neovim --------------------------------
+kill -9 "$pid_a" 2>/dev/null || true
+nvim_pid=$pid_a
+wait_nvim_gone
+assert_app_alive
+
+# --- Step 5: a Neovim that is neither tab's old one appears ------------------
+respawned=""
+t=0
+while [ "$t" -lt "$FILE_TRIES" ]; do
+    respawned=$(other_nvims "$pid_a" "$pid_b" | head -n 1)
+    if [ -n "$respawned" ]; then
+        break
+    fi
+    t=$((t + 1))
+    sleep "$WAIT_INTERVAL"
+done
+if [ -z "$respawned" ]; then
+    assert_app_alive
+    echo "wolf-gnome per-tab crash smoke: no new Neovim appeared after tab 1's ($pid_a) was" >&2
+    echo "  killed. The app is alive, so the background tab was never restarted: its" >&2
+    echo "  liveness wake must schedule the automatic restart whether or not it is selected." >&2
+    exit 23
+fi
+echo "wolf-gnome per-tab crash smoke: tab 1's Neovim was restarted as $respawned" >&2
+
+# --- Step 6: tab 2's Neovim is untouched, and so is the app ------------------
+if ! pid_is_live "$pid_b"; then
+    assert_app_alive
+    echo "wolf-gnome per-tab crash smoke: tab 2's Neovim ($pid_b) is gone after tab 1's crash." >&2
+    echo "  A crash must restart its own tab alone: the restart closed the other tab's page or" >&2
+    echo "  shut its core down." >&2
+    exit 24
+fi
+assert_app_alive
+
+# --- Step 7: tab 2's buffer, the quit, and the saved session -----------------
+sleep "$RESTART_SETTLE"
+wtype -- ":call writefile([fnamemodify(bufname('%'), ':t')], '$TABCRASH_READ')"
+wtype -k Return
+wait_file "$TABCRASH_READ" || exit 14
+
+wtype -- ":qa"
+wtype -k Return
+tries=0
+gone=0
+while [ "$tries" -lt "$QUIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        gone=1
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+if [ "$gone" -ne 1 ]; then
+    echo "wolf-gnome per-tab crash smoke: the app (pid $app_pid) is still alive after :qa." >&2
+    exit 12
+fi
+rc=0
+wait "$app_pid" || rc=$?
+app_pid=
+if [ "$rc" -ne 0 ]; then
+    echo "wolf-gnome per-tab crash smoke: the app exited $rc after :qa, not 0." >&2
+    exit 13
+fi
+
+if [ ! -s "$TABCRASH_STATE_SRC" ]; then
+    echo "wolf-gnome per-tab crash smoke: the app wrote no state.json at $TABCRASH_STATE_SRC." >&2
+    exit 25
+fi
+cp "$TABCRASH_STATE_SRC" "$TABCRASH_STATE_COPY"
+exit 0
+"#;
+
+/// Killing one tab's Neovim restarts that tab alone: the background tab whose Neovim died gets
+/// a new one with its file reopened, while the selected tab keeps its Neovim, its buffer and its
+/// page, and the window keeps both tabs.
+///
+/// ## What it proves
+///
+/// Liveness and restart are per tab. The killed Neovim belongs to the tab that is NOT selected,
+/// so this is the silent background restart: no overlay is shown for it, and nothing but its
+/// own liveness wake can start the restart. The saved session is the evidence that the restart
+/// reopened tab 1's file into tab 1's new Neovim and lost neither tab.
+///
+/// ## Assertions
+///
+/// | # | assertion | kind | falsifier | predicted red |
+/// | --- | --- | --- | --- | --- |
+/// | 1 | (in-scenario) a Neovim neither tab had before appears after the kill | **discriminator** | CR1a: in `on_liveness_wake`, add `&& tab.is_selected()` to the condition that schedules the automatic restart | scenario exit 23 |
+/// | 2 | (in-scenario) tab 2's Neovim is still live after the restart | **discriminator** | CR2a: in `restart_nvim`'s `Respawned` arm, close every page but the restarted tab's | scenario exit 24 |
+/// | 3 | tab 2's Neovim reads back [`TABCRASH_FILE_B`] | **discriminator** | CR3a: in `reopen_captured`, send the captured files through `selected_core()` instead of the restarted tab's core | the readback names [`TABCRASH_FILE_A`] |
+/// | 4 | the saved session holds one window of two tabs, whose leaves are [`TABCRASH_FILE_A`] then [`TABCRASH_FILE_B`] | corroboration of 3 | CR3a again | tab 0's leaf is `Untitled.md`, unreached behind 3 |
+#[test]
+fn one_tabs_neovim_crash_restarts_only_that_tab_under_cage() {
+    const SMOKE: &str = "one_tabs_neovim_crash_restarts_only_that_tab_under_cage";
+    const EXPECTED_LEAVES: [&str; 2] = [TABCRASH_FILE_A, TABCRASH_FILE_B];
+
+    let runtime_dir = require_smoke_env();
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+    let cwd = make_temp_cwd();
+    write_relaunch_fixtures(
+        SMOKE,
+        &cwd,
+        &[
+            (TABCRASH_FILE_A, TABCRASH_HEADING_A),
+            (TABCRASH_FILE_B, TABCRASH_HEADING_B),
+        ],
+    );
+
+    let read = cwd.join(TABCRASH_READ_NAME);
+    let state_src = smoke_state_dir(&cwd).join(STATE_FILE_NAME);
+    // Under XDG_RUNTIME_DIR, so the sidebar never lists it. A directory, because `load_state`
+    // takes one.
+    let state_dir = runtime_dir.join("wolf_gnome_tabcrash_state");
+    std::fs::create_dir_all(&state_dir).unwrap_or_else(|e| {
+        panic!(
+            "{SMOKE}: failed to create the state snapshot dir {}: {e}",
+            state_dir.display()
+        )
+    });
+    let state_copy = state_dir.join(STATE_FILE_NAME);
+    for path in [&read, &state_copy] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let status = cage_command(&with_nvim_pid_helper(TABCRASH_SCENARIO), &cwd, &runtime_dir)
+        .env("WOLF_BIN", bin)
+        .env("TABCRASH_FILE_A", TABCRASH_FILE_A)
+        .env("TABCRASH_FILE_B", TABCRASH_FILE_B)
+        .env("TABCRASH_READ", &read)
+        .env("TABCRASH_STATE_SRC", &state_src)
+        .env("TABCRASH_STATE_COPY", &state_copy)
+        .status()
+        .expect("failed to spawn `cage` for the headless per-tab crash scenario");
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage per-tab crash scenario exited unsuccessfully ({status}). Read the exit \
+         code first; the scenario's stderr names the pids it saw.\n\
+         Exit 11: the app died before it was ready for input.\n\
+         Exit 12 / 13: the app did not quit cleanly on `:qa`.\n\
+         Exit 14: the readback never appeared: keys did not reach the selected tab's Neovim.\n\
+         Exit 16: THE APP DIED after one tab's Neovim was killed; a crash must cost only its own \
+         tab.\n\
+         Exit 17: tab 1's Neovim was not the one live `nvim` child at the start.\n\
+         Exit 18: the SIGKILLed Neovim never left the process table.\n\
+         Exit 21: Ctrl+Shift+T did not leave two live Neovims, so there is no second tab to \
+         spare.\n\
+         Exit 22: tab 2's Neovim could not be named among the app's children.\n\
+         Exit 23: no new Neovim appeared after the kill: the background tab's liveness wake did \
+         not schedule its automatic restart, or schedules it only for the selected tab.\n\
+         Exit 24: tab 2's Neovim died with tab 1's or was closed by tab 1's restart: the restart \
+         touched a tab other than its own.\n\
+         Exit 25: no state.json was written at {}.",
+        state_src.display()
+    );
+
+    // Assertion 3: the selected tab still shows its own file in its own Neovim.
+    let after = read_readback(&read, SMOKE).trim().to_string();
+    assert_eq!(
+        after, TABCRASH_FILE_B,
+        "{SMOKE}: after tab 1's Neovim was restarted, the selected tab's Neovim has {after:?} as \
+         its current buffer, not {TABCRASH_FILE_B:?}. {TABCRASH_FILE_A:?} means the restart \
+         reopened tab 1's captured files through the selected tab's core rather than the \
+         restarted tab's, so they landed in tab 2's Neovim. `Untitled.md` means tab 2's Neovim \
+         was itself replaced."
+    );
+
+    // Assertion 4: both tabs, in order, each holding its own file.
+    let saved = load_state(&state_dir).unwrap_or_else(|| {
+        panic!(
+            "{SMOKE}: wolf_core::load_state could not parse the frozen state at {}. The scenario \
+             proved it was non-empty, so suspect its shape.",
+            state_copy.display()
+        )
+    });
+    assert_eq!(
+        saved.windows.len(),
+        1,
+        "{SMOKE}: the saved session holds {} window(s), not 1. This smoke opens one window; a \
+         restart that built a window of its own, or lost the window, is the cause. File: {}",
+        saved.windows.len(),
+        state_copy.display()
+    );
+    let leaves: Vec<Option<String>> = saved.windows[0]
+        .tabs
+        .iter()
+        .map(|tab| {
+            tab.layout.as_ref().and_then(leaf_fields).map(|leaf| {
+                Path::new(leaf.path)
+                    .file_name()
+                    .and_then(OsStr::to_str)
+                    .unwrap_or_default()
+                    .to_string()
+            })
+        })
+        .collect();
+    let want: Vec<Option<String>> = EXPECTED_LEAVES
+        .iter()
+        .map(|name| Some((*name).to_string()))
+        .collect();
+    assert_eq!(
+        leaves,
+        want,
+        "{SMOKE}: the saved session's tabs carry the lone leaves {leaves:?}, not {want:?}. One \
+         tab means the restart collapsed the window to a single tab. `Untitled.md` (or no leaf) \
+         in tab 0 means the restarted Neovim never reopened {TABCRASH_FILE_A:?}: the captured \
+         files went to another tab's core, or nowhere. Tab 1 without {TABCRASH_FILE_B:?} means \
+         the selected tab lost its file to the other tab's restart. File: {}",
+        state_copy.display()
     );
 }

@@ -19,6 +19,15 @@
 //! into Neovim. This module reads no cwd of its own: the shell knows where the
 //! sidebar is rooted and passes the label in.
 //!
+//! The sidebar is per window while every tab runs its own Neovim, so the search
+//! runs on the SELECTED tab's core at the moment it starts, and stays there across
+//! a tab switch: a switch to a tab in another directory re-roots through the
+//! settle, and one in the same directory would only repeat the traversal and lose
+//! the expansion. When that tab closes, [`TreeHandle::release_core`] drops the
+//! search and marks it OWED, and the next render wake restarts it on the selected
+//! tab's core at the current root label. A search that found no core to start on
+//! is owed the same way.
+//!
 //! ## Model
 //!
 //! Each [`crate::tree::TreeNode`] is wrapped in a `glib::BoxedAnyObject` (no custom
@@ -78,7 +87,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
 use adw::prelude::*;
@@ -89,6 +98,7 @@ use wolf_core::{FileEntry, FileSearch, InputEvent, WakeFn, WolfCore};
 
 use crate::picker::FocusTarget;
 use crate::refresh_coalescer::{RefreshCoalescer, REFRESH_INTERVAL};
+use crate::tab_view::{with_core, CoreCell, CoreSource};
 use crate::tree::{self, TreeNode};
 use crate::tree_gate::TreeRefreshGate;
 
@@ -162,8 +172,14 @@ struct TreeInner {
     scroller: gtk::ScrolledWindow,
     /// The list view; retained so `reveal` can scroll a revealed row into view.
     list_view: gtk::ListView,
-    /// The live core, shared with the rest of the app.
-    core: Rc<RefCell<Option<WolfCore>>>,
+    /// Resolves the SELECTED tab's core, which a search starts on and a file opens
+    /// in.
+    core: CoreSource,
+    /// The core [`TreeInner::search`] was started on; see the module docs.
+    search_core: RefCell<Weak<RefCell<Option<WolfCore>>>>,
+    /// Whether a search is owed: its tab closed, or it found no core to start on.
+    /// The next render wake restarts it.
+    search_owed: Cell<bool>,
     /// Where focus returns after a single-click open: the SELECTED tab's cmdline
     /// strip, resolved at call time. See [`crate::picker::FocusTarget`].
     area: FocusTarget,
@@ -310,12 +326,12 @@ impl TreeInner {
     /// records it, moves the bold to the new row, stashes it as the reveal target,
     /// and refreshes.
     fn on_render_wake(&self) {
-        let current = {
-            let core_ref = self.core.borrow();
-            core_ref
-                .as_ref()
-                .and_then(|c| c.read_snapshot().current_file.clone())
-        };
+        if self.search_owed.get() {
+            // Own statement: `reroot` borrows the label again.
+            let label = self.root_label.borrow().clone();
+            self.reroot(&label);
+        }
+        let current = with_core(&self.core, |c| c.read_snapshot().current_file.clone()).flatten();
         // Bound to a local so the borrow is gone before the write below.
         let unchanged = *self.last_current.borrow() == current;
         if unchanged {
@@ -423,9 +439,9 @@ impl TreeInner {
         };
         match open_path {
             Some(path) => {
-                if let Some(core) = self.core.borrow().as_ref() {
-                    core.send_input(InputEvent::Open { path });
-                }
+                with_core(&self.core, |core| {
+                    core.send_input(InputEvent::Open { path })
+                });
                 if let Some(area) = (self.area)() {
                     area.grab_focus();
                 }
@@ -460,14 +476,34 @@ impl TreeInner {
     /// Starts (or restarts) the long-lived file search feeding the tree. The
     /// traversal root is resolved by the core from its LIVE cwd, so this must only
     /// run once nvim has reported the cwd the tree is meant to show.
+    ///
+    /// A search with no core to start on is marked owed, not dropped.
     fn start_search(&self) {
-        let search = {
-            let core_ref = self.core.borrow();
-            core_ref
+        let cell = (self.core)();
+        let search = cell.as_ref().and_then(|cell| {
+            cell.borrow()
                 .as_ref()
                 .map(|core| core.start_file_search(self.wake.clone()))
-        };
+        });
+        self.search_owed.set(search.is_none());
+        *self.search_core.borrow_mut() = cell.as_ref().map_or_else(Weak::new, Rc::downgrade);
         *self.search.borrow_mut() = search;
+    }
+
+    /// Drops the search when it runs on `core`, a closing tab's, and marks it owed;
+    /// see the module docs.
+    fn release_core(&self, core: &CoreCell) {
+        let ours = self
+            .search_core
+            .borrow()
+            .upgrade()
+            .is_some_and(|search_core| Rc::ptr_eq(&search_core, core));
+        if !ours {
+            return;
+        }
+        self.coalescer.borrow_mut().cancel();
+        let _ = self.search.borrow_mut().take();
+        self.search_owed.set(true);
     }
 
     /// Re-roots the sidebar at the core's CURRENT live cwd, drawing `root_label` on
@@ -559,6 +595,13 @@ impl TreeHandle {
     /// Drops the file search, cancelling any in-flight traversal.
     pub fn close(&self) {
         self.inner.close();
+    }
+
+    /// Drops the file search when it runs on `core`, a closing tab's, cancelling
+    /// its traversal before that core shuts down, and owes a restart on the selected
+    /// tab's core to the next render wake.
+    pub fn release_core(&self, core: &CoreCell) {
+        self.inner.release_core(core);
     }
 
     /// Re-roots the sidebar at the core's live cwd, drawing `root_label` on the
@@ -772,12 +815,7 @@ fn build_factory(
 /// cannot be bound to each other once and for all; see
 /// [`crate::picker::FocusTarget`].
 #[must_use]
-pub fn build(
-    core: &Rc<RefCell<Option<WolfCore>>>,
-    area: FocusTarget,
-    start: bool,
-    root_label: &str,
-) -> TreeHandle {
+pub fn build(core: CoreSource, area: FocusTarget, start: bool, root_label: &str) -> TreeHandle {
     install_css();
 
     let entries: Rc<RefCell<Vec<FileEntry>>> = Rc::new(RefCell::new(Vec::new()));
@@ -819,7 +857,9 @@ pub fn build(
         selection,
         scroller,
         list_view: list_view.clone(),
-        core: core.clone(),
+        core,
+        search_core: RefCell::new(Weak::new()),
+        search_owed: Cell::new(false),
         area,
         wake,
         pending_reveal: RefCell::new(None),

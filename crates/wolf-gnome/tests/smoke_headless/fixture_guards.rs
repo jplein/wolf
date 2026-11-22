@@ -23,11 +23,12 @@ use super::header_bar::{HB_READ_NAME, HB_TARGET_FILE};
 use super::panes::{
     CHORD_CLOSE_OCR_GONE, CHORD_CLOSE_OCR_KEEP, CLOSE_OCR_GONE, CLOSE_OCR_KEEP, FOCUS_OCR_LEFT,
     FOCUS_OCR_MARKER, FOCUS_OCR_RIGHT, HSPLIT_OCR_BOTTOM, HSPLIT_OCR_TOP, QUIT_OCR_GONE,
-    QUIT_OCR_KEEP, STATUS_FILE_A, STATUS_FILE_B, STATUS_FIXTURE_BODY, STATUS_FIXTURE_DIR,
-    STATUS_OCR_A, STATUS_OCR_B, STATUS_OCR_MARKER, STATUS_READBACK_NAME, TABS_FIRST_FILE,
-    TABS_FIRST_HEADING, TABS_OCR_FIRST, TABS_OCR_SECOND, TABS_READ_A_NAME, TABS_READ_C_NAME,
-    TABS_READ_E_NAME, TABS_READ_F_NAME, TABS_SECOND_FILE, TABS_SECOND_HEADING, TABS_SECOND_NAME,
-    TABS_SUBDIR, TRI_OCR_A, TRI_OCR_B, TRI_OCR_C, VSPLIT_OCR_LEFT, VSPLIT_OCR_RIGHT,
+    QUIT_OCR_KEEP, RELOAD_FILE, RELOAD_PID_ONE_NAME, RELOAD_PID_TWO_NAME, RELOAD_READ_NAME,
+    STATUS_FILE_A, STATUS_FILE_B, STATUS_FIXTURE_BODY, STATUS_FIXTURE_DIR, STATUS_OCR_A,
+    STATUS_OCR_B, STATUS_OCR_MARKER, STATUS_READBACK_NAME, TABS_FIRST_FILE, TABS_FIRST_HEADING,
+    TABS_OCR_FIRST, TABS_OCR_SECOND, TABS_READ_A_NAME, TABS_READ_C_NAME, TABS_READ_E_NAME,
+    TABS_READ_F_NAME, TABS_SECOND_FILE, TABS_SECOND_HEADING, TABS_SECOND_NAME, TABS_SUBDIR,
+    TRI_OCR_A, TRI_OCR_B, TRI_OCR_C, VSPLIT_OCR_LEFT, VSPLIT_OCR_RIGHT,
 };
 use super::pointer::{WEDGE_OCR_CLICK, WEDGE_OCR_STAY};
 use super::preview::{
@@ -45,7 +46,7 @@ use super::preview::{
 use super::preview_render::{PICKOVER_OTHER_FILE, PICKOVER_SOURCE_FILE, PICKOVER_WINS_NAME};
 use super::recovery::{
     RESTART_OCR_BANNER, RESTART_OCR_HEADING, RESTART_OCR_OVERLAY, RESTART_OCR_UNSAVED, STALL_FILE,
-    STALL_OCR_ABSENT, STALL_OCR_PRESENT,
+    STALL_OCR_ABSENT, STALL_OCR_PRESENT, TABCRASH_FILE_A, TABCRASH_FILE_B, TABCRASH_READ_NAME,
 };
 use super::restore::{
     divider_right_fixture_body, DIVIDER_BODY_LINE_COUNT, DIVIDER_FILE_LEFT, DIVIDER_FILE_RIGHT,
@@ -54,9 +55,8 @@ use super::restore::{
     RESTORE_OCR_BRAVO, RESTORE_OCR_CHARLIE, RESTORE_READBACK_NAME, SOLO_DECOY_FILE, SOLO_FILE,
     SOLO_OCR_ABSENT, SOLO_OCR_PRESENT, SOLO_READBACK_NAME, TABS_RESTORE_FILES,
     TABS_RESTORE_FILE_ONE, TABS_RESTORE_FILE_THREE, TABS_RESTORE_FILE_TWO,
-    TABS_RESTORE_READBACK_NAME, TABS_RESTORE_RUN1_READBACK_NAME, TWOWIN_FIRST_FILE,
-    TWOWIN_NEW_WINDOW_QUERY, TWOWIN_READBACK_B_NAME, TWOWIN_READBACK_R2_NAME, TWOWIN_SECOND_FILE,
-    TWOWIN_SECOND_NAME, TWOWIN_SUBDIR,
+    TABS_RESTORE_READBACK_NAME, TWOWIN_FIRST_FILE, TWOWIN_NEW_WINDOW_QUERY, TWOWIN_READBACK_B_NAME,
+    TWOWIN_READBACK_R2_NAME, TWOWIN_SECOND_FILE, TWOWIN_SECOND_NAME, TWOWIN_SUBDIR,
 };
 use super::search_toggles::{
     ST_ALL_MD_FILE, ST_ALL_TXT_FILE, ST_CASE_LOWER_FILE, ST_CASE_UPPER_FILE, ST_OCR_ALL_MD,
@@ -191,9 +191,14 @@ use super::*;
 ///   one: a background tab's pane view is never drawn at all, and a tab TITLE is the
 ///   current file's name, which the per-pane statusbar strip and nvim's `:e` echo
 ///   also draw, so no term could discriminate one. Its observables are two frozen
-///   `state.json` copies and a `writefile` readback from the restored Neovim. Its
-///   fixtures are registered in [`RELAUNCH_FIXTURE_NAMES`] all the same, for the
-///   generic loop's sake.
+///   `state.json` copies and a map of the restored Neovims to the swap files they
+///   hold open. Its fixtures are registered in [`RELAUNCH_FIXTURE_NAMES`] all the
+///   same, for the generic loop's sake.
+/// * `a_file_saved_in_one_tab_reloads_in_another_on_switch_under_cage` and
+///   `one_tabs_neovim_crash_restarts_only_that_tab_under_cage` capture nothing: their
+///   observables are readbacks the tabs' Neovims write about themselves, live pids
+///   and, for the second, a frozen `state.json`. Their fixtures and readbacks are
+///   registered in [`RELAUNCH_FIXTURE_NAMES`] for the generic loop's sake.
 /// * `config_font_size_changes_the_grid_under_cage` likewise captures no PNG: its
 ///   two observables are the `winwidth(0)` integers the captive Neovim writes about
 ///   its own grid, so no fixture filename can help or hurt it.
@@ -308,8 +313,8 @@ use super::*;
 /// readback files; for `crash_overlay_and_restart_button_recover_under_cage` the
 /// OCR IS the assertion, because "the overlay is up" and "the overlay is opaque"
 /// are properties of pixels and of nothing else; and for
-/// `native_tabs_open_switch_and_close_under_cage` the split is explicit — its four
-/// Neovim readbacks carry every discriminator, and the OCR pair carries the one
+/// `native_tabs_open_switch_and_close_under_cage` the split is explicit — its
+/// Neovim readbacks and process counts carry every discriminator, and the OCR pair carries the one
 /// claim they cannot make, that exactly ONE page's pane view is on screen at a time.
 /// `neovim_panes_stay_visible_beside_terminals_under_cage` is the reverse: its
 /// readbacks are preconditions, and its OCR term is the whole claim.
@@ -899,11 +904,6 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         "three_tabs_survive_a_relaunch_under_cage",
     ),
     (
-        TABS_RESTORE_RUN1_READBACK_NAME,
-        "TABS_RESTORE_RUN1_READBACK_NAME",
-        "three_tabs_survive_a_relaunch_under_cage",
-    ),
-    (
         TABS_RESTORE_READBACK_NAME,
         "TABS_RESTORE_READBACK_NAME",
         "three_tabs_survive_a_relaunch_under_cage",
@@ -1359,6 +1359,43 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         TABS_READ_F_NAME,
         "TABS_READ_F_NAME",
         "native_tabs_open_switch_and_close_under_cage",
+    ),
+    // The reload and per-tab crash smokes OCR nothing; these rows serve the generic loop, since
+    // the sidebar draws each name and the readbacks' paths are echoed in the cmdline.
+    (
+        RELOAD_FILE,
+        "RELOAD_FILE",
+        "a_file_saved_in_one_tab_reloads_in_another_on_switch_under_cage",
+    ),
+    (
+        RELOAD_PID_ONE_NAME,
+        "RELOAD_PID_ONE_NAME",
+        "a_file_saved_in_one_tab_reloads_in_another_on_switch_under_cage",
+    ),
+    (
+        RELOAD_PID_TWO_NAME,
+        "RELOAD_PID_TWO_NAME",
+        "a_file_saved_in_one_tab_reloads_in_another_on_switch_under_cage",
+    ),
+    (
+        RELOAD_READ_NAME,
+        "RELOAD_READ_NAME",
+        "a_file_saved_in_one_tab_reloads_in_another_on_switch_under_cage",
+    ),
+    (
+        TABCRASH_FILE_A,
+        "TABCRASH_FILE_A",
+        "one_tabs_neovim_crash_restarts_only_that_tab_under_cage",
+    ),
+    (
+        TABCRASH_FILE_B,
+        "TABCRASH_FILE_B",
+        "one_tabs_neovim_crash_restarts_only_that_tab_under_cage",
+    ),
+    (
+        TABCRASH_READ_NAME,
+        "TABCRASH_READ_NAME",
+        "one_tabs_neovim_crash_restarts_only_that_tab_under_cage",
     ),
     // The save smokes OCR nothing; these rows serve the generic loop. SAVEAS_PROPOSED_NAME is absent:
     // it is asserted not to exist on disk, so registering it would say the opposite.
@@ -1962,8 +1999,8 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// depend on — the second fixture's path being its subdirectory joined to the bare
 /// name leg (d) types, the first being a bare name `bufname('%')` can equal, and
 /// [`TABS_SUBDIR`] being a single component that is not [`TEMP_CWD_BASENAME`], which
-/// is what keeps a new tab rooted where the window was distinguishable from one left
-/// at the project root.
+/// is what keeps a new tab started where the selected tab's Neovim is distinguishable
+/// from one started at the project root.
 ///
 /// [`NEAR_FIXTURE_FILE`] carries [`near_fixture_body`], whose word the neighbour-pane
 /// smoke asserts PRESENT in every capture, so the block that checks it pins the line
@@ -3180,8 +3217,8 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         "TWOWIN_SUBDIR = {TWOWIN_SUBDIR:?} must be a single non-empty path component: it is used \
          both as a directory to create under the temp cwd and as the basename the restored `cwd` \
          is matched against. An empty one puts window B's project at the temp cwd itself, which \
-         is the collision the fixture layout exists to avoid (two windows on one project share \
-         the durable swap directory and meet Neovim's W325)."
+         is the collision the fixture layout exists to avoid: two windows on one project save \
+         the same `cwd`, and the saved order stops being readable off it."
     );
 
     // A copy of `palette::tests::NEW_WINDOW_PALETTE_QUERY`; this pins its shape, since a stray space or
@@ -3316,12 +3353,12 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
     );
     assert_ne!(
         TABS_SUBDIR, TEMP_CWD_BASENAME,
-        "TABS_SUBDIR and TEMP_CWD_BASENAME are the same name ({TABS_SUBDIR:?}). Where the new tab \
-         is rooted is checked on the final component of its `getcwd()`, and the one wrong answer \
-         that assertion can still catch — a tab left at the PROJECT ROOT, because something other \
-         than the window's live folder reached `create_tabpage` — has TEMP_CWD_BASENAME as its \
-         final component. With one name for both, that key stops separating them and the last \
-         thing assertion 5 discriminates is gone."
+        "TABS_SUBDIR and TEMP_CWD_BASENAME are the same name ({TABS_SUBDIR:?}). Where the new \
+         tab's Neovim starts is checked on the final component of its `getcwd()`, and the wrong \
+         answer that assertion exists to catch — a core started at the PROJECT ROOT, because the \
+         selected tab's live cwd never reached `new_tab_cwd` — has TEMP_CWD_BASENAME as its final \
+         component. With one name for both, that key stops separating them and assertion 5 \
+         discriminates nothing."
     );
 
     // The tab-persistence exemption, the two-window shape: its names match the compared strings, which
@@ -3330,15 +3367,12 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         TABS_RESTORE_FILES.len(),
         3,
         "the tab-persistence smoke must carry THREE fixtures, one per tab, not {}. The count is \
-         load-bearing rather than generous. After materialization Neovim is current on the LAST \
-         tabpage created until the queued `set_current_tabpage` for tab 0 lands, so the last tab \
-         may or may not get one refresh — only a MIDDLE tab is guaranteed never to be \
-         Neovim-current at launch. Tab 1 is therefore the one deterministically never-selected \
-         tab, and it is the whole subject of assertion 3: the only tab whose persisted leaf can \
-         ONLY have been resolved from the window-keyed snapshot maps, because the current \
-         tabpage's `Snapshot::windows` never held its windows for a single wake of run 2. Cut the \
-         smoke to two tabs and that assertion silently starts measuring a tab the launch may well \
-         have had current.",
+         load-bearing rather than generous. Tab 0 is the first saved tab and the last tab is the \
+         one selected when run 1 quits, so each is what some shortcut keeps when it keeps one \
+         tab: a save that truncates to the first entry, a gather of the selected tab alone, or a \
+         restore that opens only the first planned tab. Only a MIDDLE tab is neither, and it is \
+         kept only by a save and a restore that walk every tab. Cut the smoke to two tabs and \
+         every tab it has is one some single-tab shortcut keeps.",
         TABS_RESTORE_FILES.len()
     );
     let mut tab_fixture_names = std::collections::HashSet::new();

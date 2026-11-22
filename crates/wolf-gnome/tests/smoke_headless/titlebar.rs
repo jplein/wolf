@@ -5,6 +5,7 @@
 
 use super::editor::SAVE_AS_GDK_DEBUG;
 use super::lighthouse::{rgb8, stage_init_lua, Background, Lighthouse};
+use super::recovery::with_nvim_pid_helper;
 use super::*;
 
 /// The staged `init.lua`, the readback and the captures, all under `XDG_RUNTIME_DIR` so no
@@ -105,8 +106,9 @@ const TB_BACKDROP_MIN_REFERENCE_INK: f64 = 30.0;
 /// The TITLEBAR scenario: one launch, four captures, the last with GTK's in-process save
 /// dialog up.
 ///
-/// The app opens a second tab with Ctrl+Shift+T, reads back `g:colors_name`, `&background`
-/// and the tabpage count, and captures FOCUSED. It sets the other background and captures
+/// The app opens a second tab with Ctrl+Shift+T, waits for that tab's Neovim to make two
+/// live `nvim` children, reads back the new Neovim's `g:colors_name` and `&background`, and
+/// captures FOCUSED. It sets the other background and captures
 /// LIVE, then sets `WolfTitlebar` and captures WOLF. `:doautocmd ColorScheme` is what makes
 /// the theme tracker re-read the group, since a `:hi` alone fires no autocommand.
 ///
@@ -126,6 +128,7 @@ const TB_BACKDROP_MIN_REFERENCE_INK: f64 = 30.0;
 /// | --- | --- |
 /// | `11` | the app died before it was ready for input |
 /// | `12` | the readback never appeared |
+/// | `13` | Ctrl+Shift+T did not leave two live Neovims |
 /// | `40` | the launch never became ready (the shared convention) |
 const TB_SCENARIO: &str = r#"
 set -eu
@@ -170,8 +173,9 @@ wait_ready "$app_pid" 11 "wolf-gnome titlebar smoke"
 
 # FOCUSED -- two tabs, the configured background.
 wtype -M ctrl -M shift -k t -m shift -m ctrl
+wait_nvim_count 2 13 "after Ctrl+Shift+T opened a second tab"
 sleep "$TABS_BAR_SETTLE"
-wtype -- ":call writefile([get(g:, 'colors_name', ''), &background, printf('%d', len(gettabinfo()))], '$READ')"
+wtype -- ":call writefile([get(g:, 'colors_name', ''), &background], '$READ')"
 wtype -k Return
 wait_file "$READ" || exit 12
 sleep "$SETTLE"
@@ -395,20 +399,19 @@ fn hex((r, g, b): Rgb8) -> String {
     format!("#{r:02x}{g:02x}{b:02x}")
 }
 
-/// Checks the readback: `lighthouse`, `background`'s name and two tabpages.
+/// Checks the readback: `lighthouse` and `background`'s name, from the second tab's Neovim.
 fn tb_assert_readback(smoke: &str, path: &Path, background: Background) {
     let raw = read_readback(path, smoke);
     let lines: Vec<&str> = raw.lines().map(str::trim).collect();
     let name = background.name();
     assert_eq!(
         lines,
-        ["lighthouse", name, "2"],
-        "{smoke}: Neovim reports `g:colors_name`, `&background` and the tabpage count as \
-         {lines:?}, not [\"lighthouse\", {name:?}, \"2\"]. An empty name means `init.lua` did not \
-         find the staged `lighthouse/` beside it (WOLF_INIT_LUA); the other background means the \
-         configured appearance did not reach Neovim; a count of 1 means Ctrl+Shift+T opened no \
-         tab, so the tab bar had no height in the captures. The pixels would then fail for \
-         reasons that are not the titlebar's."
+        ["lighthouse", name],
+        "{smoke}: the second tab's Neovim reports `g:colors_name` and `&background` as \
+         {lines:?}, not [\"lighthouse\", {name:?}]. An empty name means `init.lua` did not find \
+         the staged `lighthouse/` beside it (WOLF_INIT_LUA); the other background means the \
+         configured appearance did not reach the new tab's Neovim. The pixels would then fail \
+         for reasons that are not the titlebar's."
     );
 }
 
@@ -466,7 +469,7 @@ fn titlebar_smoke(smoke: &str, background: Background) {
 
     // The desktop reports the scheme opposite to the configured appearance.
     let desktop = format!("prefer-{other_name}");
-    let status = cage_command(TB_SCENARIO, &cwd, &runtime_dir)
+    let status = cage_command(&with_nvim_pid_helper(TB_SCENARIO), &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("WOLF_INIT_LUA", &init_lua)
         .env("WOLF_CONFIG_DIR", &config)
@@ -488,7 +491,8 @@ fn titlebar_smoke(smoke: &str, background: Background) {
         status.success(),
         "{smoke}: the cage scenario exited unsuccessfully ({status}). Exit 11: the app died \
          before it was ready for input. Exit 12: the readback never appeared, so keys were not \
-         reaching Neovim. Exit 40: the launch never became ready."
+         reaching Neovim. Exit 13: Ctrl+Shift+T started no second Neovim, so no second tab \
+         gave the tab bar its height in the captures. Exit 40: the launch never became ready."
     );
 
     let bands = tb_bands();
