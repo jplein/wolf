@@ -22,6 +22,7 @@ use crate::layout::{LayoutIntent, SplitOrientation};
 use crate::pump::PumpTarget;
 use crate::redraw::{IntentQueue, TrackedCwd, WakeFn};
 use crate::render::{Rgb, SharedSnapshot};
+use crate::tab_id::TabId;
 
 use router::Route;
 use session::Session;
@@ -254,6 +255,8 @@ pub(crate) struct TerminalRegistry {
     tracked_cwd: TrackedCwd,
     fallback_cwd: PathBuf,
     terminfo_dir: Option<PathBuf>,
+    /// The tab every session started from here belongs to; it outlives a Neovim restart.
+    tab_id: Mutex<Option<TabId>>,
     /// The pump's current Neovim handle, which a restart swaps; set once after spawn.
     rpc: OnceLock<Arc<RwLock<PumpTarget>>>,
 }
@@ -287,6 +290,7 @@ impl TerminalRegistry {
             tracked_cwd: parts.tracked_cwd,
             fallback_cwd: parts.fallback_cwd,
             terminfo_dir: parts.terminfo_dir,
+            tab_id: Mutex::new(None),
             rpc: OnceLock::new(),
         })
     }
@@ -309,8 +313,14 @@ impl TerminalRegistry {
             .unwrap_or_else(|| self.fallback_cwd.clone())
     }
 
+    /// Gives every session started after the call `WOLF_TAB_ID` set to `id`.
+    pub(crate) fn set_tab_id(&self, id: TabId) {
+        *self.tab_id.lock() = Some(id);
+    }
+
     /// Spawns `command` (the user's shell for `None`) in `cwd` and registers the session,
-    /// its first frame published. Fails when the pty or the program cannot be started.
+    /// its first frame published, with the terminfo directory and tab ID the registry holds.
+    /// Fails when the pty or the program cannot be started.
     pub(crate) fn spawn(
         &self,
         command: Option<TerminalCommand>,
@@ -323,7 +333,10 @@ impl TerminalRegistry {
             id,
             command,
             cwd,
-            self.terminfo_dir.as_deref(),
+            pty::ShellEnv {
+                terminfo: self.terminfo_dir.as_deref(),
+                tab_id: *self.tab_id.lock(),
+            },
             &colours,
             self.wake.clone(),
             self.me.clone(),

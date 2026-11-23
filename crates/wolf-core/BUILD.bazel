@@ -30,7 +30,10 @@ rust_test(
 
 rust_library(
     name = "wolf_core",
-    srcs = glob(["src/**/*.rs"]),
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**"],
+    ),
     # Every file a module include_str!'s: one outside these globs compiles under Cargo but
     # fails under Bazel.
     compile_data = glob([
@@ -45,6 +48,16 @@ rust_library(
     visibility = ["//visibility:public"],
     # all_crate_deps never lists a workspace member, so wolf-vt is named here.
     deps = all_crate_deps(normal = True) + ["//crates/wolf-vt:wolf_vt"],
+)
+
+# The `wolf` command, which Cargo finds as src/bin/wolf.rs.
+rust_binary(
+    name = "wolf",
+    srcs = ["src/bin/wolf.rs"],
+    crate_root = "src/bin/wolf.rs",
+    edition = "2021",
+    visibility = ["//visibility:public"],
+    deps = [":wolf_core"],
 )
 
 # The grid_dump probe, staged like the real-nvim tests. `bazel run` starts it in its runfiles
@@ -1576,6 +1589,91 @@ rust_test(
     # run unsandboxed. `no-sandbox` (vs `local`) keeps Bazel test-result caching.
     tags = ["no-sandbox"],
     size = "small",
+    edition = "2021",
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim",
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+    },
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
+)
+
+rust_test(
+    name = "tab_id",
+    srcs = ["tests/tab_id.rs"],
+    crate_root = "tests/tab_id.rs",
+    size = "small",
+    edition = "2021",
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
+rust_test(
+    name = "file_open_pane",
+    srcs = ["tests/file_open_pane.rs"],
+    crate_root = "tests/file_open_pane.rs",
+    size = "small",
+    edition = "2021",
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
+rust_test(
+    name = "file_open_project",
+    srcs = ["tests/file_open_project.rs"],
+    crate_root = "tests/file_open_project.rs",
+    # Spawns the real `git`, which the macOS build sandbox does not allow.
+    tags = ["no-sandbox"],
+    size = "small",
+    edition = "2021",
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
+rust_test(
+    name = "open_channel",
+    srcs = ["tests/open_channel.rs"],
+    crate_root = "tests/open_channel.rs",
+    # Binds real Unix-domain sockets, which the macOS build sandbox does not allow.
+    tags = ["no-sandbox"],
+    size = "small",
+    edition = "2021",
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
+rust_test(
+    name = "wolf_command",
+    srcs = ["tests/wolf_command.rs"],
+    crate_root = "tests/wolf_command.rs",
+    # Spawns the real `wolf` binary over real sockets, which the macOS build sandbox does not allow.
+    tags = ["no-sandbox"],
+    size = "small",
+    edition = "2021",
+    data = [":wolf"],
+    env = {
+        "WOLF_TEST_WOLF_BIN": "$(rootpath :wolf)",
+    },
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
+)
+
+rust_test(
+    name = "terminal_tab_id",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/terminal_tab_id.rs",
+    ],
+    crate_root = "tests/terminal_tab_id.rs",
+    # Spawns a real nvim and real shells in ptys, which the macOS build sandbox does not allow.
+    # Medium: one case restarts Neovim.
+    tags = ["no-sandbox"],
+    size = "medium",
     edition = "2021",
     data = [
         "//bazel/nvim:nvim_tree",

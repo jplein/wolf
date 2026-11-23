@@ -15,6 +15,7 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::ptr;
 
 use super::TerminalCommand;
+use crate::tab_id::{TabId, WOLF_TAB_ID_ENV};
 
 /// The terminal type of Wolf's own terminfo entry, compiled from the pinned libghostty-vt.
 const GHOSTTY_TERM: &str = "xterm-ghostty";
@@ -33,14 +34,25 @@ pub(crate) struct Spawned {
     pub(crate) master: OwnedFd,
 }
 
+/// What a session's environment takes from its core, grouped so that `Session::start` stays
+/// within clippy's argument limit.
+#[derive(Clone, Copy)]
+pub(crate) struct ShellEnv<'a> {
+    /// Wolf's terminfo directory, which may lack the entry.
+    pub(crate) terminfo: Option<&'a Path>,
+    /// The tab the session belongs to.
+    pub(crate) tab_id: Option<TabId>,
+}
+
 /// Starts `command` in `cwd` on a fresh pty of `cols` by `rows` cells, each `cell_px` pixels,
 /// as the leader of a new session whose controlling terminal is the pty. The shell is
-/// `xterm-ghostty` with `TERMINFO` set to `terminfo` when that directory holds the entry, else
-/// `xterm-256color` with the inherited `TERMINFO`.
+/// `xterm-ghostty` with `TERMINFO` set to `env.terminfo` when that directory holds the entry,
+/// else `xterm-256color` with the inherited `TERMINFO`. `WOLF_TAB_ID` is `env.tab_id`, and is
+/// removed when there is none.
 pub(crate) fn spawn(
     command: &TerminalCommand,
     cwd: &Path,
-    terminfo: Option<&Path>,
+    env: ShellEnv<'_>,
     (cols, rows): (u16, u16),
     cell_px: (u32, u32),
 ) -> io::Result<Spawned> {
@@ -69,9 +81,14 @@ pub(crate) fn spawn(
     let mut cmd = Command::new(&command.program);
     cmd.args(&command.args).current_dir(cwd);
     // Setting TERMINFO replaces one the app inherited, such as a Ghostty shell's.
-    match ghostty_terminfo(terminfo) {
+    match ghostty_terminfo(env.terminfo) {
         Some(dir) => cmd.env("TERM", GHOSTTY_TERM).env("TERMINFO", dir),
         None => cmd.env("TERM", FALLBACK_TERM),
+    };
+    // Removing it keeps a value the app inherited out of a shell of a tab with no ID.
+    match env.tab_id {
+        Some(id) => cmd.env(WOLF_TAB_ID_ENV, id.to_string()),
+        None => cmd.env_remove(WOLF_TAB_ID_ENV),
     };
     cmd.env("COLORTERM", "truecolor")
         .env("TERM_PROGRAM", "Wolf")

@@ -31,7 +31,7 @@ The running app listens on a Unix-domain socket in `wolf_core::state_dir()`. The
 
 A request carries the absolute path or none, whether to wait, and `WOLF_TAB_ID` when set. The app replies once it has taken the request, and, for a wait, once more when the wait ends, with its outcome. A connection that closes before that final reply ends the wait as an abnormal close (§6).
 
-A socket path is limited to 104 bytes on macOS, so a state directory whose socket path would exceed it is an error the command and the app both report, rather than a silent fallback elsewhere.
+A socket path is limited to 104 bytes on macOS, the terminating null byte included, so on both platforms a socket path over 103 bytes is an error the command and the app both report, rather than a silent fallback elsewhere.
 
 ### When Wolf is not running
 
@@ -59,7 +59,7 @@ Opening a file `F` chooses a tab (§5.1), places `F` in a pane of it (§5.2), an
    2. the nearest directory above `R` that is open in a tab, unless `R` is a linked worktree of that directory's repository, meaning `git -C R rev-parse --git-common-dir` resolves to that repository's git directory; a submodule therefore resolves to its open superproject, and a worktree never does;
    3. `R` itself.
 
-   With no repository above `F`, `P` is the nearest directory open in a tab that contains `F`, or else `F`'s directory. "Open in a tab" means a tab is on that directory at the time of the request, not that a project state is stored.
+   With no repository above `F`, `P` is the nearest directory open in a tab that contains `F`, or else `F`'s directory, or its nearest existing ancestor when it does not exist. "Open in a tab" means a tab is on that directory at the time of the request, not that a project state is stored.
 
 3. **Then the tab.** When `P` is open in a tab, Wolf chooses one by the rule that chooses a directory's project state ([application-state.md](application-state.md) §4, "Which tab becomes a directory's project state"). Otherwise it opens `P` as Open Folder does (§6 there), and `F` goes into the tab that results.
 
@@ -67,7 +67,7 @@ A pane on `F` in a tab other than the chosen one plays no part.
 
 ### 5.2 Choosing the pane
 
-In the chosen tab, a zoomed pane is unzoomed first. If a pane already shows `F`, Wolf focuses it. Otherwise `F` opens in the first of:
+In the chosen tab, a zoomed pane is unzoomed first. If an editor pane already shows `F`, Wolf focuses it: the active pane when it is one of them, else the first in depth-first order. A preview of `F` does not count. Otherwise `F` opens in the first of:
 
 1. the tab's active pane, if it is an editor pane;
 2. the leftmost editor pane;

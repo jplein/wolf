@@ -58,6 +58,11 @@
 //! - [`api`]: the FFI-shaped front-end surface ([`WolfCore`]).
 //! - [`config`]: the GUI-free user-preferences reader ([`WolfConfig`]).
 //! - [`state`]: the platform state directory and the directories Wolf keeps under it.
+//! - [`tab_id`]: the random ID of a tab ([`TabId`]), which its terminal sessions carry.
+//! - [`file_open`]: the rules that place a path opened from outside Wolf: directory versus
+//!   file, the project directory, and the pane.
+//! - [`open_channel`]: the socket the `wolf` command reaches a running Wolf through, its
+//!   client and the app's listener.
 
 pub mod api;
 pub mod app_state;
@@ -68,6 +73,7 @@ pub mod command;
 pub mod command_mru;
 pub mod config;
 mod db;
+pub mod file_open;
 pub mod files;
 pub mod input;
 pub mod layout;
@@ -78,6 +84,7 @@ pub mod markdown;
 pub mod mru;
 pub mod nav_history;
 pub mod nvim;
+pub mod open_channel;
 pub mod palette;
 pub mod pane_status;
 mod pump;
@@ -88,6 +95,7 @@ pub mod render;
 pub mod search;
 pub mod search_tree;
 pub mod state;
+pub mod tab_id;
 pub mod terminal;
 pub mod tree;
 
@@ -98,6 +106,7 @@ pub use buffer_picker::{rank_buffers, BufInfo, BufferRow};
 pub use command::{Command, CommandSpec, MenuGroup, COMMAND_SPECS};
 pub use command_mru::{CommandMru, COMMAND_MRU_LIMIT};
 pub use config::{default_config, load_or_create, preferences_dir, Appearance, WolfConfig};
+pub use file_open::{choose_pane, project_directory, OpenTarget, PaneChoice, PanePlacement};
 pub use files::{FileEntry, FileSearch, FileSearchReadGuard};
 pub use input::{
     key_to_notation, InputEvent, Key, KeyEvent, MouseAction, MouseButton, MouseEvent,
@@ -119,6 +128,10 @@ pub use nav_history::{
     derive_target, disambiguate, MenuRow, NavHistory, NavMove, NavTarget, PaneHistory, MAX_ENTRIES,
     MAX_MENU_ROWS,
 };
+pub use open_channel::{
+    open_socket_path, OpenChannelError, OpenClient, OpenListener, OpenReply, OpenRequest,
+    OPEN_SOCKET_NAME, OPEN_SOCKET_PATH_MAX,
+};
 pub use palette::{rank_palette, PaletteRow, PaletteRowKind, PaletteWindow};
 pub use pane_status::{pane_status, PaneStatus, NO_NAME};
 pub use rank::{rank_matches, rank_matches_top_n, Match, MatchKey};
@@ -136,6 +149,7 @@ pub use state::{
     parsers_user_dir, runtime_user_dir, seed_runtime_user_dir, spell_dir, state_dir,
     INIT_USER_FILE_NAME,
 };
+pub use tab_id::{TabId, WOLF_TAB_ID_ENV};
 pub use terminal::{
     terminfo_dir_from_env, TerminalCell, TerminalCellWidth, TerminalCommand, TerminalCursor,
     TerminalCursorStyle, TerminalFrame, TerminalId, TerminalMouseEvent, TerminalMouseKind,

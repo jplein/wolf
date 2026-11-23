@@ -221,6 +221,10 @@ The column semantics are the contract: `line` is a 1-based hard buffer line and 
 
 Terminals emulated in core by libghostty-vt, with Neovim keeping the layout through a placeholder window per terminal pane, are specified in [Terminal panes](terminal-panes.md). A window whose `win_buffers` entry carries a session is a terminal pane: the front-end paints it from `terminal_frame` and sends its input to the session API, never to the input channel. A session's publish fires the wake without bumping `seq`.
 
+### Input: open requests (outside → front-end)
+
+Requests from the `wolf` command reach the app over the channel [cli-and-file-open.md](cli-and-file-open.md#2-the-channel) §2 specifies. Core's listener queues each one for the front-end to drain on a wake, the drainable-queue shape above.
+
 ### Input: events (front-end → core)
 
 The front-end pushes `InputEvent`s onto an ordered FIFO channel that a single consumer task translates into Neovim RPC. Delivery is fire-and-forget: the channel keeps keystrokes in order and fuses a run of consecutive `Key` events into one `nvim_input` call, so a burst produces one redraw flush.

@@ -11,7 +11,10 @@ package(default_visibility = ["//visibility:public"])
 rust_clippy(
     name = "clippy_core",
     testonly = True,
-    deps = ["//crates/wolf-core:wolf_core"],
+    deps = [
+        "//crates/wolf-core:wolf",
+        "//crates/wolf-core:wolf_core",
+    ],
 )
 
 rust_clippy(
@@ -60,7 +63,10 @@ clippy_fix(
 
 rustfmt_test(
     name = "rustfmt_core",
-    targets = ["//crates/wolf-core:wolf_core"],
+    targets = [
+        "//crates/wolf-core:wolf",
+        "//crates/wolf-core:wolf_core",
+    ],
 )
 
 rustfmt_test(

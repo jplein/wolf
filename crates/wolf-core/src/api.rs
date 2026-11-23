@@ -40,6 +40,7 @@ use crate::search::{self, SearchOptions, SearchSession, SearchState};
 use crate::state::{
     parsers_user_dir, runtime_user_dir, seed_runtime_user_dir, spell_dir, state_dir, swap_dir_for,
 };
+use crate::tab_id::TabId;
 use crate::terminal::{
     RegistryParts, TerminalCommand, TerminalFrame, TerminalId, TerminalMouseEvent,
     TerminalRegistry, TerminalScrollEvent, TerminalTarget,
@@ -1726,6 +1727,14 @@ impl WolfCore {
         }
         self.send_input(InputEvent::BindTerminal { id, target });
         true
+    }
+
+    /// Gives this core's tab ID to the terminal sessions it starts after the call, panes and
+    /// drawer alike, as `WOLF_TAB_ID`; a session already running keeps the environment it
+    /// started with. The ID survives [`restart_nvim`](Self::restart_nvim), which keeps the
+    /// sessions' registry. Until the first call, sessions start with `WOLF_TAB_ID` removed.
+    pub fn set_tab_id(&self, id: TabId) {
+        self.terminals.set_tab_id(id);
     }
 
     /// The directory session `id`'s shell is in, which a front-end persists as a terminal
