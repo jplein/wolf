@@ -526,12 +526,16 @@
               # entries, so every crate comes from crates.io.
               cargoLock.lockFile = ./Cargo.lock;
 
-              # Only the front-end binary: `wolf-ffi` is the macOS app's swift-bridge crate.
+              # The app and the `wolf` command, which starts the app beside it; `wolf-ffi` is macOS's.
               cargoBuildFlags = [
                 "--package"
                 "wolf-gnome"
                 "--bin"
                 "wolf-gnome"
+                "--package"
+                "wolf-core"
+                "--bin"
+                "wolf"
               ];
 
               # The default `buildType = "release"` selects `[profile.release]`. Never override `strip`:
@@ -587,8 +591,8 @@
                 cp -R ${wolfGhosttyVt}/share/terminfo/. "$out/share/wolf/terminfo/"
                 chmod -R u+w "$out/share/wolf/terminfo"
 
-                # --- Desktop entry: an absolute `Exec`, so PATH cannot launch an unwrapped `target/release` build
-                # No `%f`, `%U` or `MimeType`: `app::run` ignores argv. `StartupWMClass` is `app.rs`'s APP_ID.
+                # --- Desktop entry: `wolf %f` hands GNOME Files' path to the open channel, absolute so PATH
+                # cannot pick another `wolf`. `StartupWMClass` is `app.rs`'s APP_ID.
                 mkdir -p "$out/share/applications"
                 cat > "$out/share/applications/org.wolf.Wolf.desktop" <<EOF
                 [Desktop Entry]
@@ -597,10 +601,11 @@
                 Name=Wolf
                 GenericName=Markdown Editor
                 Comment=A Markdown editor that embeds Neovim as its editing engine
-                Exec=$out/bin/wolf-gnome
+                Exec=$out/bin/wolf %f
                 Icon=org.wolf.Wolf
                 Terminal=false
                 Categories=Utility;TextEditor;Development;
+                MimeType=text/markdown;inode/directory;
                 StartupNotify=true
                 StartupWMClass=org.wolf.Wolf
                 EOF
@@ -662,6 +667,12 @@
                   --set-default FONTCONFIG_FILE "$out/share/wolf/fonts.conf"
                   --set-default WOLF_TERMINFO_DIR "$out/share/wolf/terminfo"
                 )
+              '';
+
+              # The app alone: `bin/wolf` links no GTK, and a wrapper would hand it the app's environment.
+              dontWrapGApps = true;
+              postFixup = ''
+                wrapGApp "$out/bin/wolf-gnome"
               '';
 
               meta = {

@@ -4,10 +4,10 @@
 //! `win.`-namespace actions and its own contribution to the persisted state tree.
 //!
 //! [`build`] is the whole window. [`crate::coordinator`] is the process-scoped
-//! layer above it and owns the six things a second copy of would be wrong — the
-//! state store, the config, the cell metrics, the `app.`-namespace actions, the
-//! session's launch plans and the test-only readiness probe — so everything here
-//! is per-window by construction.
+//! layer above it and owns what a second copy of would be wrong — the state store,
+//! the stacking order, the config, the cell metrics, the `app.`-namespace actions,
+//! the session's launch plans, the test-only readiness probe and the open channel's
+//! listener — so everything here is per-window by construction.
 //!
 //! - **Output / wake:** each tab's [`WolfCore`](wolf_core::WolfCore) runs Neovim on its own tokio
 //!   runtime and signals that tab's own wake channel when a new frame is ready
@@ -74,6 +74,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::io::Write;
+use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 
 use adw::prelude::*;
@@ -196,6 +197,19 @@ impl WindowHandle {
     /// ignore it, and `cage` does.
     pub fn present(&self) {
         self.inner.window.present();
+    }
+
+    /// Presents this window once it has painted its first frame, never earlier, so a raise
+    /// that arrives while the restore's present chain runs cannot map a window out of the
+    /// saved order ([`WindowHandle::show_after`]). As best-effort as [`WindowHandle::present`].
+    pub fn raise(&self) {
+        let weak = Rc::downgrade(&self.inner);
+        self.when_painted(Box::new(move || {
+            // Unmapped: the window is closing, which also runs what waits for a paint.
+            if let Some(inner) = weak.upgrade().filter(|inner| inner.window.is_mapped()) {
+                inner.window.present();
+            }
+        }));
     }
 
     /// Presents this window, which [`WindowParts::present`] deferred, once each of
@@ -400,48 +414,83 @@ impl WindowHandle {
         }
     }
 
-    /// Whether this window's selected tab is empty: the tab Open Folder fills.
+    /// Each tab's `WOLF_TAB_ID` with the tab it names, for routing a request from outside
+    /// Wolf ([`crate::open_request::route`]).
     #[must_use]
-    pub fn selected_is_empty(&self) -> bool {
-        self.inner.tabs.selected().is_some_and(|tab| tab.is_empty())
+    pub fn wolf_tab_ids(&self) -> Vec<(wolf_core::TabId, TabId)> {
+        self.inner
+            .tabs
+            .entries()
+            .iter()
+            .map(|tab| (tab.wolf_tab_id(), tab.id()))
+            .collect()
     }
 
-    /// The selected tab's core, or `None` before the first page exists.
-    #[must_use]
-    pub fn selected_core(&self) -> Option<CoreCell> {
-        self.inner.tabs.selected_core()
-    }
-
-    /// Open Folder's focus: selects `tab` and presents this window, best-effort on
-    /// Wayland ([`WindowHandle::present`]). Answers the tab's core, `None` when no
-    /// tab of this window is `tab`.
-    pub fn focus_tab(&self, tab: TabId) -> Option<CoreCell> {
-        let entry = self
-            .inner
+    /// This window's tab `tab`, or `None` when it holds none.
+    fn tab(&self, tab: TabId) -> Option<TabHandle> {
+        self.inner
             .tabs
             .entries()
             .into_iter()
-            .find(|entry| entry.id() == tab)?;
-        self.inner.tabs.select(&entry);
-        self.present();
-        Some(entry.core().clone())
+            .find(|entry| entry.id() == tab)
     }
 
-    /// Open Folder's fill: replaces the selected tab with the one tab `plan` plans, at
-    /// its page position ([`TabsHandle::replace`]), then gives the window the plan's
-    /// size when the replaced tab was its only one ([`open_folder::fill_size`]), and the
-    /// search panel the new tab's recorded fields. Answers the new tab's core, `None`,
-    /// with the window untouched, when it fails to start.
-    pub fn fill_selected_tab(&self, plan: &RestorePlan) -> Option<CoreCell> {
-        let old = self.inner.tabs.selected()?;
-        let tab = plan.tabs.first()?;
+    /// Whether this window's tab `tab` is empty: the tab Open Folder fills when it is the
+    /// current one. `false` when this window holds no such tab.
+    #[must_use]
+    pub fn tab_is_empty(&self, tab: TabId) -> bool {
+        self.tab(tab).is_some_and(|entry| entry.is_empty())
+    }
+
+    /// The selected tab, or `None` before the first page exists.
+    #[must_use]
+    pub fn selected_tab(&self) -> Option<TabHandle> {
+        self.inner.tabs.selected()
+    }
+
+    /// Open Folder's focus, and a request's activation: selects `tab` and raises this window
+    /// ([`WindowHandle::raise`]). Answers the tab, `None` when no tab of this window is `tab`.
+    pub fn focus_tab(&self, tab: TabId) -> Option<TabHandle> {
+        let entry = self.tab(tab)?;
+        self.inner.tabs.select(&entry);
+        self.raise();
+        Some(entry)
+    }
+
+    /// Open Folder's fill: replaces tab `tab` with the one tab `plan` plans, at its page
+    /// position, selected ([`TabsHandle::replace`]), then gives the window the plan's size
+    /// when the replaced tab was its only one ([`open_folder::fill_size`]), and the search
+    /// panel the new tab's recorded fields. Answers the new tab, `None`, with the window
+    /// untouched, when this window holds no `tab` or the new tab fails to start.
+    pub fn fill_tab(&self, tab: TabId, plan: &RestorePlan) -> Option<TabHandle> {
+        let old = self.tab(tab)?;
+        let planned = plan.tabs.first()?;
         let window_tabs = self.inner.tabs.len();
-        let filled = self.inner.tabs.replace(&old, tab_parts(tab))?;
+        let filled = self.inner.tabs.replace(&old, tab_parts(planned))?;
         if let Some((width, height)) = open_folder::fill_size(plan, window_tabs) {
             self.inner.window.set_default_size(width, height);
         }
         self.inner.shell.restore_selected_search();
-        Some(filled.core().clone())
+        Some(filled)
+    }
+
+    /// Opens `file`, a path from outside Wolf in [`wolf_core::OpenTarget::File`]'s form, in
+    /// tab `tab`: selects it, hides an empty tab's empty-state page while leaving the tab
+    /// empty for the save, queues the file with its pane view
+    /// ([`crate::pane_view::PaneHandle::open_file`]), wakes it, and raises this window.
+    /// `false` when this window holds no such tab.
+    pub fn open_file(&self, tab: TabId, file: PathBuf) -> bool {
+        let Some(entry) = self.tab(tab) else {
+            return false;
+        };
+        self.inner.tabs.select(&entry);
+        if entry.is_empty() {
+            entry.hide_empty_state();
+        }
+        entry.panes().open_file(file);
+        entry.wake();
+        self.raise();
+        true
     }
 
     /// This window's reading for the test-only readiness predicate

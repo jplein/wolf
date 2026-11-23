@@ -172,6 +172,9 @@ pub struct TabRestart {
 struct TabInner {
     /// This tab's identity within its window.
     id: TabId,
+    /// This tab's `WOLF_TAB_ID` (`specs/cli-and-file-open.md` §3), which its core gives every
+    /// terminal session it starts. Minted with the core and kept across a crash restart.
+    wolf_tab_id: wolf_core::TabId,
     /// The view this page belongs to, so a tab can answer whether it is the
     /// selected one without the registry above it.
     view: adw::TabView,
@@ -220,6 +223,13 @@ impl TabHandle {
     #[must_use]
     pub fn id(&self) -> TabId {
         self.inner.id
+    }
+
+    /// This tab's `WOLF_TAB_ID`, which a request from one of its terminals carries. Not
+    /// [`TabHandle::id`], which is unique only within the window.
+    #[must_use]
+    pub fn wolf_tab_id(&self) -> wolf_core::TabId {
+        self.inner.wolf_tab_id
     }
 
     /// This tab's page, for the [`adw::TabView`] calls that name one.
@@ -312,6 +322,12 @@ impl TabHandle {
     pub fn set_empty(&self, empty: bool) {
         self.inner.empty_state.set_visible(empty);
         self.inner.state.set_empty(empty);
+    }
+
+    /// Hides this tab's empty-state page so a file opened from outside Wolf shows, and leaves
+    /// the tab empty for persistence: it is still on no folder.
+    pub fn hide_empty_state(&self) {
+        self.inner.empty_state.set_visible(false);
     }
 
     /// Whether this tab is in the empty state.
@@ -513,6 +529,9 @@ impl TabsInner {
                 return None;
             }
         };
+        // Before anything else touches the core, so no terminal session starts without it.
+        let wolf_tab_id = wolf_core::TabId::random();
+        core.set_tab_id(wolf_tab_id);
         let core: CoreCell = Rc::new(RefCell::new(Some(core)));
         // Before any widget, so the tab's panes first paint under the resolved scheme.
         appearance::apply_at_launch(&self.config, &core);
@@ -553,6 +572,7 @@ impl TabsInner {
         let entry = TabHandle {
             inner: Rc::new(TabInner {
                 id,
+                wolf_tab_id,
                 view: self.view.clone(),
                 page: page.clone(),
                 core,

@@ -458,34 +458,34 @@ fn desktop_value<'a>(keys: &'a [(String, String)], wanted: &str) -> Option<&'a s
         .map(|(_, value)| value.as_str())
 }
 
-/// The desktop entry launches the wrapped store binary by absolute path, carries no
-/// field code and claims no MIME type.
+/// The `wolf` command, relative to the store root: the sibling of [`BIN_RELATIVE`] that the
+/// command's Linux launcher starts the app beside.
+const WOLF_RELATIVE: &str = "bin/wolf";
+
+/// The command's usage line, which it prints on stderr with every refused invocation.
+const WOLF_USAGE: &str = "usage: wolf [--wait] [PATH]";
+
+/// The `MimeType=` value: Markdown files and folders, `specs/cli-and-file-open.md` §7.
+const EXPECT_MIME: &str = "text/markdown;inode/directory;";
+
+/// The desktop entry runs the packaged `wolf` command by absolute path with one file, and
+/// offers Wolf for Markdown files and folders.
 ///
-/// ## Why `Exec` must be the absolute store path
+/// ## Why `Exec` is `$out/bin/wolf %f`, absolute
 ///
-/// The entry and the binary are outputs of the same derivation, so the path cannot
-/// dangle while the entry is visible, and an absolute path removes any dependence on
-/// `PATH` ordering. A bare `wolf-gnome` would be resolved by the session's `PATH`,
-/// where a developer's `target/release` directory ahead of their profile would launch
-/// an UNWRAPPED binary carrying no `WOLF_NVIM_BIN` and no installed `init.lua` — a
-/// silent wrong-artifact launch from the application menu.
-///
-/// ## Why no field code and no `MimeType`
-///
-/// `app::run` calls `app.run_with_args::<&str>(&[])`, so the process ignores its real
-/// argv entirely. A `%f` or `%U` would make the desktop hand Wolf a path it silently
-/// drops, and a `MimeType=text/markdown` would put Wolf in the "Open With" list for
-/// every `.md` file and then open an empty window. Both are the shape
-/// `notes/wolf-gnome/window-structure.md` rejects: a control that visibly refuses input.
+/// GNOME Files hands a file or folder to the command, which sends it over the open channel
+/// and launches the app beside it when none runs (`specs/cli-and-file-open.md` §2 and §7).
+/// The entry and the command are outputs of one derivation, so the path cannot dangle while
+/// the entry is visible; a bare `wolf` is resolved through the session's `PATH`, where some
+/// other `wolf` can come first. `%f` passes one path, which is all the command takes.
 ///
 /// ## Falsifiers
 ///
-/// Change `Exec=` to a bare `wolf-gnome`, and separately to `$out/bin/wolf-gnome %U`.
-/// Add `MimeType=text/markdown;`.
+/// Restore `Exec=$out/bin/wolf-gnome` (K2). Drop the `MimeType` line (K3).
 #[test]
 #[ignore = "reads the installed Nix output; run through ./tools/wolf-package-smoke.sh"]
-fn the_packaged_desktop_entry_launches_the_wrapped_binary_and_claims_no_files() {
-    const TEST: &str = "the_packaged_desktop_entry_launches_the_wrapped_binary_and_claims_no_files";
+fn the_packaged_desktop_entry_runs_the_wolf_command_for_markdown_and_folders() {
+    const TEST: &str = "the_packaged_desktop_entry_runs_the_wolf_command_for_markdown_and_folders";
 
     let out = packaged_out(TEST);
     let path = out.join(DESKTOP_RELATIVE);
@@ -497,8 +497,7 @@ fn the_packaged_desktop_entry_launches_the_wrapped_binary_and_claims_no_files() 
     assert!(
         !keys.is_empty(),
         "{TEST}: {} declares no `{DESKTOP_SECTION}` group this scanner can read, so every key \
-         lookup below would answer None and the must-NOT-contain assertions would pass \
-         vacuously. Its contents were:\n{text}",
+         lookup below would answer None. Its contents were:\n{text}",
         path.display()
     );
 
@@ -520,40 +519,71 @@ fn the_packaged_desktop_entry_launches_the_wrapped_binary_and_claims_no_files() 
         );
     }
 
-    // --- Assertion 3: Exec is the absolute wrapped path, with no field code ---
-    let want_exec = out.join(BIN_RELATIVE);
-    let want_exec = want_exec.to_string_lossy().into_owned();
+    // --- Assertion 3 (K2): Exec runs the packaged wolf with one file ----------
+    let want_exec = format!("{} %f", out.join(WOLF_RELATIVE).to_string_lossy());
     let exec = desktop_value(&keys, "Exec");
     assert!(
         exec == Some(want_exec.as_str()),
-        "{TEST}: {} states Exec = {exec:?}, expected Some({want_exec:?}) EXACTLY. Three outcomes \
-         are distinguishable and all are defects. A bare `wolf-gnome` is resolved through the \
-         session's PATH, where a developer's `target/release` ahead of their profile launches an \
-         UNWRAPPED binary with no WOLF_NVIM_BIN and no installed init.lua — a silent \
-         wrong-artifact launch from the application menu. A DIFFERENT store path means the entry \
-         and the binary came from different builds. A trailing field code is caught by assertion \
-         4 below, which says why.",
-        path.display()
-    );
-    assert!(
-        !exec.unwrap_or_default().contains('%'),
-        "{TEST}: {} states Exec = {exec:?}, which carries a `%` field code. `app::run` calls \
-         `run_with_args::<&str>(&[])`, so the process ignores its real argv entirely: a `%f` or \
-         `%U` makes the desktop hand Wolf a path it silently DROPS, and the user sees an empty \
-         window instead of their file. Opening a file from the desktop needs `HANDLES_OPEN`, a \
-         real argv parse and an `open` handler — it is a unit of its own, not a key.",
+        "{TEST}: {} states Exec = {exec:?}, expected Some({want_exec:?}) EXACTLY. The app binary \
+         means GNOME Files' path never reaches the open channel, since the app takes no \
+         arguments; no `%f` means the desktop passes no path; a bare `wolf` is resolved through \
+         the session's PATH; a different store path means the entry and the command came from \
+         different builds.",
         path.display()
     );
 
-    // --- Assertion 4: no MimeType key at all ----------------------------------
+    // --- Assertion 4 (K3): Markdown files and folders -------------------------
     let mime = desktop_value(&keys, "MimeType");
     assert!(
-        mime.is_none(),
-        "{TEST}: {} declares MimeType = {mime:?}. That puts Wolf in the desktop's \"Open With\" \
-         list for the named types and then opens an EMPTY window, because the process discards \
-         argv (see assertion 3). Asserted as an absent KEY rather than an empty value, since an \
-         empty `MimeType=` is the same promise made in a way a value comparison would miss.",
+        mime == Some(EXPECT_MIME),
+        "{TEST}: {} declares MimeType = {mime:?}, expected Some({EXPECT_MIME:?}) EXACTLY. None \
+         keeps Wolf out of GNOME Files' Open With list for both; a missing type drops one of \
+         them; another type offers Wolf for files the spec does not name.",
         path.display()
+    );
+}
+
+/// The package ships the `wolf` command beside the app, and it runs.
+///
+/// ## Why the sibling layout is the contract
+///
+/// With nothing listening, `wolf` starts the `wolf-gnome` beside its own executable, so
+/// `bin/wolf` and [`BIN_RELATIVE`] in one directory is what makes a cold `wolf FILE`, and
+/// GNOME Files' first open, start the app at all.
+///
+/// ## Falsifiers
+///
+/// Drop `--package wolf-core --bin wolf` from `cargoBuildFlags` (K1): assertion 1 fires.
+#[test]
+#[ignore = "reads the installed Nix output; run through ./tools/wolf-package-smoke.sh"]
+fn the_packaged_output_carries_the_wolf_command() {
+    const TEST: &str = "the_packaged_output_carries_the_wolf_command";
+    use std::os::unix::fs::PermissionsExt;
+
+    let out = packaged_out(TEST);
+    let wolf = out.join(WOLF_RELATIVE);
+    let mode = std::fs::metadata(&wolf).map(|meta| (meta.is_file(), meta.permissions().mode()));
+    assert!(
+        matches!(mode, Ok((true, mode)) if mode & 0o111 != 0),
+        "{TEST}: {} must be an executable file beside `{BIN_RELATIVE}`; it is {mode:?}. An Err \
+         means the derivation does not build the command, so GNOME Files' Exec and a cold \
+         `wolf` both fail.",
+        wolf.display()
+    );
+
+    let run = std::process::Command::new(&wolf)
+        .arg("--bogus")
+        .env_remove("WOLF_TAB_ID")
+        .output()
+        .unwrap_or_else(|e| panic!("{TEST}: failed to run {} --bogus: {e}", wolf.display()));
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        run.status.code() == Some(2) && stderr.contains(WOLF_USAGE),
+        "{TEST}: `{} --bogus` must refuse with exit 2 and the usage line {WOLF_USAGE:?} on \
+         stderr; it exited {:?} with stderr:\n{stderr}\nAnother status means the file is not \
+         the wolf command, or it does not run outside the dev shell.",
+        wolf.display(),
+        run.status
     );
 }
 

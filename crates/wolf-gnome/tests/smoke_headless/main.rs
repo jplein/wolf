@@ -160,6 +160,7 @@ mod config;
 mod drawer_divider;
 mod editor;
 mod extras;
+mod file_open;
 mod fixture_guards;
 mod frame_stats;
 mod header_bar;
@@ -1630,6 +1631,23 @@ fn smoke_home(cwd: &Path) -> &Path {
     })
 }
 
+/// The `wolf` command beside the app binary, `target/<profile>/wolf`, which a smoke runs to
+/// reach the app over its open channel.
+///
+/// Cargo sets no `CARGO_BIN_EXE_wolf` for another package's tests, so it is found beside
+/// `CARGO_BIN_EXE_wolf-gnome`, where the workspace build puts it. Panics, naming the build
+/// command, when it is absent: a bare `cargo test -p wolf-gnome` does not build it.
+fn wolf_command_bin() -> PathBuf {
+    let wolf = Path::new(env!("CARGO_BIN_EXE_wolf-gnome")).with_file_name("wolf");
+    assert!(
+        wolf.is_file(),
+        "the wolf command {} does not exist beside the app binary. Build it with `cargo build \
+         -p wolf-core --bin wolf`; `cargo test -p wolf-gnome` alone does not.",
+        wolf.display()
+    );
+    wolf
+}
+
 /// The FIXED name of the one directory every smoke of a `cargo test` invocation
 /// shares as its `XDG_CACHE_HOME` — see [`smoke_shader_cache_dir`], which is where the
 /// rationale lives, and where the measured limit on how far that sharing reaches is
@@ -1807,6 +1825,12 @@ const SMOKE_GTK_IM_MODULE: &str = "gtk-im-context-simple";
 /// is what lets a relaunch scenario's two launches share one path, and its
 /// variables are all `_ready_`-prefixed so it cannot clobber a scenario's `tries`.
 ///
+/// `wait_launched_ready <died-code> <label>` is the wait for an app the scenario did not
+/// start, such as the one a `wolf` command launches when nothing listens: it takes whatever
+/// live pid the ready file names into `app_pid`, exits `<died-code>` when that pid is gone,
+/// and exits 40 after the same 30 s. It is no launch line's wait, so the readiness guard
+/// does not count it; the scenario that uses it owns the ordering.
+///
 /// `wait_file_contains <file> <needle> <label>` polls until `<file>` holds `<needle>`
 /// and returns 1 after 20 s, leaving the decision to the caller.
 ///
@@ -1853,6 +1877,32 @@ wait_ready() {
         echo "  the app's 'wolf-ready:' stderr lines name the last unmet condition" >&2
     fi
     kill "$1" 2>/dev/null || true
+    exit "$READY_TIMEOUT_EXIT"
+}
+
+# For an app the scenario did not start, such as one the wolf command launched: polls until
+# the ready file names a live pid, and leaves it in app_pid. $1 is the exit code, $2 a label.
+wait_launched_ready() {
+    _ready_n=0
+    _ready_primed=
+    while [ "$_ready_n" -lt "$READY_TRIES" ]; do
+        if [ -z "$_ready_primed" ] && wtype "" >/dev/null 2>&1; then
+            _ready_primed=1
+        fi
+        _ready_got=
+        read -r _ready_got 2>/dev/null <"$WOLF_READY_FILE" || true
+        if [ -n "$_ready_got" ] && [ -n "$_ready_primed" ]; then
+            if kill -0 "$_ready_got" 2>/dev/null; then
+                app_pid=$_ready_got
+                return 0
+            fi
+            echo "$2: $WOLF_READY_FILE names pid $_ready_got, which is not alive" >&2
+            exit "$1"
+        fi
+        _ready_n=$((_ready_n + 1))
+        sleep "$READY_INTERVAL"
+    done
+    echo "$2: no app wrote $WOLF_READY_FILE within $READY_TRIES x ${READY_INTERVAL}s" >&2
     exit "$READY_TIMEOUT_EXIT"
 }
 
@@ -2286,6 +2336,9 @@ fn smoke_gtk_config_dirs(runtime: &Path) -> PathBuf {
 ///   `wait_ready` that [`READINESS_PRELUDE`] defines. The prelude is prepended to
 ///   every scenario here, which is what lets no scenario carry its own copy and none
 ///   forget it.
+/// * `WOLF_TAB_ID` is REMOVED: a suite run from a Wolf terminal inherits that tab's ID,
+///   and a `wolf` command a scenario runs would then name a tab of the developer's app,
+///   which the app under `cage` treats as stale only by luck of never holding it.
 /// * `WAYLAND_DISPLAY`, `WAYLAND_SOCKET` and `DISPLAY` are REMOVED: each names the
 ///   developer's own display. libwayland prefers `WAYLAND_SOCKET` over the
 ///   `WAYLAND_DISPLAY` cage sets for its child, wlroots picks a nested backend from
@@ -2434,6 +2487,8 @@ fn cage_command(scenario: &str, cwd: &Path, runtime: &CageRuntime<'_>) -> Comman
         .env_remove("WAYLAND_DISPLAY")
         .env_remove("WAYLAND_SOCKET")
         .env_remove("DISPLAY")
+        // A suite run from a Wolf terminal would hand every `wolf` in a scenario its tab.
+        .env_remove("WOLF_TAB_ID")
         .stdout(log)
         .stderr(log_err);
     cmd
@@ -2804,6 +2859,8 @@ fn cage_is_only_spawned_through_the_isolating_helper() {
 ///     delete its `gtk-font-name` line.
 /// 16. `XDG_CONFIG_HOME` is set to the `.config` directory under the `HOME` the same
 ///     command sets. Falsify: delete its `.env` line from [`cage_command`].
+/// 17. `WOLF_TAB_ID` is removed on [`cage_command`]. Falsify: delete its `.env_remove`
+///     line.
 ///
 /// ## The premise, and what it does not cover
 ///
@@ -2874,6 +2931,7 @@ fn every_cage_gets_a_private_runtime_dir_and_no_host_session() {
     const HOME_VAR: &str = "HOME";
     const CONFIG_HOME_VAR: &str = "XDG_CONFIG_HOME";
     const USER_CONFIG_RELATIVE: &str = ".config";
+    const TAB_ID_VAR: &str = "WOLF_TAB_ID";
 
     type EnvMap = std::collections::BTreeMap<std::ffi::OsString, Option<std::ffi::OsString>>;
 
@@ -3403,6 +3461,16 @@ fn every_cage_gets_a_private_runtime_dir_and_no_host_session() {
          them masks the app's pin — and moves where a wolf-config.yaml leak would land away from \
          the directory `single_pane_file_survives_relaunch_under_cage` checks. Restore \
          `.env(\"{CONFIG_HOME_VAR}\", smoke_home(cwd).join(\".config\"))` in `cage_command`."
+    );
+
+    // --- Check 17: no tab ID reaches a scenario's wolf command -------------------
+    assert_eq!(
+        envs_a.get(OsStr::new(TAB_ID_VAR)),
+        Some(&None),
+        "{GUARD}: check 17: {TAB_ID_VAR} is {}, where it must be removed. A suite run from a \
+         Wolf terminal inherits that tab's ID, and every `wolf` a scenario runs would carry it. \
+         Restore `.env_remove(\"{TAB_ID_VAR}\")` in `cage_command`.",
+        reach(&envs_a, TAB_ID_VAR)
     );
 
     if let Some(parent) = cwd.parent() {

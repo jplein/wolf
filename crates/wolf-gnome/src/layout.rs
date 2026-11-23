@@ -187,6 +187,30 @@ impl PaneTree {
         split_in(&mut self.root, target, new_pane, orientation);
     }
 
+    /// Splits the WHOLE tree vertically with `new_pane` on the left, the whole-tab split of
+    /// `specs/cli-and-file-open.md` §5.2 rule 4. A `Vertical` root gains `new_pane` as its
+    /// first child and re-equalizes, as a same-orientation split does; any other root becomes
+    /// `Vertical[new_pane, root]` at [`DEFAULT_RATIO`] each.
+    pub fn split_root_left(&mut self, new_pane: PaneId) {
+        if let Frame::Split {
+            orientation: Orientation::Vertical,
+            children,
+            weights,
+        } = &mut self.root
+        {
+            children.insert(0, Frame::Leaf(new_pane));
+            weights.insert(0, 0.0);
+            equalize(weights);
+            return;
+        }
+        let root = std::mem::replace(&mut self.root, Frame::Leaf(new_pane));
+        self.root = Frame::Split {
+            orientation: Orientation::Vertical,
+            children: vec![Frame::Leaf(new_pane), root],
+            weights: vec![DEFAULT_RATIO, DEFAULT_RATIO],
+        };
+    }
+
     /// Removes the leaf `pane`, then NORMALIZES the tree (flatten same-orientation
     /// children, collapse a 1-child split into its child, re-equalize). Removing the
     /// last remaining pane is a no-op (the tree is never empty).

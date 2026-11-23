@@ -13,6 +13,8 @@
 //! is this file's own: the `leaf_index`, `encode` and `decode` round trip a relaunch makes,
 //! since this front-end has no FFI push-builder for the Swift P3 to cover. E10 pins
 //! `restore_targets`, which maps a saved tab's `zoomed` and `focused` onto the restored panes.
+//! Z1 pins the unzoom before a file opened from outside Wolf is placed,
+//! `specs/cli-and-file-open.md#52-choosing-the-pane`.
 //!
 //! Pure: no display, no Neovim and no compositor. What the pane area shows for an answer is
 //! `smoke_headless/zoom_pane.rs`'s question.
@@ -115,6 +117,26 @@ fn a_split_and_a_drawer_open_unzoom() {
         "a drawer opening while pane 2 is zoomed must unzoom, as a split does; Some(2) means the \
          drawer opens hidden"
     );
+}
+
+/// Z1: a file opened from outside Wolf unzooms, whichever pane is zoomed and active, the
+/// drawer included, so the pane it lands in shows.
+#[test]
+fn opening_a_file_unzooms() {
+    let cases: [(PaneId, PaneId, &[PaneId]); 3] = [
+        (P2, P2, &[P1, P2]),
+        (P2, P1, &[P1, P2]),
+        (DRAWER, DRAWER, &[P1, P2, DRAWER]),
+    ];
+    for (zoomed, active, panes) in cases {
+        assert_eq!(
+            zoomed_after(ZoomEvent::OpenFile, Some(zoomed), Some(active), panes),
+            None,
+            "opening a file with {zoomed} zoomed and {active} active must unzoom, so the pane it \
+             lands in shows; Some({zoomed}) means OpenFile keeps a zoom whose pane is still \
+             there, as PanesChanged does"
+        );
+    }
 }
 
 /// K5: a change of panes unzooms only when the zoomed pane is gone.

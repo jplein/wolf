@@ -169,7 +169,8 @@
 //! focus is returned to `cmdline_area` once the rebuild has settled.
 
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Instant;
 
@@ -181,9 +182,10 @@ use webkit6::prelude::{PolicyDecisionExt, WebViewExt};
 
 use wolf_core::app_state::{Node, TabContent};
 use wolf_core::{
-    CursorShape, LayoutIntent, MouseAction, MouseButton, MouseEvent, PaneStatus, PreviewInfo, Rgb,
-    ScrollEvent, Snapshot, SplitOrientation, TerminalCommand, TerminalId, TerminalMouseEvent,
-    TerminalMouseKind, TerminalScrollEvent, TerminalTarget, ToastChunk, WindowCursor, WolfCore,
+    CursorShape, InputEvent, LayoutIntent, MouseAction, MouseButton, MouseEvent, PaneStatus,
+    PreviewInfo, Rgb, ScrollEvent, Snapshot, SplitOrientation, TerminalCommand, TerminalId,
+    TerminalMouseEvent, TerminalMouseKind, TerminalScrollEvent, TerminalTarget, ToastChunk,
+    WindowCursor, WolfCore,
 };
 
 use crate::cmdline_ui::{self, PumView, ToastView};
@@ -195,6 +197,7 @@ use crate::geometry;
 use crate::layout::{Orientation, PaneId, PaneLayout, PaneTree};
 use crate::liveness_ui::TerminalRestore;
 use crate::mouse::{self, PaneScroll, ScrollAccumulator};
+use crate::open_request::{self, Placement};
 use crate::other_pane_seam::{self, Side, Target};
 use crate::pane_layout::{self, LiveLayout, PaneView};
 use crate::pane_zoom::{self, RestoreTarget, RestoreTargets, ZoomEvent};
@@ -670,6 +673,12 @@ struct PaneInner {
     /// ([`PaneHandle::request_terminal_restore`]), run once by the first wake with a pane
     /// ([`Self::run_pending_terminal_restore`]).
     pending_terminal_restore: RefCell<Option<Vec<TerminalRestore>>>,
+    /// Files opened from outside Wolf ([`PaneHandle::open_file`]), in arrival order, placed by
+    /// [`Self::run_pending_file_opens`]. A restart reset keeps them, so they land after it.
+    pending_file_opens: RefCell<VecDeque<PathBuf>>,
+    /// The pane a placed file made active, with Neovim's current window when it was asked to
+    /// move. [`Self::update_active_pane`] keeps that pane until Neovim's window moves.
+    pending_focus: Cell<Option<(PaneId, Option<i64>)>>,
 }
 
 /// A pane [`PaneInner::readiness`] counts: its id, its grid and the size it last requested.
@@ -692,6 +701,8 @@ impl PaneInner {
         // Before `refresh_pane_state`, so this very wake binds the session to its pane.
         self.open_pending_terminal();
         self.run_pending_terminal_restore();
+        // After every restore step, any of which would replace the pane a file lands in.
+        self.run_pending_file_opens();
         self.apply_intents();
         self.detect_closes();
         self.resolve_pending_grids();
@@ -782,6 +793,139 @@ impl PaneInner {
                 TerminalRestore::Drawer => core.toggle_terminal(),
             }
         }
+    }
+
+    /// Places the files [`PaneHandle::open_file`] queued, in order, once this tab is ready: a
+    /// pane is bound, no saved layout, drawer restore, terminal restore or smoke terminal is
+    /// pending, and [`open_request::may_place`] admits the core's liveness. A gather that
+    /// refuses keeps the rest queued for a later wake.
+    fn run_pending_file_opens(self: &Rc<Self>) {
+        if self.pending_file_opens.borrow().is_empty()
+            || self.panes.borrow().is_empty()
+            || self.pending_layout.borrow().is_some()
+            || self.pending_drawer_restore.get().is_some()
+            || self.pending_terminal_restore.borrow().is_some()
+            || self.pending_terminal.borrow().is_some()
+        {
+            return;
+        }
+        let liveness = self.core.borrow().as_ref().map(WolfCore::liveness);
+        if !open_request::may_place(liveness) {
+            return;
+        }
+        loop {
+            let Some(path) = self.pending_file_opens.borrow().front().cloned() else {
+                return;
+            };
+            let pane_layout::LayoutGather::Ready(live) = self.layout_snapshot() else {
+                return;
+            };
+            self.pending_file_opens.borrow_mut().pop_front();
+            self.place_file(&path, live);
+        }
+    }
+
+    /// Places `path` by core's `specs/cli-and-file-open.md` §5.2 choice over `live`, this
+    /// tab's gathered layout: unzooms first when zoomed, then focuses the editor pane already
+    /// on it, opens it in an editor or preview pane, or splits the whole tab with a new pane on
+    /// the left. The pane it lands in is made active at once ([`Self::focus_placed`]).
+    fn place_file(self: &Rc<Self>, path: &Path, live: LiveLayout) {
+        let content = TabContent {
+            root: Some(live.root),
+            focused: live.focused,
+            zoomed: live.zoomed,
+            ..TabContent::default()
+        };
+        let choice = wolf_core::choose_pane(&content, path);
+        if choice.unzoom {
+            self.pending_restore_zoom.set(None);
+            if self.apply_zoom_event(ZoomEvent::OpenFile) {
+                self.rebuild_pane_area();
+            }
+        }
+        let leaves = self.tree.borrow().leaves();
+        let Some(placement) = open_request::placement(choice.placement, &leaves) else {
+            eprintln!(
+                "wolf-gnome: {} not opened: its pane is past the tab's {} panes",
+                path.display(),
+                leaves.len()
+            );
+            return;
+        };
+        match placement {
+            Placement::Focus(pane) => self.focus_placed(pane, None),
+            Placement::Open(pane) | Placement::Convert(pane) => self.focus_placed(pane, Some(path)),
+            Placement::SplitLeft => self.split_left(path),
+        }
+    }
+
+    /// Moves Neovim to `pane`'s window and opens `open` there when given, both on the ordered
+    /// input channel, and makes `pane` active at once.
+    ///
+    /// At once, not on the wake Neovim reports the move: until then keys would still reach the
+    /// old pane, a terminal's session among them. [`Self::pending_focus`] keeps
+    /// [`Self::update_active_pane`] from reading the old window back meanwhile.
+    fn focus_placed(&self, pane: PaneId, open: Option<&Path>) {
+        let Some(win) = self.panes.borrow().get(&pane).map(|p| p.win) else {
+            return;
+        };
+        let current = {
+            let core_ref = self.core.borrow();
+            let Some(core) = core_ref.as_ref() else {
+                return;
+            };
+            let current = core.read_snapshot().active_win;
+            core.focus_win(win);
+            if let Some(path) = open {
+                core.send_input(InputEvent::Open {
+                    path: path.to_path_buf(),
+                });
+            }
+            current
+        };
+        if current != Some(win) {
+            self.pending_focus.set(Some((pane, current)));
+        }
+        self.set_active_pane(Some(pane));
+    }
+
+    /// Opens `path` in a new Neovim window left of the whole tab and binds it to a new pane
+    /// left of the whole tree. `WolfCore::open_split_left` is a BLOCKING RPC, which
+    /// [`Self::run_pending_file_opens`] issues only against an `Alive` Neovim.
+    fn split_left(self: &Rc<Self>, path: &Path) {
+        let (current, win) = {
+            let core_ref = self.core.borrow();
+            let Some(core) = core_ref.as_ref() else {
+                return;
+            };
+            let current = core.read_snapshot().active_win;
+            (current, core.open_split_left(path))
+        };
+        if win == 0 {
+            eprintln!(
+                "wolf-gnome: {} not opened: Neovim made no window left of the tab",
+                path.display()
+            );
+            return;
+        }
+        if self.pane_for_win(win).is_some() {
+            return;
+        }
+        let id = self.alloc_pane_id();
+        self.tree.borrow_mut().split_root_left(id);
+        let grid = {
+            let core_ref = self.core.borrow();
+            core_ref
+                .as_ref()
+                .and_then(|c| c.read_snapshot().grid_for_win(win))
+        };
+        let area = self.make_pane_area(id);
+        self.panes
+            .borrow_mut()
+            .insert(id, PaneWidgets::new(win, grid, area));
+        self.rebuild_pane_area();
+        self.pending_focus.set(Some((id, current)));
+        self.set_active_pane(Some(id));
     }
 
     /// Sizes every session this tab shows from the content area of the pane that sizes it,
@@ -1903,9 +2047,10 @@ impl PaneInner {
     ///
     /// Neovim's own move to another pane (`<C-w>w`, `:wincmd`) is a focus move, which unzooms
     /// and rebuilds the pane area. A window that resolves to no pane keeps the zoom. The wake
-    /// that first resolves to [`Self::pending_restore_zoom`]'s pane re-zooms it first.
+    /// that first resolves to [`Self::pending_restore_zoom`]'s pane re-zooms it first. Nothing
+    /// changes while Neovim has not yet moved where a placed file's [`Self::pending_focus`] asked.
     fn update_active_pane(&self) {
-        let target = {
+        let (target, active_win) = {
             let core_ref = self.core.borrow();
             let Some(core) = core_ref.as_ref() else {
                 return;
@@ -1915,13 +2060,21 @@ impl PaneInner {
             let by_win = snap
                 .active_win
                 .and_then(|aw| panes.iter().find(|(_, p)| p.win == aw).map(|(id, _)| *id));
-            by_win.or_else(|| {
+            let target = by_win.or_else(|| {
                 panes
                     .iter()
                     .find(|(_, p)| p.grid.get() == Some(snap.cursor.grid))
                     .map(|(id, _)| *id)
-            })
+            });
+            (target, snap.active_win)
         };
+        if let Some((pane, from)) = self.pending_focus.get() {
+            // Neovim has not reported the move a placed file asked for: keep the pane it made active.
+            if active_win == from && self.panes.borrow().contains_key(&pane) {
+                return;
+            }
+            self.pending_focus.set(None);
+        }
         let mut rezoomed = false;
         if let Some(leaf) = self
             .pending_restore_zoom
@@ -4094,6 +4247,7 @@ impl PaneInner {
         self.views.borrow_mut().clear();
         self.pending_drawer_restore.set(None);
         self.pending_restore_zoom.set(None);
+        self.pending_focus.set(None);
         // Tears everything down and builds nothing, through `rebuild_pane_area`'s own focus guard;
         // reusing it rather than open-coding teardown keeps the focus-wedge fix through a restart.
         self.rebuild_pane_area();
@@ -4303,6 +4457,14 @@ impl PaneHandle {
         self.inner.drawer.get().id().is_some()
     }
 
+    /// Queues `path`, a file opened from outside Wolf, for this tab's next ready wake, which
+    /// places it by `specs/cli-and-file-open.md` §5.2 ([`PaneInner::run_pending_file_opens`]).
+    /// `path` is in [`wolf_core::OpenTarget::File`]'s form; a missing file opens as a new
+    /// buffer. The caller wakes the tab.
+    pub fn open_file(&self, path: PathBuf) {
+        self.inner.pending_file_opens.borrow_mut().push_back(path);
+    }
+
     /// Hands this tab the terminal restore a crash-restart computed, replacing any earlier
     /// one; the first wake with a pane runs it. The shell calls it after
     /// [`PaneHandle::reset_after_restart`], which drops any pending request.
@@ -4403,6 +4565,8 @@ pub fn build(
         tab_focused: Cell::new(false),
         pending_terminal: RefCell::new(None),
         pending_terminal_restore: RefCell::new(None),
+        pending_file_opens: RefCell::new(VecDeque::new()),
+        pending_focus: Cell::new(None),
     });
 
     {

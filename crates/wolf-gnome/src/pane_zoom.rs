@@ -19,6 +19,8 @@ pub enum ZoomEvent {
     Split,
     /// The view opens the drawer: a pane joins the layout, as with a split.
     DrawerOpen,
+    /// A file opened from outside Wolf lands in the view; it unzooms first, so its pane shows.
+    OpenFile,
     /// The view's panes changed, as after a close.
     PanesChanged,
     /// A focus move, by chord or by Neovim's own window change, to `target`: the pane the move
@@ -54,7 +56,7 @@ pub fn zoomed_after(
             }
             active.filter(|a| panes.contains(a) && panes.len() > 1)
         }
-        ZoomEvent::Split | ZoomEvent::DrawerOpen => None,
+        ZoomEvent::Split | ZoomEvent::DrawerOpen | ZoomEvent::OpenFile => None,
         ZoomEvent::PanesChanged => zoomed.filter(|z| panes.contains(z)),
         ZoomEvent::FocusMove { target } => match target {
             Some(t) if Some(t) != zoomed => None,

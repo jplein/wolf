@@ -2281,7 +2281,12 @@ impl AppShell {
             eprintln!("wolf-gnome: Open Folder not performed: the coordinator is gone");
             return;
         };
-        coordinator.open_folder(&app, self.inner.window_id, path);
+        let current = self
+            .inner
+            .tabs
+            .selected()
+            .map(|tab| (self.inner.window_id, tab.id()));
+        coordinator.open_folder(&app, current, path);
     }
 
     /// Shows the selected tab's recorded search fields in the window's panel, running

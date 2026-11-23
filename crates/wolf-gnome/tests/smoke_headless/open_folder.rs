@@ -265,7 +265,7 @@ fn run_open_folder(run: &OpenFolderRun<'_>, runtime_dir: &CageRuntime<'_>) -> Pa
 }
 
 /// Creates `<parent>/<name>` and returns its canonical path as a string.
-fn make_dir(smoke: &str, parent: &Path, name: &str) -> String {
+pub(crate) fn make_dir(smoke: &str, parent: &Path, name: &str) -> String {
     let dir = parent.join(name);
     std::fs::create_dir_all(&dir)
         .unwrap_or_else(|e| panic!("{smoke}: failed to create {}: {e}", dir.display()));
@@ -273,7 +273,7 @@ fn make_dir(smoke: &str, parent: &Path, name: &str) -> String {
 }
 
 /// `path`'s canonical form as a string: tab directories and store keys are canonical.
-fn canonical(smoke: &str, path: &Path) -> String {
+pub(crate) fn canonical(smoke: &str, path: &Path) -> String {
     let canon = std::fs::canonicalize(path)
         .unwrap_or_else(|e| panic!("{smoke}: failed to canonicalize {}: {e}", path.display()));
     canon
@@ -317,7 +317,7 @@ fn sized_window(
 }
 
 /// A lone edit pane on `path`.
-fn edit(path: &str) -> Node {
+pub(crate) fn edit(path: &str) -> Node {
     Node::Pane(Pane::Edit {
         path: path.to_owned(),
         cursor: None,
@@ -343,7 +343,7 @@ fn two_pane_split(smoke: &str, directory: &str, left: &str, right: &str) -> Node
 
 /// Submits each of `states` in turn to the store in `state_dir`, flushing each, and asserts
 /// the last reads back as the window state.
-fn plant(smoke: &str, state_dir: &Path, states: &[WindowState]) {
+pub(crate) fn plant(smoke: &str, state_dir: &Path, states: &[WindowState]) {
     {
         let store = AppStateStore::open(state_dir);
         for planted in states {

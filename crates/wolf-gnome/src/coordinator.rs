@@ -28,6 +28,9 @@
 //!   [`crate::state_seam::restore_plans`] answers with one plan per saved window.
 //! - **The test-only readiness probe** ([`Coordinator::check_ready`]), process-scoped
 //!   because its condition spans every window the launch restores.
+//! - **The open channel's [`OpenListener`]** ([`Coordinator::listen`]). There is one socket
+//!   per state directory and a second bind is refused as in use, and a request spans
+//!   windows: its tab ID names a tab of any window, and a file goes to its project's tab.
 //!
 //! ## Ownership, and why the direction is forced
 //!
@@ -56,20 +59,23 @@
 //! save with an empty one.
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
+use std::sync::Arc;
 use std::time::Duration;
 
 use adw::prelude::*;
-use gtk::gio;
+use gtk::{gio, glib};
 use wolf_core::app_state::{ProjectState, WindowState};
-use wolf_core::{AppStateStore, PaletteWindow, WolfConfig};
+use wolf_core::{AppStateStore, OpenListener, OpenRequest, PaletteWindow, WakeFn, WolfConfig};
 
 use crate::actions;
 use crate::app;
 use crate::command_action::{ui_action_for, UiAction};
 use crate::open_folder::{self, Step};
+use crate::open_request::{self, Route, TabRef};
 use crate::ready_seam::{self, Blocker, ReadyStep, WindowReadiness};
 use crate::stacking::StackingOrder;
 use crate::state_seam::{self, CloseCommit, RestorePlan};
@@ -129,6 +135,9 @@ pub struct CoordinatorInner {
     shutting_down: Cell<bool>,
     /// The readiness probe, `None` unless `WOLF_READY_FILE` names a file.
     ready: RefCell<Option<ReadyProbe>>,
+    /// The open channel's listener, from [`Coordinator::listen`] until the quit or the last
+    /// window's close takes it out; `None` before, after, or when it could not bind.
+    listener: RefCell<Option<OpenListener>>,
 }
 
 /// The test-only readiness probe's state; see [`Coordinator::check_ready`].
@@ -180,6 +189,7 @@ pub fn build() -> Coordinator {
                 fired: false,
                 next_paint: 0,
             })),
+            listener: RefCell::new(None),
         }),
     }
 }
@@ -405,22 +415,34 @@ impl Coordinator {
         }
     }
 
-    /// Open Folder from window `from`, for every entry point: applies
-    /// `specs/application-state.md` §6 to `directory`, which is canonical.
+    /// Open Folder from the `current` tab, for every entry point: applies
+    /// `specs/application-state.md` §6 to `directory`, which is canonical. Answers the tab
+    /// that ends on `directory`, `None` when none does.
     ///
     /// Here rather than in a window because it spans windows. [`open_folder::step`]
     /// decides over every window's live tabs in stacking order: a focus selects the
-    /// tab §4's rule picks and presents its window; a fill replaces `from`'s empty
-    /// selected tab with one from `directory`'s project state; otherwise a new window
-    /// opens from it. The project state is read, and so marked used, only by the last
-    /// two. Then the core of the tab that ends on `directory` records it in the recent
-    /// directories, since that tab's Neovim starts there and core records no launch
-    /// directory.
-    pub fn open_folder(&self, app: &gtk::Application, from: WindowId, directory: PathBuf) {
+    /// tab §4's rule picks and raises its window; a fill replaces `current`, when it is
+    /// empty, with a tab from `directory`'s project state and raises its window; otherwise a
+    /// new window opens from it. `current` is the menu's window and its selected tab, or a request's
+    /// current tab, which can be a background tab. The project state is read, and so marked
+    /// used, only by the last two. Then the core of the tab that ends on `directory` records
+    /// it in the recent directories, since that tab's Neovim starts there and core records
+    /// no launch directory.
+    pub fn open_folder(
+        &self,
+        app: &gtk::Application,
+        current: Option<TabRef>,
+        directory: PathBuf,
+    ) -> Option<TabRef> {
         let handles = self.handles();
         let windows: Vec<_> = handles.iter().map(WindowHandle::live_window).collect();
-        let invoking = handles.iter().find(|handle| handle.id() == from);
-        let current_empty = invoking.is_some_and(WindowHandle::selected_is_empty);
+        let invoking = current.and_then(|(window, tab)| {
+            handles
+                .iter()
+                .find(|handle| handle.id() == window)
+                .map(|handle| (handle, tab))
+        });
+        let current_empty = invoking.is_some_and(|(handle, tab)| handle.tab_is_empty(tab));
         let step = {
             let stacking = self.inner.stacking.borrow();
             open_folder::step(
@@ -434,32 +456,166 @@ impl Coordinator {
             Step::Focus { window, tab } => handles
                 .iter()
                 .find(|handle| handle.id() == window)
-                .and_then(|handle| handle.focus_tab(tab)),
+                .and_then(|handle| handle.focus_tab(tab).map(|tab| (window, tab))),
             Step::FillCurrent => {
                 let plan = open_folder::plan(&directory, self.project_state(&directory).as_ref());
-                invoking.and_then(|handle| handle.fill_selected_tab(&plan))
+                invoking.and_then(|(handle, tab)| {
+                    let filled = handle.fill_tab(tab, &plan)?;
+                    handle.raise();
+                    Some((handle.id(), filled))
+                })
             }
             Step::NewWindow => {
                 let mut plan =
                     open_folder::plan(&directory, self.project_state(&directory).as_ref());
                 plan.window_size =
                     state_seam::new_window_size(plan.window_size, self.active_size());
-                self.open_window(app, &plan, true)
-                    .and_then(|handle| handle.selected_core())
+                self.open_window(app, &plan, true).and_then(|handle| {
+                    handle
+                        .selected_tab()
+                        .map(|selected| (handle.id(), selected))
+                })
             }
         };
-        let Some(core) = landed else {
+        let Some((window, tab)) = landed else {
             eprintln!(
                 "wolf-gnome: Open Folder opened nothing for {}: its tab's core did not start",
                 directory.display()
             );
+            return None;
+        };
+        {
+            let core_ref = tab.core().borrow();
+            if let Some(core) = core_ref.as_ref() {
+                core.record_recent_dir(&directory);
+            }
+        }
+        Some((window, tab.id()))
+    }
+
+    /// Listens on the open channel in `wolf_core::state_dir()`, once, for the `wolf` command
+    /// (`specs/cli-and-file-open.md` §2), and handles each request it takes on the main loop.
+    ///
+    /// Called in the first `activate`, just BEFORE [`Coordinator::restore_session`]. The
+    /// drain task runs only once `activate` returns, so a cold launch still restores the
+    /// session before it handles the request that launched it (§2), while the `wolf` that
+    /// launched it gets its reply before any window maps. Binding after the restore delays
+    /// that reply past the maps, and the cold-launch smoke, which primes `cage`'s keyboard
+    /// once `wolf` returns, then types into windows `cage` never activated: one that maps
+    /// before any keyboard exists is never given focus there.
+    ///
+    /// No state directory, or a failed bind, prints one line and the app runs without the
+    /// channel. The listener's wake `try_send`s on a one-slot channel, as a tab's wake does,
+    /// and a main-loop task drains the listener on each message.
+    pub fn listen(&self, app: &adw::Application) {
+        let Some(state) = wolf_core::state_dir() else {
+            eprintln!("wolf-gnome: no state directory, so the wolf command cannot reach this app");
             return;
         };
-        // Last, so the borrow is held across no other call.
-        let core_ref = core.borrow();
-        if let Some(core) = core_ref.as_ref() {
-            core.record_recent_dir(&directory);
+        let (wake_tx, wake_rx) = async_channel::bounded::<()>(1);
+        let wake: WakeFn = Arc::new(move || {
+            let _ = wake_tx.try_send(());
+        });
+        match OpenListener::bind(&state, wake) {
+            Ok(listener) => *self.inner.listener.borrow_mut() = Some(listener),
+            Err(err) => {
+                eprintln!("wolf-gnome: the wolf command cannot reach this app: {err}");
+                return;
+            }
         }
+        let coordinator = self.weak();
+        let app = app.downgrade();
+        // Ends when the listener is dropped, which drops the wake and closes the channel.
+        glib::spawn_future_local(async move {
+            while wake_rx.recv().await.is_ok() {
+                let (Some(coordinator), Some(app)) = (upgrade(&coordinator), app.upgrade()) else {
+                    break;
+                };
+                coordinator.handle_open_requests(app.upcast_ref());
+            }
+        });
+    }
+
+    /// Handles every request the listener has taken, in arrival order. Requests drained
+    /// while the application quits are dropped.
+    fn handle_open_requests(&self, app: &gtk::Application) {
+        let requests = match self.inner.listener.borrow().as_ref() {
+            Some(listener) => listener.drain_requests(),
+            None => return,
+        };
+        if self.inner.shutting_down.get() {
+            return;
+        }
+        for request in requests {
+            self.handle_open_request(app, &request);
+        }
+    }
+
+    /// Routes `request` through [`open_request::route`] over the live windows, their tabs'
+    /// IDs and the stacking order, and acts on the route.
+    fn handle_open_request(&self, app: &gtk::Application, request: &OpenRequest) {
+        let target = request.target();
+        let handles = self.handles();
+        let windows: Vec<_> = handles.iter().map(WindowHandle::live_window).collect();
+        let tab_ids: HashMap<wolf_core::TabId, TabRef> = handles
+            .iter()
+            .flat_map(|handle| {
+                let window = handle.id();
+                handle
+                    .wolf_tab_ids()
+                    .into_iter()
+                    .map(move |(id, tab)| (id, (window, tab)))
+            })
+            .collect();
+        let route = {
+            let stacking = self.inner.stacking.borrow();
+            open_request::route(&target, request.tab_id, &windows, &tab_ids, &stacking)
+        };
+        match route {
+            Route::Activate { current } => {
+                if let Some(current) = current {
+                    self.activate_tab(current);
+                }
+            }
+            Route::OpenFolder { directory, current } => {
+                self.open_folder(app, current, directory);
+            }
+            Route::OpenFile { file, tab } => self.open_file(tab, file),
+            Route::OpenFileInProject {
+                file,
+                project,
+                current,
+            } => {
+                if let Some(landed) = self.open_folder(app, current, project) {
+                    self.open_file(landed, file);
+                }
+            }
+        }
+    }
+
+    /// Selects `tab` and raises its window ([`WindowHandle::focus_tab`]).
+    fn activate_tab(&self, (window, tab): TabRef) {
+        if let Some(handle) = self.handle(window) {
+            handle.focus_tab(tab);
+        }
+    }
+
+    /// Opens `file` in `tab` ([`WindowHandle::open_file`]).
+    fn open_file(&self, (window, tab): TabRef, file: PathBuf) {
+        let opened = self
+            .handle(window)
+            .is_some_and(|handle| handle.open_file(tab, file.clone()));
+        if !opened {
+            eprintln!(
+                "wolf-gnome: {} not opened: its tab has closed",
+                file.display()
+            );
+        }
+    }
+
+    /// The live window `id`, or `None` when none holds it.
+    fn handle(&self, id: WindowId) -> Option<WindowHandle> {
+        self.handles().into_iter().find(|handle| handle.id() == id)
     }
 
     /// `directory`'s project state, which the store marks used; `None` without a store.
@@ -669,6 +825,10 @@ impl Coordinator {
             .iter()
             .filter(|handle| handle.id() != id)
             .count();
+        if others == 0 {
+            // The app exits with its last window, so no `wolf` may get `Taken` from it.
+            drop(self.inner.listener.borrow_mut().take());
+        }
         match state_seam::close_commit(self.inner.shutting_down.get(), others) {
             CloseCommit::Skip => {}
             CloseCommit::KeepSubtree => {
@@ -697,8 +857,10 @@ impl Coordinator {
     ///
     /// Every step of the order is load-bearing. `shutting_down` is latched FIRST so
     /// each window's close handler answers [`CloseCommit::Skip`] and does not
-    /// re-commit a tree that shrinks by one window per close. Every window's panes are
-    /// captured next, before any Neovim exits (`specs/application-state.md` §4). The
+    /// re-commit a tree that shrinks by one window per close. The open channel's
+    /// listener goes next, so no `wolf` gets `Taken` from an app that is exiting. Every
+    /// window's panes are captured then, before any Neovim exits
+    /// (`specs/application-state.md` §4). The
     /// refresh runs BEFORE any window is closed, because a window whose core has gone
     /// contributes nothing. The flush runs before the closes so a wedged writer cannot
     /// lose the tree that was just assembled.
@@ -716,6 +878,7 @@ impl Coordinator {
     /// `close-request` and leaves every captive Neovim orphaned.
     pub fn quit(&self, app: &gtk::Application) {
         self.inner.shutting_down.set(true);
+        drop(self.inner.listener.borrow_mut().take());
         for handle in self.handles() {
             handle.capture_viewports();
         }

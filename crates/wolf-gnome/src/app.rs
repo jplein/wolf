@@ -2,10 +2,15 @@
 //!
 //! [`run`] builds an [`adw::Application`] and does nothing else itself. The FIRST
 //! `activate` builds the process-scoped [`crate::coordinator::Coordinator`],
-//! installs the `app.`-namespace actions on it, and asks it to restore the saved
-//! session — one window per saved window, or exactly one empty-state window when
-//! there is nothing to restore. Any LATER `activate` — a second launch reaching
-//! the running primary instance over D-Bus — opens one fresh window instead.
+//! installs the `app.`-namespace actions on it, has it listen on the open channel,
+//! and asks it to restore the saved session — one window per saved window, or exactly
+//! one empty-state window when there is nothing to restore. Any LATER `activate` — a
+//! second launch reaching the running primary instance over D-Bus — opens one fresh
+//! window instead.
+//!
+//! The binary takes no arguments. A path reaches the app from the `wolf` command over
+//! the open channel (`specs/cli-and-file-open.md` §2), never through argv or
+//! GApplication's command-line forwarding.
 //!
 //! Everything a window is lives in [`mod@crate::window`]; everything the process
 //! owns exactly once lives in [`mod@crate::coordinator`], which calls four of the
@@ -70,8 +75,8 @@ pub fn run() -> glib::ExitCode {
     // `open_state_store` must not run in a process that turns out to be a remote instance.
     let coordinator: Rc<RefCell<Option<Coordinator>>> = Rc::new(RefCell::new(None));
     app.connect_activate(move |app| activate(app, &coordinator));
-    // The app takes no CLI args; pass an empty list so GTK does not try to parse
-    // (and reject) anything from the real argv.
+    // Paths arrive over the open channel, never argv; an empty list keeps GTK from parsing
+    // (and rejecting) anything in the real one.
     let code = app.run_with_args::<&str>(&[]);
     // The one non-periodic flush, for a clean quit. A signal-killed process never reaches it, which
     // is why every report is appended to the file as it is emitted.
@@ -101,6 +106,8 @@ fn activate(app: &adw::Application, cell: &Rc<RefCell<Option<Coordinator>>>) {
     // Before any window exists, so the primary menu and the chord controller
     // resolve `app.quit` from the first window's first frame.
     coordinator.install_app_actions(app);
+    // Before the restore, which still runs first for any request; `Coordinator::listen` says why.
+    coordinator.listen(app);
     coordinator.restore_session(app);
 }
 

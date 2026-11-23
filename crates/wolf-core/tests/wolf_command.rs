@@ -10,13 +10,18 @@
 //! directory with `WOLF_STATE_DIR=../s`, relative too, and with no `WOLF_TAB_ID` unless a test
 //! sets one.
 //!
+//! Every test runs a copy of the binary at `bin/wolf` in the base, never the build's own: on
+//! Linux the command starts the `wolf-gnome` beside it when nothing listens, and Cargo builds
+//! the real app beside `CARGO_BIN_EXE_wolf`. The launcher's test puts a fake one beside a copy
+//! of its own.
+//!
 //! A refusal must exit 2 before connecting. Exit 2 alone cannot show that, since a `wolf` that
 //! connects and gets no answer also exits 2, so the raw listener checks that nobody connected.
 
 use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::thread::{self, JoinHandle};
@@ -41,11 +46,12 @@ const STATE_FROM_WORK: &str = "../s";
 const DIR_AT_LIMIT: usize = 103 - 1 - wolf_core::OPEN_SOCKET_NAME.len();
 
 struct Env {
+    /// The copy at `bin/wolf` in the base, with no `wolf-gnome` beside it.
     bin: PathBuf,
     base: PathBuf,
 }
 
-/// The binary and the base dir, resolved and entered once per test binary.
+/// The binary, copied into the base dir, and the base dir, entered once per test binary.
 fn env() -> &'static Env {
     static ENV: OnceLock<Env> = OnceLock::new();
     ENV.get_or_init(|| {
@@ -59,7 +65,7 @@ fn env() -> &'static Env {
                      or the target's data and env wiring is missing."
                 )
             });
-        let bin = std::fs::canonicalize(&bin)
+        let built = std::fs::canonicalize(&bin)
             .unwrap_or_else(|e| panic!("the wolf binary {} does not resolve: {e}", bin.display()));
         let kept = tempfile::Builder::new()
             .prefix("wolf-cmd")
@@ -68,8 +74,23 @@ fn env() -> &'static Env {
             .keep();
         let base = std::fs::canonicalize(&kept).expect("failed to canonicalize the base dir");
         std::env::set_current_dir(&base).expect("failed to enter the base dir");
+        let bin = copy_wolf(&built, &base.join("bin"));
         Env { bin, base }
     })
+}
+
+/// Copies `built` to `dir/wolf`, creating `dir`, and returns the copy.
+fn copy_wolf(built: &Path, dir: &Path) -> PathBuf {
+    std::fs::create_dir_all(dir).expect("failed to create the binary's dir");
+    let copy = dir.join("wolf");
+    std::fs::copy(built, &copy).unwrap_or_else(|e| {
+        panic!(
+            "copying the wolf binary {} to {} failed: {e}",
+            built.display(),
+            copy.display()
+        )
+    });
+    copy
 }
 
 /// One test's directories: `c<n>/work`, where `wolf` runs, and `c<n>/s`, its state dir.
@@ -122,13 +143,21 @@ impl Case {
 }
 
 /// Runs `cmd` with piped output, killing it and failing after [`RUN_WAIT`].
-fn run_to_end(mut cmd: Command, what: &str) -> Output {
-    let mut child = cmd
-        .stdin(Stdio::null())
+fn run_to_end(cmd: Command, what: &str) -> Output {
+    wait_to_end(spawn_piped(cmd, what), what)
+}
+
+/// Spawns `cmd` with stdin null and piped output.
+fn spawn_piped(mut cmd: Command, what: &str) -> Child {
+    cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .unwrap_or_else(|e| panic!("failed to spawn {what}: {e}"));
+        .unwrap_or_else(|e| panic!("failed to spawn {what}: {e}"))
+}
+
+/// Waits for `child` and collects its output, killing it and failing after [`RUN_WAIT`].
+fn wait_to_end(mut child: Child, what: &str) -> Output {
     let deadline = Instant::now() + RUN_WAIT;
     while child.try_wait().expect("try_wait failed").is_none() {
         if Instant::now() >= deadline {
@@ -368,6 +397,13 @@ fn double_dash_ends_the_options() {
 
 #[test]
 fn nothing_listening_exits_2() {
+    let sibling = env().bin.with_file_name("wolf-gnome");
+    assert!(
+        !sibling.exists(),
+        "the premise fails: {} exists beside the copied wolf, so on Linux wolf would start it \
+         instead of saying Wolf is not running.",
+        sibling.display()
+    );
     let case = new_case();
     std::fs::create_dir_all(&case.state).expect("failed to create the state dir");
     let out = case.run(&["f.md"], None);
@@ -386,6 +422,130 @@ fn nothing_listening_exits_2() {
         stderr(&out).to_lowercase().contains("not running"),
         "with a stale socket, wolf must say Wolf is not running; stderr reads:\n{}",
         stderr(&out)
+    );
+}
+
+/// The variable naming the file the fake `wolf-gnome` appends its launch record to.
+#[cfg(target_os = "linux")]
+const LAUNCH_LOG_ENV: &str = "WOLF_TEST_LAUNCH_LOG";
+
+/// A stand-in for the app: one record of four lines per launch, written by one `printf`.
+#[cfg(target_os = "linux")]
+const FAKE_GNOME: &str = r#"#!/bin/sh
+printf '%s\n%s\n%s\n%s\n' "$(pwd -P)" "${WOLF_STATE_DIR-}" "${WOLF_TAB_ID-unset}" "$#" \
+  >> "$WOLF_TEST_LAUNCH_LOG"
+"#;
+
+/// The lines of the launch log at `log` once they make whole records, waiting a little for
+/// the last `printf` to land.
+#[cfg(target_os = "linux")]
+fn launch_records(log: &Path) -> Vec<String> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let text = std::fs::read_to_string(log).unwrap_or_default();
+        let lines: Vec<String> = text.lines().map(str::to_owned).collect();
+        let whole = text.ends_with('\n') && !lines.is_empty() && lines.len().is_multiple_of(4);
+        if whole || Instant::now() >= deadline {
+            return lines;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_missing_listener_starts_the_wolf_gnome_beside_it() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let case = new_case();
+    let case_dir = case.work.parent().expect("a case's work dir has a parent");
+    let wolf = copy_wolf(&env().bin, &case_dir.join("bin"));
+    let gnome = wolf.with_file_name("wolf-gnome");
+    std::fs::write(&gnome, FAKE_GNOME).expect("failed to write the fake wolf-gnome");
+    std::fs::set_permissions(&gnome, std::fs::Permissions::from_mode(0o755))
+        .expect("failed to make the fake wolf-gnome executable");
+    let log = case_dir.join("launch.log");
+    let id = TabId::random();
+
+    let what = "wolf f.md with nothing listening and a wolf-gnome beside it";
+    let mut cmd = Command::new(&wolf);
+    cmd.arg("f.md")
+        .current_dir(&case.work)
+        .env("WOLF_STATE_DIR", STATE_FROM_WORK)
+        .env("WOLF_TAB_ID", id.to_string())
+        .env(LAUNCH_LOG_ENV, &log);
+    let mut child = spawn_piped(cmd, what);
+    let deadline = Instant::now() + RUN_WAIT;
+    while !log.exists() {
+        if child.try_wait().expect("try_wait failed").is_some() {
+            let out = wait_to_end(child, what);
+            panic!(
+                "{what} exited {:?} without starting the wolf-gnome beside it, so Linux has no \
+                 launcher, or it applies none under a non-empty WOLF_STATE_DIR. stderr:\n{}",
+                out.status,
+                stderr(&out)
+            );
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            panic!("{what} started no wolf-gnome within {RUN_WAIT:?}.");
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    // The launched app listens where the command connects, as the real one would.
+    let listener = case.listen();
+    let out = wait_to_end(child, what);
+    assert_taken_exit(&out, what);
+    assert_eq!(
+        listener.drain_requests(),
+        vec![plain(Some(case.work.join("f.md")), Some(id))],
+        "{what} must send its request, with its own tab ID, to the listener bound after the \
+         launch; an empty queue means it gave up before retrying."
+    );
+
+    let lines = launch_records(&log);
+    assert_eq!(
+        lines.len(),
+        4,
+        "the fake wolf-gnome must have been started once, writing one four-line record; it \
+         wrote {lines:?}. More means wolf started it again on a retry."
+    );
+    assert_eq!(
+        lines[0],
+        "/",
+        "the app must start in /, so its restore adds no window for the command's directory; \
+         it started in {:?}, the command's working directory if that is {}.",
+        lines[0],
+        case.work.display()
+    );
+    let state = Path::new(&lines[1]);
+    assert!(
+        state.is_absolute(),
+        "the app must get WOLF_STATE_DIR made absolute, since it starts in another directory; \
+         it got {:?}, unchanged if that is {STATE_FROM_WORK}.",
+        lines[1]
+    );
+    let expected = std::fs::canonicalize(env().base.join(&case.state))
+        .expect("the case's state dir exists once bound");
+    assert_eq!(
+        std::fs::canonicalize(state).ok().as_deref(),
+        Some(expected.as_path()),
+        "the app's WOLF_STATE_DIR {:?} must name the command's state dir, resolved against the \
+         command's working directory and not the app's.",
+        lines[1]
+    );
+    assert_eq!(
+        lines[2], "unset",
+        "the app belongs to no tab, so WOLF_TAB_ID must be removed from its environment; it got \
+         {:?}, the command's {id} if they match.",
+        lines[2]
+    );
+    assert_eq!(
+        lines[3], "0",
+        "the app must be started with no arguments, since requests come over the socket; it got \
+         {} arguments.",
+        lines[3]
     );
 }
 

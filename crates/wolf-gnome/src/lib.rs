@@ -40,6 +40,8 @@
 //!   and `Normal`.
 //! - [`mod@pane_layout`]: the codec between the live pane layout and the persisted tree.
 //! - [`mod@open_folder`]: Open Folder's step for a directory, and the plan of the tab it opens.
+//! - [`mod@open_request`]: where a path opened from outside Wolf goes: its tab, and the pane
+//!   core's choice names.
 //! - [`restore_plans`]: one launch plan per saved window, and the write-side rules
 //!   ([`state_seam`]).
 //! - [`mod@liveness_ui`]: the crash and stall recovery rules.
@@ -131,6 +133,7 @@ pub mod liveness_ui;
 pub mod mouse;
 pub mod nav_ui;
 pub mod open_folder;
+pub mod open_request;
 pub mod other_pane_seam;
 mod overlay_style;
 pub mod palette;
