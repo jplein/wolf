@@ -17,7 +17,7 @@ public enum PaletteSeam {
     case staticCommand = 0
     /// A "Switch to Window" row (raises the window at its window index).
     case switchWindow = 1
-    /// An "Open Recent Folder" row (opens-or-raises the recent dir at its path).
+    /// An "Open Recent Folder" row (runs Open Folder on the recent dir at its path).
     case openRecent = 2
 
     /// Maps an FFI palette-row-kind discriminant (`0` → `.staticCommand`,

@@ -241,7 +241,7 @@ mod palette_row_kind {
     pub const STATIC: u8 = 0;
     /// A "Switch to Window" row (raises the window at `window_index`).
     pub const SWITCH_WINDOW: u8 = 1;
-    /// An "Open Recent Folder" row (opens-or-raises the recent dir at `path`).
+    /// An "Open Recent Folder" row (runs Open Folder on the recent dir at `path`).
     pub const OPEN_RECENT: u8 = 2;
 }
 

@@ -36,7 +36,7 @@ pub enum PaletteRowKind {
     Static,
     /// A "switch to window" row (raises the window at `window_index`).
     SwitchWindow,
-    /// An "open recent folder" row (opens-or-raises the recent dir at `path`).
+    /// An "open recent folder" row (runs Open Folder on the recent dir at `path`).
     OpenRecent,
 }
 

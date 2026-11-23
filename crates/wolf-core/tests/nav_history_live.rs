@@ -2280,7 +2280,7 @@ fn switch_buffer_records_a_navigation_entry() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
-/// The OPEN RECENT path records NOTHING: a directory change is not a file visit.
+/// A crash restart's `.chdir` re-root records NOTHING: a directory change is not a file visit.
 ///
 /// `InputEvent::Chdir { path }` is `:tcd`. No window changes its buffer, so every
 /// pane's derived target is what it already was and the fold has nothing to push.
@@ -2341,7 +2341,7 @@ fn changing_directory_records_no_navigation_entry() {
     let can_forward_before = core.history_can_forward(win);
     let current_before = current_display(&core.history_entries(win));
 
-    // --- 1. The Open Recent activation, verbatim ----------------------------
+    // --- 1. The crash restart's re-root, verbatim -----------------------------
     core.send_input(InputEvent::Chdir { path: other_dir });
 
     // Prove the chdir first: `live_cwd` is fed by the `wolf_cwd` notification `DirChanged` fires,
