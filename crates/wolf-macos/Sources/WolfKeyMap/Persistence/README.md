@@ -92,13 +92,14 @@ Purpose: The window stacking order and per-window tab recency of [application-st
 
 #### `StateSeam.swift`
 
-Purpose: The pure decision seams for the macOS state path — tracking a window's normal frame, validating a saved one, and deciding whether a window opens a folder or the empty state. Foundation and CoreGraphics only; the AppKit glue feeds it real window frames, `NSScreen` visible frames and a `FileManager`-backed directory check.
+Purpose: The pure decision seams for the macOS state path — tracking a window's normal frame, validating a saved one, placing a new one, and deciding whether a window opens a folder or the empty state. Foundation and CoreGraphics only; the AppKit glue feeds it live window frames, `NSScreen` visible frames and a directory check.
 
 **Public API**
 
-- `restoredWindowFrame(x:y:width:height:screenVisibleFrames:) -> CGRect?` — `nil` means discard the saved geometry and keep a new window's placement. It rejects two cases: a non-positive width or height, which is the "geometry never reported" sentinel; and a frame intersecting no screen's visible frame, which would restore the window fully offscreen after a display is disconnected.
+- `restoredWindowFrame(x:y:width:height:screenVisibleFrames:) -> CGRect?` — `nil` discards the saved geometry: a non-positive width or height, the "geometry never reported" sentinel, or a frame intersecting no screen's visible frame, which a disconnected display would leave offscreen.
 - `normalFrame(previous:frame:zoomed:fullScreen:) -> CGRect?` — `frame`, unless the window is zoomed or full screen, which keep `previous`: the window state saves the un-zoomed, non-fullscreen frame.
-- `launchDecision(restored:home:isDirectory:) -> LaunchDecision` — `.folder(cwd:)` only when `restored` is non-empty and still names a directory, since it may have been deleted or replaced by a plain file since the last run; otherwise `.emptyState(nvimCwd: home)`.
+- `newWindowFrame(stored:active:screenVisibleFrames:) -> NewWindowFrame` — [§7](../../../../../specs/application-state.md#7-new-windows): `.stored` when `restoredWindowFrame` accepts `stored`, else `.cascaded(topLeft:size:)` at `active`'s normal size from the top-left of its live frame, so a zoomed or full-screen window cascades from where it is, else `.system`. `ActiveWindow` carries what it reads.
+- `launchDecision(restored:home:isDirectory:) -> LaunchDecision` — `.folder(cwd:)` only when `restored` is non-empty and still names a directory; otherwise `.emptyState(nvimCwd: home)`.
 
 **Decisions**
 

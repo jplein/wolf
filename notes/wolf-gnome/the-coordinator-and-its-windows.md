@@ -22,7 +22,9 @@ A close arriving during a quit commits nothing at all. The quit path has already
 
 What holds `tree_view`'s call where it is, is evidence: the class reaches no pixel, and [`tests/README.md`](../../crates/wolf-gnome/tests/README.md) records that for the bold, so moving it would be an unverifiable edit to a startup path. That argument bears on where a call lives, not on whether it is guarded — which is the distinction that lets `overlay_style` carry a flag while `tree_view` carries none.
 
-New Window opens a fresh, empty window at `$HOME` with one tab and that tab's own Neovim, inheriting nothing from the window it was asked from: not the working directory, not the layout, not the size. That is what macOS's `makeNewWindow` does and parity is the row's whole subject; inheriting a project is a new tab's behaviour.
+New Window opens a fresh, empty window at `$HOME` with one tab and that tab's own Neovim. It takes the active window's normal size ([§7](../../specs/application-state.md#7-new-windows)) and nothing else of a window: not the working directory, not the layout. That is what macOS's `makeNewWindow` does and parity is the row's whole subject; inheriting a project is a new tab's behaviour.
+
+**The active window is the stacking order's first, never the window New Window was asked from**, as §2 defines it. Its normal size is `WindowHandle::normal_size`, GTK's default size, which a maximize or a fullscreen leaves at the unmaximized size; the allocation would lend a maximized window's size. With no window to take a size from, the default size stands. The new window opens unmaximized where the compositor puts it, since a plan carries no maximized state.
 
 **Restore is positional, never grouped by working directory.** Every tab runs its own Neovim at its own saved directory, so no two windows or tabs share anything a grouping could save, and inventing one would merge two windows the user opened deliberately. A saved state holding two windows on one directory restores both, and `MAX_RESTORE_NEOVIMS` caps the tabs a corrupt or hand-edited saved state restores across every window, frontmost first: it is a restore policy against forking dozens of Neovim processes before the first frame, not a limit on the schema.
 
@@ -42,7 +44,7 @@ Two tabs on one file share the durable swap directory, and that is left alone de
 
 Open Folder lives up here because it spans windows: a tab in any window can be the one it focuses. The dialog, the empty state's button through it, and an Open Recent palette row all reach `AppShell::open_folder`, which canonicalizes the path and hands it to `Coordinator::open_folder`. That gathers every window's live tabs and asks [`open_folder.rs`](../../crates/wolf-gnome/src/README.md#open_folderrs) for the step.
 
-A focus selects the tab §4's rule picks in its `adw::TabView` and presents its window, best-effort as above, and reads no project state. A fill and a new window read the folder's project state, which marks it used; a new window opens through the same `open_window` a restored one does.
+A focus selects the tab §4's rule picks in its `adw::TabView` and presents its window, best-effort as above, and reads no project state. A fill and a new window read the folder's project state, which marks it used; a new window opens through the same `open_window` a restored one does, at the project state's size, else the active window's normal size.
 
 **A fill replaces the empty tab; it never chdirs its Neovim.** Core's tracked cwd moves only when Neovim reports `DirChanged`, and the drawer's shell and a terminal leaf whose saved directory is gone start in that cwd, so a rebuild racing a `:tcd` would start them in the old directory. A gather between the chdir and the rebuild would also write a one-pane tab over the folder's project state.
 

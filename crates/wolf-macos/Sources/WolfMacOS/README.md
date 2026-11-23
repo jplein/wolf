@@ -19,7 +19,7 @@ Purpose: The application coordinator: launch, the live `WolfWindowController`s, 
 
 **Public API**
 
-- `makeNewWindow(originatingCwd:)` — an empty-state tab in its own window, for `CommandDispatcher`'s shared call site.
+- `makeNewWindow(originatingCwd:)` — an empty-state tab in a window [sized and cascaded](../../../../notes/wolf-macos-decisions.md#new-windows) from the active one.
 - `makeNewTab(from:)` — a tab in `key`'s group, at `key`'s folder or home.
 - `refreshTabFocus()` — sends each [`TabFocusSeam`](../WolfKeyMap/README.md#tabfocusseamswift) edge to its tab's core, and focuses the main window's tab in the [stacking order](../WolfKeyMap/Persistence/README.md#stackingorderswift). A main-tab change first captures the tab left ([capture](../../../../notes/wolf-macos-decisions.md#the-per-tab-extras)).
 - `windowMinimizedChanged(_:minimized:)` — marks or unmarks the controller's whole tab group there.
@@ -652,23 +652,23 @@ Purpose: The app's entry point, called by [`WolfMain`](../WolfMain/README.md): `
 
 #### `WolfWindowController.swift`
 
-Purpose: One view — a single tab's whole UI stack, owning its [`TabCore`](#tabcoreswift) as that core's `TabCoreView`. A tab is its own OS window; several may share a native tab group.
+Purpose: One view: a tab's whole UI stack, owning its [`TabCore`](#tabcoreswift) as that core's `TabCoreView`. A tab is its own OS window; several may share a native tab group.
 
 **Public API**
 
-- `build()` — shows the stack, becoming its core's view.
-- `hasFolder` — false in the empty state, so its sidebar never scans `home`.
+- `build()` — shows the stack at its `WindowPlacement`, becoming its core's view. `.cascaded` is [§7's](../../../../notes/wolf-macos-decisions.md#new-windows), by the extension `NSWindow.cascade(fromTopLeft:size:)`.
+- `hasFolder` — false in the empty state, whose sidebar never scans `home`.
 - `persistedCwd` — the tab's live cwd, `""` in the empty state, unlike `currentCwd`.
 - `persistedTab()` — this view's [`SessionSeam`](../WolfKeyMap/Persistence/README.md#sessionseamswift) contribution, seeded from the restored tab.
 - `normalFrame` — [`StatePersistence`](#statepersistenceswift)'s, `nil` before one is recorded.
-- `canCopy` — Copy's gate; in a terminal pane, Copy and Paste use its session.
-- `drainAndDispatchCommands()` — apart from `onRenderWake()`, so the tab's core drains in every state ([why](../WolfKeyMap/README.md#livenessseamswift)).
+- `canCopy` — Copy's gate; a terminal pane's Copy and Paste use its session.
+- `drainAndDispatchCommands()` — apart from `onRenderWake()`, so the core drains in every state ([why](../WolfKeyMap/README.md#livenessseamswift)).
 - `captureViewports()` — a no-op once torn down.
 
 **Decisions**
 
-- `tabCore` is held strong and shut down in `teardown()`, and holds this view weakly.
-- `teardown()` takes its close commit before setting `isTornDown`, which the burst's read skips: taken after, a last close would commit nothing. It is idempotent and defers `removeController` one turn, capturing `self` strongly: in `windowWillClose` the coordinator holds the last strong reference, and a synchronous drop frees the `NSWindow` mid-close.
+- `tabCore` is held strong, shut down in `teardown()`, and holds this view weakly.
+- `teardown()` commits its close before setting `isTornDown`, which the burst's read skips, or a last close commits nothing. It is idempotent and defers `removeController` one turn, holding `self` strongly: in `windowWillClose` the coordinator holds the last reference, so a synchronous drop frees the `NSWindow` mid-close.
 - `window.historyNav = self` is explicit: this is no `NSWindowController`, so no `target: nil` toolbar action reaches it.
 - The file tree starts last in `build()`, after the sidebar's collapse state seeds its refresh gate, so a collapsed sidebar defers outline work.
 - Both key edges sync terminal focus; tab focus follows `windowDidBecomeMain` ([why](../../../../notes/wolf-macos-decisions.md#one-neovim-per-tab)).

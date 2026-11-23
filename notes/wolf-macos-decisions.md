@@ -117,11 +117,21 @@ A focus raises the view §4's rule picks and reads no project state. `raise()` d
 
 The new tab opens first because closing the last window quits; when its core fails to start, the empty tab stays and nothing else happens. The close waits a runloop turn, since the dialog calls in from that window's own sheet completion. The stored frame, validated as at launch, applies only when the empty tab was its window's only tab, so a tab beside others keeps its group's frame.
 
-Otherwise a new window opens holding the folder's tab, at the stored frame when it intersects a screen. A tab Open Folder opens is a folder tab whatever `StateSeam.launchDecision` would say of the folder, because opening a folder is an explicit act, as a typed `:cd /` is. Only a fill and a new window read the project state, which marks it used.
+Otherwise a new window opens holding the folder's tab, at the stored frame when it intersects a screen, else as [New windows](#new-windows) places it. A tab Open Folder opens is a folder tab whatever `StateSeam.launchDecision` would say of the folder, because opening a folder is an explicit act, as a typed `:cd /` is. Only a fill and a new window read the project state, which marks it used.
 
 Every Open Folder, a focus included, records the folder through `record_recent_dir` on the core of the tab that lands on it. That tab's Neovim starts in the folder, and core never records a launch directory.
 
 The palette lists every recent directory. The invoking tab's own folder focuses that tab, which is harmless, and a Switch to Window row raises a window as it stands, while an Open Recent row for a folder open elsewhere focuses §4's tab, which can be a background tab.
+
+## New windows
+
+[§7](../specs/application-state.md#7-new-windows) is the rule. New Window, and an Open Folder new window with no stored frame that intersects a screen, take the active window's normal size and cascade from it, through `AppDelegate.newWindowPlacement(stored:)`. With no window open, a new window keeps the default size and AppKit's placement.
+
+**The active window is the stacking order's first, never the key window**, as §2 defines it. [`StateSeam.newWindowFrame`](../crates/wolf-macos/Sources/WolfKeyMap/Persistence/README.md#stateseamswift) takes its size through `normalFrame`, so a zoomed or full-screen window lends its earlier size, and starts the cascade from the top-left of its live frame, so the new window cascades from where that window is on screen.
+
+**The cascade moves only the new window.** `NSWindow.cascade(fromTopLeft:size:)` calls the new window's own `cascadeTopLeft(from:)` twice, the first putting its top-left on the active window's and the second offsetting it. The active window travels as a point, so it is never moved or constrained, and the controller retains no other window.
+
+**A placed window opens standalone.** Under the default "Prefer tabs: In Full Screen" setting, AppKit makes a new window a tab of a full-screen window, which opens it full screen. So `build()` disallows automatic tabbing around the first order-front of any window it places, and restores `.automatic` after, so only that first order-front is affected.
 
 ## One flat pane view, not nested split views
 
@@ -247,7 +257,6 @@ The Mono face is the one cascaded because it is drawn unscaled, and every Mono g
 - A Neovim crash restart reopens the tab's open files into one pane, so its splits collapse, and the next commit records that. Restoring the pane topology across a restart would change the restart model.
 - Only what a pane shows persists: the window state carries buffer paths only as panes, so a file the user switched away from in its pane is not reopened at launch.
 - The toolbar's search segment seeds the search toggles from Neovim each time it shows the search panel, replacing restored or user-set toggles, while the sidebar commands do not seed. Seeding once would save a never-seeded panel's all-off toggles as if chosen, which needs a design of its own.
-- A window Open Folder opens for a folder with no stored frame opens at the default size.
 - A fill discards an unsaved buffer typed into the empty tab, as closing that tab would.
 - A capture runs only at a focus move, a tab switch, a window close and quit, so a crash loses the cursor and scroll movement since the last one, and a crash restart drops every capture with its panes.
 - Per-pane navigation history is not persisted across launches, and is not cursor-position history — Neovim's own jumplist (`<C-o>` / `<C-i>`) is untouched. Navigating back to a file deleted from disk opens an empty `[New]` buffer, exactly as `:e missing.md` would.

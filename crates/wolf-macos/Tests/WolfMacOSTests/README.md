@@ -1,6 +1,8 @@
 # wolf-macos/Tests/WolfMacOSTests
 
-XCTest coverage of what [`WolfMacOS`](../../Sources/WolfMacOS/README.md) views draw. A test builds a production view in a window that is never shown, renders it offscreen and samples its pixels. [`PreviewKeyEquivalentTests.swift`](#previewkeyequivalenttestsswift) instead calls AppKit's responder and menu dispatch directly, [`SidebarToolbarTests.swift`](#sidebartoolbartestsswift) sends a toolbar control its action and reads its selection, [`TerminalDrawerResizeTests.swift`](#terminaldrawerresizetestsswift) calls the pane container's mouse handlers with synthesized events, and [`SymbolsFallbackTests.swift`](#symbolsfallbacktestsswift) draws single cells through `GlyphPainter` into a bitmap, with no view:
+XCTest coverage of what [`WolfMacOS`](../../Sources/WolfMacOS/README.md) views draw. A test builds a production view in a window that is never shown, renders it offscreen and samples its pixels.
+
+A few read something else. [`PreviewKeyEquivalentTests.swift`](#previewkeyequivalenttestsswift) instead calls AppKit's responder and menu dispatch directly, [`SidebarToolbarTests.swift`](#sidebartoolbartestsswift) sends a toolbar control its action and reads its selection, [`TerminalDrawerResizeTests.swift`](#terminaldrawerresizetestsswift) calls the pane container's mouse handlers with synthesized events, [`SymbolsFallbackTests.swift`](#symbolsfallbacktestsswift) draws single cells through `GlyphPainter` into a bitmap, with no view, and [`NewWindowPlacementTests.swift`](#newwindowplacementtestsswift) reads a window's frame and its cascade calls, with no core:
 
 ```sh
 bazel test //crates/wolf-macos:WolfMacOSTests
@@ -220,6 +222,14 @@ A split, a close and the shell exiting each unzoom, and so does Toggle Terminal,
 **Covers** — Open Folder's read of a project state over a live core: a directory's tab, a vertical split of two files, submitted and flushed, then a submit without it, loads back through `WindowStateCodec.loadProject(wolf_ffi_app_state_project_state(_:))` with its window's frame, and its `rebuild` through `requestLayoutRebuild` shows both files in order. A directory with no project state loads `nil`.
 
 **Gotchas** — the second submit is what makes the read the stored project state rather than the window state. It writes `LiveCore`'s `WOLF_STATE_DIR`, as [`SessionRestoreTests.swift`](#sessionrestoretestsswift) does. The AppKit steps of Open Folder, its focus, fill and new window, are manual-smoke.
+
+#### `NewWindowPlacementTests.swift`
+
+**Covers** — `NSWindow.cascade(fromTopLeft:size:)`, the [§7](../../../../specs/application-state.md#7-new-windows) placement: the window has the new size before its first `cascadeTopLeft(from:)` call and after the cascade, and that call starts at the active window's top-left and the second at the point the first answers, where the window's top-left ends.
+
+**Decisions**
+
+- A recording `NSWindow` subclass stands in for `cascadeTopLeft(from:)`, with unequal offsets so a swapped axis shows. The worker has no screen, and AppKit's own call then squeezes the window to 1 pt wide and pins its top-left at (0, 0). AppKit's own offset and its clamping to a real screen are a person check.
 
 #### `TerminalDrawerTests.swift`
 

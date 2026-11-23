@@ -29,7 +29,6 @@ Last verified at commit `6298d01fb761da1bfdd64a0a25671a40b9d4e525`.
 - A background tab's saved search query and toggles give way to the window's search panel once that tab is selected, since the panel is per window and takes only the selected tab's record at launch ([Application state](application-state.md#the-extras)).
 - A compositor-initiated minimize, such as Super+H, is invisible to Wolf, because Wayland never tells a client it is minimized; only Wolf's own Minimize puts a window behind the others in the saved stacking order ([Application state](application-state.md)).
 - Whether mutter activates a window restored minimized before minimizing it is unmeasured. If it does, that focus unmarks the window and the next save writes it unminimized; `cage` ignores a minimize request, so no smoke can tell.
-- A window Open Folder opens on a folder with no stored size opens at the default size.
 - Open Folder fills an empty tab by replacing it, so an unsaved buffer typed into that tab is discarded, as closing the tab would discard it ([The coordinator and its windows](the-coordinator-and-its-windows.md#opening-a-folder)).
 - The sidebar is per window and shows the selected tab's directory, so a switch between tabs in different directories re-roots it, collapsing what the user expanded ([Window structure](window-structure.md)).
 - Tabs share no Neovim, and so nothing live; [One Neovim per tab](../../specs/application-state.md#8-one-neovim-per-tab) states what that leaves unshared.

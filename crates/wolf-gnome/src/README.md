@@ -950,18 +950,19 @@ Purpose: the pure application-state seam — what to restore at launch, and what
 
 **Public API**
 
-- `restore_plans(saved, process_cwd, home, is_dir) -> Vec<RestorePlan>` — one plan per saved window with tabs, frontmost first, plus a fresh one in front for a terminal launch from a directory no saved tab holds. Capped at `MAX_RESTORE_TABS` per window and `MAX_RESTORE_NEOVIMS` across the session; never empty.
+- `restore_plans(saved, process_cwd, home, is_dir) -> Vec<RestorePlan>` — one plan per saved window with tabs, frontmost first, plus a fresh one in front for a terminal launch from a directory no saved tab holds.
 - `tab_entry`, `seeded_tab`, `sidebar_entry`, `ordered_tab_states`, `window_entry` — the write side, one tab's `Tab` up to a window's `Window` and tab recency. `TabPlan` carries `restored_sidebar`'s page and fields and the drawer share.
 - `window_state(windows, stacking)`, `close_commit(shutting_down, other_live_windows) -> CloseCommit`.
-- `present_after(minimized) -> Vec<Option<usize>>` — the restore's present schedule, over the opened windows backmost first: the index of the window each waits to paint, or `None` to present at once.
+- `present_after(minimized) -> Vec<Option<usize>>` — the restore's present schedule, backmost first: the index of the window each waits to paint, `None` to present at once.
+- `new_window_size`, `active_size` — [§7](../../../specs/application-state.md#7-new-windows)'s size: stored, else the frontmost window's normal size, else `None`: the default.
 - `restored_window_size`, `sidebar_is_shown`, `snapshot_cwd`, `may_snapshot`, `restore_runs_search`, and `may_capture_cursor`, `Alive` alone.
 
 **Decisions**
 
 - Three answers mean "commit nothing" rather than "commit an empty thing": `window_entry` with no tabs, `window_state` with no windows, and `restored_window_size` on any unusable dimension. `restore_plans` is the inverse and never answers an empty vec.
-- `MAX_RESTORE_NEOVIMS` bounds processes, one per restored tab, against a corrupt saved window state; `MAX_RESTORE_TABS` bounds one window's launch cost.
-- `ordered_tab_states` stably sorts tabs into page order, because the user can rearrange the bar.
-- The empty state persists an empty directory always, or every launcher start would become a project at home.
+- `MAX_RESTORE_NEOVIMS` caps the session's processes, one per restored tab, against a corrupt saved state; `MAX_RESTORE_TABS` caps one window's launch cost.
+- `ordered_tab_states` stably sorts tabs into page order: the user can rearrange the bar.
+- The empty state always persists an empty directory, or every launcher start becomes a project at home.
 
 #### `statusbar_layout.rs`
 
@@ -1120,14 +1121,14 @@ Purpose: one window and everything scoped to it — an `adw::ApplicationWindow` 
 **Public API**
 
 - `build(parts) -> Option<WindowHandle>` — `None` when no planned tab's core starts; a launch whose only window fails exits.
-- `WindowHandle::id`, `present`, `show_after(others)`, `cancel_present`, `refresh_subtree`, recording the selected tab's sidebar first, `capture_viewports`, `cached_window`, `display_cwd` and `readiness`, of the selected tab.
+- `WindowHandle::id`, `present`, `show_after(others)`, `cancel_present`, `refresh_subtree`, recording the selected tab's sidebar first, `capture_viewports`, `cached_window`, `normal_size`, `display_cwd` and `readiness`, of the selected tab.
 - `live_window`, `selected_is_empty`, `selected_core`, `focus_tab`, `fill_selected_tab` — [Open Folder](#open_folderrs)'s.
 
 **Decisions**
 
 - The close handler's statement order is load-bearing at both ends. Telling the coordinator comes first, or the gathered entry sees nothing and the session is lost; focusing the input method out and clearing its client widget comes last, after every core shuts down, so a focus-out commit finds no core and the context releases the widget tree.
 - Each tab's first drain is a wake queued after the window registers and installs its close handler: an earlier drain could reach a coordinator unaware of it, or close and orphan every tab's Neovim.
-- `display_cwd` is the cached entry's active `directory`, so the palette and save cannot disagree.
+- `display_cwd` is the cached entry's active `directory`, so palette and save cannot disagree.
 - The search panel takes the selected tab's record at launch or a fill ([why](../../../notes/wolf-gnome/application-state.md#the-extras)).
 - Keys, commits and focus reach the selected tab ([terminal panes](../../../notes/wolf-gnome/terminal-panes.md)).
 
