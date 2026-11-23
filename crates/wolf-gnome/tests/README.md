@@ -10,7 +10,7 @@ The devShell is not optional: it supplies GTK, exports `WOLF_NVIM_BIN` and `WOLF
 
 Rules that are decidable from their arguments are pinned in each seam's own `#[cfg(test)] mod tests`, which is the point of the seam split in [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md).
 
-The drawer share's, the key seam's, the terminal seams', the other-pane seam's, the zoom rules', the sidebar toggles', the titlebar seam's, the restore caps', the application-state seam's, the stacking order's and the tab focus rule's tables are files here instead, [`drawer_share.rs`](#drawer_sharers), [`gdk_key.rs`](#gdk_keyrs), [`terminal_seams.rs`](#terminal_seamsrs), [`other_pane_seam.rs`](#other_pane_seamrs), [`pane_zoom.rs`](#pane_zoomrs), [`sidebar_toggles.rs`](#sidebar_togglesrs), [`titlebar_background.rs`](#titlebar_backgroundrs), [`restore_caps.rs`](#restore_capsrs), [`app_state_seam.rs`](#app_state_seamrs), [`stacking.rs`](#stackingrs) and [`tab_focus.rs`](#tab_focusrs).
+The drawer share's, the key seam's, the terminal seams', the other-pane seam's, the zoom rules', the per-pane views', the sidebar toggles', the titlebar seam's, the restore caps', the application-state seam's, the stacking order's and the tab focus rule's tables are files here instead, [`drawer_share.rs`](#drawer_sharers), [`gdk_key.rs`](#gdk_keyrs), [`terminal_seams.rs`](#terminal_seamsrs), [`other_pane_seam.rs`](#other_pane_seamrs), [`pane_zoom.rs`](#pane_zoomrs), [`pane_views.rs`](#pane_viewsrs), [`sidebar_toggles.rs`](#sidebar_togglesrs), [`titlebar_background.rs`](#titlebar_backgroundrs), [`restore_caps.rs`](#restore_capsrs), [`app_state_seam.rs`](#app_state_seamrs), [`stacking.rs`](#stackingrs) and [`tab_focus.rs`](#tab_focusrs).
 
 The other files below cover what a seam cannot reach: a real Neovim, a real window, the built binary together with the manifest that shaped it, and the store output `nix build .#wolf-gnome` installs — a different artifact from the checkout build, making different claims.
 
@@ -31,7 +31,8 @@ The other files below cover what a seam cannot reach: a real Neovim, a real wind
 **Covers**
 
 - `state_seam::restore_plans` over a saved `app_state::WindowState`: each tab planned at its own directory, a missing one as an empty tab that keeps its saved tab, the saved active tab and an out-of-range one, each window's order, size and minimized flag, the extra window a terminal launch from an unheld directory puts in front and none from a held one, and a saved window with no tabs dropped.
-- The write side: `window_entry`'s `active_tab`, its fallback to the most recent contributing tab and its recency indices, a frame with no position, and no entry with no tab; `window_state`'s stacking order and minimized flag, and nothing with no window; `tab_entry`'s root rule for an empty tab, a folder tab and a lone empty pane; and `seeded_tab` with the live sidebar preference.
+- Each plan's sidebar page, search fields and drawer share from its saved tab, a saved share outside `(0, 1)` restoring a new one; `sidebar_entry` and `restored_sidebar` round trips, a missing toggle at its initial value; `restore_runs_search`; and `may_capture_cursor`, `Alive` alone.
+- The write side: `window_entry`'s `active_tab`, its fallback to the most recent contributing tab and its recency indices, a frame with no position, and no entry with no tab; `window_state`'s stacking order and minimized flag, and nothing with no window; `tab_entry`, an empty tab writing its sidebar alone and a folder tab its root, a lone empty pane included, zoom, focus, drawer and sidebar; and `seeded_tab` with the live sidebar.
 - `present_after`, the restore's present schedule: each window waiting for the one built before it, and a minimized window presented at once with nothing waiting for it.
 
 **Gotchas**
@@ -42,7 +43,7 @@ The other files below cover what a seam cannot reach: a real Neovim, a real wind
 
 **Covers**
 
-- `drawer::DrawerShare`: a new share is `DRAWER_WEIGHT`, the third `init.lua` opens the drawer's split at, and `Default` is `new`; `position` against GTK's clamp at both floors; `drag_to`, a non-positive span leaving the share alone; a drag-then-position round trip at every pixel of three spans; and a dragged share keeping its proportion across pane-area resizes, clamped at the floors.
+- `drawer::DrawerShare`: a new share is `DRAWER_WEIGHT`, the third `init.lua` opens the drawer's split at, and `Default` is `new`; `position` against GTK's clamp at both floors; `drag_to`, a non-positive span leaving the share alone; a drag-then-position round trip at every pixel of three spans; a dragged share keeping its proportion across pane-area resizes, clamped at the floors; and `restored` keeping a saved share only strictly between 0 and 1.
 
 **Gotchas**
 
@@ -148,12 +149,24 @@ The other files below cover what a seam cannot reach: a real Neovim, a real wind
 - Not a whole-image hash, which is too brittle across freetype/fontconfig versions. Pixel reads assume little-endian ARGB32, in-memory byte order `B, G, R, A`.
 - The PNG golden is a dev aid nothing asserts against; regenerate it with `cargo test -p wolf-gnome --test paint_golden -- --ignored regenerate_png_golden`, which needs the `png` feature on the `cairo` dependency.
 
+#### `pane_views.rs`
+
+**Covers**
+
+- The per-pane extras' pure seams: `pane_layout::encode_with_views` writing each leaf's captured view and ignoring one of the other kind, `encode` equal to it with no views, `saved_views` seeding a restored tab's leaves, and `pane_ref` naming a leaf or the drawer.
+- `preview_ui`'s scroll report: `reported_scroll` clamping to `[0, 1]` and refusing a non-finite value, `SCROLL_REPORT_JS` posting to `SCROLL_REPORT_HANDLER`, and `scroll_to_fraction_js` formatting only a finite fraction in range.
+
+**Gotchas**
+
+- Pure: no display, no Neovim and no WebKit. Whether the pane view captures at the right moments and the page posts and applies a scroll is [`smoke_headless/extras.rs`](#smoke_headlessextrasrs)'s question.
+
 #### `pane_zoom.rs`
 
 **Covers**
 
 - `pane_zoom`'s rules, K1 to K5 and K7 to K14, with the ids of [`PaneZoomTests.swift`](../../wolf-macos/Tests/WolfKeyMapTests/README.md#panezoomtestsswift). K6 is absent, since it tests the frozen dividers and no divider exists while a view here is zoomed, and K10 tests `shown_alone` over bound ids where the Swift tests `visibleRects`. K11 to K13 compose `focus_origin`, `drawer::focus_target` and `zoomed_after` as `apply_focus` does, over a plus-shaped tree above the drawer.
 - The saved zoom through `pane_layout`: G6a pins `leaf_index`, the depth-first index a saved tab's `zoomed` names, and the drawer's `None`. P3 is this file's own, the `leaf_index`, `encode` and `decode` round trip a relaunch makes, since this front-end has no FFI push-builder for the Swift P3 to cover.
+- `restore_targets` (E10): a saved zoom and focus mapped onto the rebuilt leaves, the drawer only while it restores open, and a zoom winning the focus.
 
 **Gotchas**
 
@@ -232,7 +245,7 @@ The other files below cover what a seam cannot reach: a real Neovim, a real wind
 **Decisions**
 
 - `CAGE_SLOTS` is per process, so a cage smoke belongs in this binary, where the slot bound counts it.
-- `leaf_fields` holds the smokes' only `Node::Pane` destructuring, so a new pane kind or field touches that function alone.
+- `pane_fields` holds the smokes' only `Pane` destructuring, so a new pane kind or field touches that function alone.
 
 **Gotchas**
 
@@ -253,15 +266,27 @@ Configuration smokes: `wolf-config.yaml`'s font size and appearance reaching the
 
 #### `smoke_headless/drawer_divider.rs`
 
-The drawer divider's smokes. One launch drags the handle between the editor tree and the drawer through [Pointer injection](#pointer-injection), reading back Neovim's window heights and the drawer shell's `stty size`. The drag must grow the drawer's window and its session, survive the drawer closing and reopening, give the editor back its launch height while the drawer is closed, stop at the editor's floor when released above the pane area, and carry into a second tab's drawer.
+The drawer divider's smokes. One launch drags the handle between the editor tree and the drawer through [Pointer injection](#pointer-injection), reading back Neovim's window heights and the drawer shell's `stty size`. The drag must grow the drawer's window and its session, survive the drawer closing and reopening, give the editor back its launch height while the drawer is closed, stop at the editor's floor when released above the pane area, and carry into a second tab New Tab opens, which takes the selected tab's share.
 
 A second test, `a_dragged_share_survives_a_window_shrink_and_grow_under_cage`, drags the share to just above the editor's floor, shrinks the window until that share's position clamps to the floor, and grows it back. The editor's and drawer's heights must return to the drag's, so the shrink's clamp was not taken for a drag. Its premises derive through `terminal.rs`'s `drawer_paned_at`.
+
+A third, `each_tab_keeps_its_drawer_share_across_a_relaunch_under_cage`, drags the drawer in one of two tabs. The other tab's drawer must open at a third, each tab must show its own share on a switch, both must be saved open with their own shares, and a relaunch must restore each.
 
 The handle's y comes from `terminal.rs`'s `drawer_strip_edges`, and no assertion reads a pixel.
 
 #### `smoke_headless/editor.rs`
 
 Editor smokes: typed text, the file and buffer pickers, the empty state, a new untitled buffer, the command palette, navigation history, completion, messages and the confirm prompt, the clipboard, and saving.
+
+#### `smoke_headless/extras.rs`
+
+The per-tab and per-pane extras' smokes, each over the saved state frozen at its capture moments and none reading OCR:
+
+- `pane_cursors_are_captured_and_restored_under_cage`: edit cursors and top lines captured on a focus change, a tab switch and quit, and not between them, then restored with each tab's focused pane.
+- `preview_scroll_survives_a_close_and_relaunch_under_cage`: a wheeled preview's scroll captured as its window closes and applied after the relaunch's load.
+- `each_tab_keeps_its_sidebar_page_under_cage`: each tab of one window saving its own sidebar page.
+- `a_zoomed_focused_drawer_restores_under_cage`: a drawer saved open, zoomed and focused reopening that way with a shell in the project, at its saved share once unzoomed.
+- `a_restored_top_line_survives_its_grid_resize_under_cage`: a top line restored with the cursor below the top row surviving the grid resize that lays out its pane. It launches at its own font size, `RV_FONT_PT`, so the pane has room for the saved view.
 
 #### `smoke_headless/fixture_guards.rs`
 
@@ -318,6 +343,8 @@ The packaged smokes' scrub lists, the devShell exports removed from a packaged l
 The search panel's toggle smokes, one each for case, regex, an invalid regex such as `foo(bar`, which must show rg's error in the status line and then be found literally with regex off, and all files, where the panel opens Markdown-only and the Enter after `All` goes on finds the `.txt` too. What a search found and what the status line says are OCR of the sidebar band. Where the toggles sit, left-aligned below the field and above the results, is the changed rows and columns between captures of one run, read from the band's raw pixels. Every capture is taken after Escape has handed focus back to the editor, so neither the field's caret nor its focus ring is in the band.
 
 The click targets are estimated from libadwaita 1.9.3's stylesheet and a measured label width, not from a probe, which is safe only because a click that misses a toggle changes no option and fails.
+
+`a_restored_search_sidebar_runs_its_query_under_cage` launches over a tab saved on its Search page: the band must show what its query and toggles find, the save must hold them, and a later edit of the field must reach the save at quit.
 
 #### `smoke_headless/sidebar.rs`
 
@@ -720,7 +747,8 @@ Being scrupulous about this is the point of the section.
 - **The other-pane no-op in the live widget.** No smoke presses Preview or Edit in Another Pane with the drawer focused, so the shell's mapping of `PaneHandle::other_pane_target`'s `None` to no RPC reaches no assertion. Only the `None` row in [`other_pane_seam.rs`](#other_pane_seamrs) pins the rule beneath it.
 - **A hidden preview across a zoom.** No smoke zooms with a Markdown preview hidden, so that its web view comes back without a reload and at its scroll position reaches no assertion.
 - **The `DrawerOpen` unzoom and the restart reset.** Toggle Terminal unzooms before the drawer opens, so `apply_drawer_open`'s unzoom finds nothing zoomed, and no smoke restarts Neovim while zoomed or with a launch rebuild pending. K4 in [`pane_zoom.rs`](#pane_zoomrs) pins the rule; the calls in `apply_drawer_open` and `reset_after_restart` reach nothing, and only the relaunch smoke reaches `apply_layout_rebuild`'s.
-- **A zoomed drawer.** No smoke zooms the drawer, so Toggle Terminal closing a zoomed drawer and unzooming, and the other-pane commands doing nothing from it, reach no assertion in the live widget. Only the rules are pinned, in [`pane_zoom.rs`](#pane_zoomrs): K1 zooms the drawer, K7 keeps the zoom on a Toggle Terminal from it, K5 unzooms at its close, K8 makes the other-pane commands do nothing from it, and P1 saves it as no zoomed leaf.
+- **A zoomed drawer.** No smoke zooms the drawer with Zoom Pane, so Toggle Terminal closing a zoomed drawer and unzooming, and the other-pane commands doing nothing from it, reach no assertion in the live widget. [`smoke_headless/extras.rs`](#smoke_headlessextrasrs) restores a drawer zoomed, saves it as `"drawer"` and unzooms it from the palette, and nothing more. The rules are pinned in [`pane_zoom.rs`](#pane_zoomrs): K1 zooms the drawer, K7 keeps the zoom on a Toggle Terminal from it, K5 unzooms at its close, and K8 makes the other-pane commands do nothing from it.
+- **Three parts of restoring the extras.** No falsifier covers readiness waiting for a shown pane's restored view, or a capture skipping a pane whose restored view or scroll still waits to apply: each orders a race, between a typed key or a capture and the view, that no smoke can reliably bring about. No test restores a view on a pane a zoom hides, which keeps it until the pane is shown and settled.
 - **Closing the zoomed pane.** Neovim moves its current window off a closed zoomed pane, and `update_active_pane` reads that as a focus move, which unzooms, so the live widget cannot tell it from the `PanesChanged` unzoom in `detect_closes`: deleting that call turns no smoke red. The call still matters for a zoomed pane that is not current, in an unselected tab, and K5 pins its rule.
 - **A split while zoomed.** `<C-w>v` makes the new window Neovim's current one, and `update_active_pane` reads that as a focus move, which unzooms. So the main zoom smoke's S leg cannot tell it from the `Split` unzoom in `apply_split`, and deleting that call leaves S green. O pins the rule live, since Preview in Another Pane leaves the current window on its source, and K4 in [`pane_zoom.rs`](#pane_zoomrs) pins it as a rule.
 

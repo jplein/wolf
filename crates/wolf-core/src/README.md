@@ -12,16 +12,16 @@ Crate root. Declares every module and flattens the public surface into root re-e
 
 #### `api.rs`
 
-`WolfCore`, the FFI-shaped surface both front-ends share, owning the tokio runtime, captive Neovim and snapshot.
+`WolfCore`, the FFI-shaped surface both front-ends share, owning the runtime, Neovim and snapshot.
 
 **Public API**
 
 - `CoreConfig.cwd` is nvim's launch directory and the search/MRU root until nvim reports its own cwd (`live_cwd`).
 - `SnapshotReadGuard` outlives `&self`, owning an `Arc` of the lock; hold it for one paint only.
-- The blocking queries (`list_buffers` and siblings) return an empty or zero fallback on any RPC error or timeout, indistinguishable from an empty answer. Among them, `window_cursor(win)` reads any window's own cursor and top line as a `WindowCursor`. The rest is fire-and-forget on the ordered input channel: `split_pane` splits the window an earlier `focus_win` made current.
+- The blocking queries (`list_buffers` and siblings) return an empty or zero fallback on any RPC error or timeout, indistinguishable from an empty answer. Among them, `window_cursor(win)` reads any window's own view. The rest is fire-and-forget, on the ordered input channel: `split_pane` splits the window an earlier `focus_win` made current, and `set_window_cursor(win, view)` re-applies a view after a resize ([why](../../../notes/wolf-core-decisions.md#a-saved-view-is-applied-twice)).
 - `restart_nvim` returns `Ok(false)` when no respawn happened (already `Alive` or in flight) and reopens nothing: capture `open_files_for_tabpage` first. After `Ok(true)` the snapshot, intents and history start over ([what carries](../../../notes/wolf-core-decisions.md#liveness-and-restart)).
 - `start` ignores `SIGPIPE` process-wide ([why](../../../notes/wolf-core-decisions.md#liveness-and-restart)).
-- `recent_dirs` omits non-directories (a stat each, on the calling thread) and never prunes the store, so a returning folder reappears.
+- `recent_dirs` omits non-directories (a stat each, on the caller's thread) and never prunes, so a returning folder reappears.
 
 **Decisions**
 

@@ -8,7 +8,7 @@ The durable constraints behind this crate. Read this before changing anything he
 
 This is the GTK 4 / libadwaita front-end: a runnable multi-window application that consumes [`wolf-core`](../crates/wolf-core/README.md) as an ordinary Rust crate dependency. It renders Neovim natively rather than embedding a terminal, so every pixel outside a preview comes from a Cairo/Pango paint of a core `Snapshot`, or of a session's `TerminalFrame` in a terminal pane. One process holds N windows of N tabs and one captive Neovim per tab; [The coordinator and its windows](wolf-gnome/the-coordinator-and-its-windows.md) owns that split.
 
-Split, close, and focus move are driven by core's layout-intent channel; a divider drag is the `gtk::Paned` handle's own gesture, landing in the pure tree's weights, or for the terminal drawer's divider in the window's drawer share. Menu items, accelerators, and commands drained from Neovim all resolve through one `gio` action namespace.
+Split, close, and focus move are driven by core's layout-intent channel; a divider drag is the `gtk::Paned` handle's own gesture, landing in the pure tree's weights, or for the terminal drawer's divider in the tab's drawer share. Menu items, accelerators, and commands drained from Neovim all resolve through one `gio` action namespace.
 
 Files reach Neovim two ways, and [`README.md`](../crates/wolf-gnome/README.md) states both. What is durable here is that `InputEvent::OpenAt`'s edit and cursor move happen inside one input-pump step, so no other event can interleave between them.
 
@@ -162,7 +162,7 @@ Every link clicked in a preview is cancelled and acted on out of band, and every
 
 ## Application state
 
-Every tab is gathered from its own Neovim on every render wake behind a gate that prevents data loss, in page order, and restores at its own directory with its own sidebar preference and empty state. The window stacking order is kept from focus events and Wolf's own Minimize, and neither window position nor the content-width toggle is persisted. [Application state](wolf-gnome/application-state.md) gives the reasons.
+Every tab is gathered from its own Neovim on every render wake behind a gate that prevents data loss, in page order, and restores at its own directory with its own sidebar preference and empty state. Its extras restore too: its focus, its sidebar page, query and toggles, its drawer and share, and each pane's cursor, top line or preview scroll, captured only when focus leaves a pane, a tab is switched away from, a window closes, and at quit. The window stacking order is kept from focus events and Wolf's own Minimize, and neither window position nor the content-width toggle is persisted. [Application state](wolf-gnome/application-state.md) gives the reasons.
 
 ## Crash and stall recovery
 
@@ -202,7 +202,9 @@ Every smoke holds one of a bounded number of cage slots for its whole body, beca
 
 **While a tab is zoomed, only the zoomed pane counts.** A hidden pane is never allocated, so it never requests a grid, and counting it would leave a launch that restores a zoom never ready.
 
-**Every launch window's selected tab must finish its restore.** A pending saved layout is consumed on a later wake with a blocking RPC that would interleave with typed keys. A background tab's rebuild runs on its own Neovim, so it can delay a typed key but never lands between two of them in the Neovim they reach. Every window must also have a selected tab with a live core and a bound pane, and a painted frame.
+**Every launch window's selected tab must finish its restore.** A pending saved layout is consumed on a later wake with a blocking RPC that would interleave with typed keys. A background tab's rebuild runs on its own Neovim, so it can delay a typed key but never lands between two of them in the Neovim they reach.
+
+The selected tab also waits for a drawer its restore reopened to bind, and for every shown pane's restored view to be queued once its grid settles, so neither lands after a typed key ([Application state](wolf-gnome/application-state.md#restoring-the-extras)). Every window must also have a selected tab with a live core and a bound pane, and a painted frame.
 
 **"Neovim is not at a prompt" is deliberately not a condition.** The file means keys are delivered, not that they are interpreted as intended, so a startup prompt stays visible as the bug it is.
 

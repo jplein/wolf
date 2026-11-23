@@ -61,10 +61,12 @@ Real Neovim (`//crates/wolf-core:app_state_rebuild`: staged nvim runfiles, `WOLF
 
 - `restored_tab` and `tab_rebuild_spec` through `WolfCore::rebuild_layout`: a missing edit file rebuilds as the inherited `Untitled.md` with its zoom dropped, so `active_win` is the last leaf's; a saved cursor and top line restore; a cursor past the end of its file is clamped.
 - `window_cursor_reads_each_windows_own_cursor_and_top_line`: `WolfCore::window_cursor` reads a window other than the current one with its own cursor and top line, and answers `None` for an unknown window and for window `0`.
+- `a_saved_view_applies_again_after_a_grid_resize`: after a `resize_grid` re-scrolls a rebuilt leaf that is not the current window, `WolfCore::set_window_cursor` brings back its saved view and leaves the current window's alone, and a line past the end of a file is clamped.
 
 **Gotchas**
 
 - The top-line case first measures, on a fresh core, that the same cursor without a `top_line` lands on another top line, or it could not tell the saved one from Neovim's own scroll. Viewport lines come from `win_viewport` and are 0-based.
+- The resize case likewise first polls until the resize has moved the leaf's top line off the saved one, which is the re-scroll under `splitkeep=cursor` the call exists for.
 
 #### `app_state_rules.rs`
 

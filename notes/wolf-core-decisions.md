@@ -164,6 +164,12 @@ The wire document is deliberately not the model's serde shape, so nothing can be
 
 Leaf order is the other half of the contract. Children are emitted depth-first, the order `WolfCore::rebuild_layout` returns nvim window handles in, so a front-end zips those handles onto its own depth-first leaf list. Reordering either side transposes every restored pane while every count-based assertion stays green.
 
+## A saved view is applied twice
+
+The rebuild applies each edit leaf's saved cursor and top line at the size Neovim gives the window, and a front-end sizes each grid only afterwards. Under Neovim's default `splitkeep=cursor`, a change of a window's inner height re-scrolls it to keep the cursor's relative row, so a saved top line survives only when the cursor sat on the window's top row. A front-end that sizes its grids after the rebuild therefore applies each view again with `WolfCore::set_window_cursor` once they have settled, as GNOME's pane view does. The call is fire-and-forget on the ordered input channel, so it lands behind every resize queued before it, and the rebuild still applies the views so the first frames show the restored region.
+
+`splitkeep=topline` in `init.lua` is rejected: it is global, changing how every split scrolls on both platforms, and under it Neovim moves the cursor when a window shrinks past it, so a restored cursor could be lost instead. Re-applying on a window's first `WinResized` is rejected too. It depends on the event firing, while `nvim_ui_try_resize_grid` changes only the inner size and `WinResized` compares the layout size, which was read in Neovim's source rather than measured; and only the front-end knows when its sizes are final.
+
 ## The persisted zoom mark
 
 A tab's `zoomed` is a depth-first pane index, as [the spec's JSON](../specs/application-state.md#2-the-state-model) has it. The index is safe because `app_state::restored_tab` drops no pane: a pane it cannot restore becomes an empty edit pane in the same position, so no index shifts, and a zoom on that pane is dropped. A zoom is dropped for a replaced pane only, never because a pane was saved with an empty path, which restores as it was saved. A terminal pane restores whether or not its directory exists, so its zoom is kept.
