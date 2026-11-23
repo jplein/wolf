@@ -18,10 +18,12 @@
 //!   bytes with the terminating NUL. [`socket_paths_over_103_bytes_are_refused`] measures it.
 //! - A socket file outlives the `std` listener that bound it, which is what a crashed app leaves
 //!   behind; [`a_stale_socket_is_replaced`] asserts it.
+//! - A stream connect to a live datagram socket fails with `EPROTOTYPE`, not `ECONNREFUSED`, on
+//!   both platforms; [`a_socket_of_another_kind_is_left_alone`] asserts it.
 
 use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::net::{UnixDatagram, UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, OnceLock};
@@ -455,6 +457,78 @@ fn a_stale_socket_is_replaced() {
         "a request to a listener bound over a stale socket",
     );
     drop(listener);
+}
+
+#[test]
+fn a_socket_of_another_kind_is_left_alone() {
+    let state = fresh_state();
+    std::fs::create_dir_all(&state).expect("failed to create the state dir");
+    let socket = state.join(OPEN_SOCKET_NAME);
+    let datagram = UnixDatagram::bind(&socket).expect("failed to bind the datagram socket");
+    let inode = socket
+        .symlink_metadata()
+        .expect("no datagram socket file")
+        .ino();
+    match UnixStream::connect(&socket) {
+        Err(e) if e.kind() != ErrorKind::ConnectionRefused => {}
+        other => panic!(
+            "premise: a stream connect to a live datagram socket must fail with an error other \
+             than ConnectionRefused (EPROTOTYPE); got {other:?}. Ok or ConnectionRefused means \
+             this socket cannot tell a live socket of another kind from a stale one."
+        ),
+    }
+    match OpenListener::bind(&state, noop_wake()) {
+        Err(OpenChannelError::Io(_)) => {}
+        Ok(_) => panic!(
+            "bind over a live datagram socket must fail with Io; it succeeded, so it removed a \
+             socket whose connect failed with an error other than a refusal."
+        ),
+        Err(e) => panic!(
+            "bind over a live datagram socket must fail with Io; got {e:?}. InUse would mean the \
+             connect was taken as success, NotListening that the error was renamed."
+        ),
+    }
+    let after = socket.symlink_metadata().unwrap_or_else(|e| {
+        panic!("bind must leave the datagram socket in place; its file is gone ({e}).")
+    });
+    assert_eq!(
+        after.ino(),
+        inode,
+        "bind must leave the datagram socket's file in place; a new inode means it was removed \
+         and another socket bound at the path."
+    );
+    drop(datagram);
+}
+
+#[test]
+fn a_file_that_is_not_a_socket_is_left_alone() {
+    let state = fresh_state();
+    std::fs::create_dir_all(&state).expect("failed to create the state dir");
+    let socket = state.join(OPEN_SOCKET_NAME);
+    let contents = "a regular file where the socket belongs\n";
+    std::fs::write(&socket, contents).expect("failed to write the regular file");
+    match OpenListener::bind(&state, noop_wake()) {
+        Err(OpenChannelError::Io(_)) => {}
+        Ok(_) => panic!(
+            "bind over a regular file must fail with Io; it succeeded, so it removed a file that \
+             is not a socket."
+        ),
+        Err(e) => panic!("bind over a regular file must fail with Io; got {e:?}."),
+    }
+    let meta = socket
+        .symlink_metadata()
+        .unwrap_or_else(|e| panic!("bind must leave the regular file in place; it is gone ({e})."));
+    assert!(
+        meta.file_type().is_file(),
+        "bind must leave the regular file as it was; the path now holds {:?}, so it was removed \
+         and replaced.",
+        meta.file_type()
+    );
+    assert_eq!(
+        std::fs::read_to_string(&socket).expect("failed to read the regular file back"),
+        contents,
+        "bind must not change the regular file's contents."
+    );
 }
 
 #[test]

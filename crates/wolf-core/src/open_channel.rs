@@ -226,15 +226,23 @@ pub struct OpenListener {
 
 impl OpenListener {
     /// Listens on the socket in `state_dir`, creating the directory, and calls `wake` after
-    /// queueing each request. A stale socket file is replaced; a live listener's is
-    /// [`OpenChannelError::InUse`] and left alone.
+    /// queueing each request.
+    ///
+    /// A socket whose connect is refused is stale, and is replaced. A live listener's socket is
+    /// [`OpenChannelError::InUse`]. Any other connect failure, or a file at the path that is not
+    /// a socket, is [`OpenChannelError::Io`]; neither removes the file.
     pub fn bind(state_dir: &Path, wake: WakeFn) -> Result<OpenListener, OpenChannelError> {
         let socket = open_socket_path(state_dir)?;
         fs::create_dir_all(state_dir)?;
         if let Ok(meta) = fs::symlink_metadata(&socket) {
             match UnixStream::connect(&socket) {
                 Ok(_) => return Err(OpenChannelError::InUse(socket)),
-                Err(_) if meta.file_type().is_socket() => fs::remove_file(&socket)?,
+                Err(e)
+                    if e.kind() == io::ErrorKind::ConnectionRefused
+                        && meta.file_type().is_socket() =>
+                {
+                    fs::remove_file(&socket)?;
+                }
                 Err(e) => return Err(e.into()),
             }
         }
