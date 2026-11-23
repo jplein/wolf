@@ -18,7 +18,7 @@ Purpose: The pure codec between the live `PaneTree` layout and the shapes that p
 
 **Decisions**
 
-- There is no Swift renderer for the layout-rebuild document. The restore hands the loaded `FfiPaneNode` back to `WolfCoreHandle.rebuild_layout`, so Rust's `rebuild_layout_spec` stays its only renderer and the format cannot drift between front-ends ([the rebuild-layout wire format](../../../../../notes/wolf-core-decisions.md#the-rebuild-layout-wire-format)).
+- There is no Swift renderer for the layout-rebuild document. The restore hands the loaded `FfiPaneNode` back to `WolfCoreHandle.rebuild_layout`, so Rust's `rebuild_layout_spec` renders it and the format cannot drift between front-ends ([the rebuild-layout wire format](../../../../../notes/wolf-core-decisions.md#the-rebuild-layout-wire-format)).
 - A `preview` leaf stores the source Markdown file's absolute path, not the scratch buffer's, because restore reopens it through `wolf_preview_file` rather than `:edit`.
 
 **Gotchas**

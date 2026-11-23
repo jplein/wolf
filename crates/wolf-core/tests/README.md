@@ -41,6 +41,52 @@ Its own helpers:
 
 ## Files
 
+#### `app_state_model.rs`
+
+Headless (`//crates/wolf-core:app_state_model`: serde only, no nvim, no files).
+
+**Covers**
+
+- The serde shapes of [the state model](../../../specs/application-state.md#2-the-state-model): the spec's JSON example round-trips and parses to its meaning; the optional fields read as `None` when absent and are not written as `null`; `frame.x`/`y`, `root` and `zoomed` are always written; a pane reference is an index or `"drawer"`; a project state is `{"frame", "tab"}` with no `directory`.
+
+**Gotchas**
+
+- The example is compared by value through `same_json`, because the spec writes `120` where the model holds an `f64`, and `serde_json` keeps `120` and `120.0` as different numbers. Keys and array lengths must still match exactly.
+
+#### `app_state_rebuild.rs`
+
+Real Neovim (`//crates/wolf-core:app_state_rebuild`: staged nvim runfiles, `WOLF_NVIM_BIN`, `no-sandbox`).
+
+**Covers**
+
+- `restored_tab` and `tab_rebuild_spec` through `WolfCore::rebuild_layout`: a missing edit file rebuilds as the inherited `Untitled.md` with its zoom dropped, so `active_win` is the last leaf's; a saved cursor and top line restore; a cursor past the end of its file is clamped.
+
+**Gotchas**
+
+- The top-line case first measures, on a fresh core, that the same cursor without a `top_line` lands on another top line, or it could not tell the saved one from Neovim's own scroll. Viewport lines come from `win_viewport` and are 0-based.
+
+#### `app_state_rules.rs`
+
+Headless (`//crates/wolf-core:app_state_rules`: real temp files for the existence checks, no nvim).
+
+**Covers**
+
+- `project_tab` and `project_states`: [the three branches](../../../specs/application-state.md#which-tab-becomes-a-directorys-project-state), an active tab anywhere beating a recent one in a front window, unlisted tabs ranking after listed ones, and `""` choosing nothing.
+- `restored_tab`'s pane, zoom and focus rules, and the kind, cursor and zoom marks of the document `tab_rebuild_spec` renders.
+
+#### `app_state_store.rs`
+
+Headless (`//crates/wolf-core:app_state_store`: real SQLite files in tempdirs, no nvim, no `WOLF_STATE_DIR`).
+
+**Covers**
+
+- `AppStateStore` against [§1](../../../specs/application-state.md#1-storage) and [§4](../../../specs/application-state.md#4-saving): the round trip; an unchanged tree, recency included, writing nothing; a burst writing once; `flush`; a closed directory keeping its row byte-equal; no row for an empty tab; `PROJECT_STATE_LIMIT` evicting the least recently used, Open Folder's read included; the chosen tab and frame; each newer table neither read nor written while the other still is; and the one transaction.
+- The older-version migration is the in-source `db.rs` tests', in `//crates/wolf-core:wolf_core_lib_test`.
+
+**Gotchas**
+
+- The database is seeded and tampered with through raw `rusqlite`, and the versions it bumps are read from `schema` after a normal open, never hard-coded. Write counts come from `AFTER INSERT` and `AFTER UPDATE` triggers, and the transaction case from a `RAISE(ABORT)` trigger on `project_state`.
+
 #### `appearance.rs`
 
 Real Neovim (`//crates/wolf-core:appearance`: staged nvim runfiles, `WOLF_NVIM_BIN`, `no-sandbox`).

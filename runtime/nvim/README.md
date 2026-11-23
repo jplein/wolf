@@ -142,15 +142,15 @@ Runs `tabnew`, roots the new tabpage at `cwd` via `:tcd` when `cwd` is non-empty
 
 #### `wolf_rebuild_layout(spec_json)`
 
-Realizes a saved pane-split tree in the current tabpage's lone window and returns the window handles in depth-first leaf order, the front-end's `PaneTree.leaves()` order, so each handle zips to its rebuilt leaf. A malformed spec returns an empty list.
+Realizes a saved pane-split tree in the current tabpage's lone window and returns the window handles in depth-first leaf order, so each handle zips to its rebuilt leaf. A malformed spec returns an empty list.
 
-`spec_json` is a JSON string: a leaf is `{ leaf = true, path, preview, terminal, zoomed }`, a split is `{ orientation = "h"|"v", weights, children }`. `wolf_core::state::rebuild_layout_spec` is its only producer, so a change here lands there too; see [wolf-core-decisions.md](../../notes/wolf-core-decisions.md).
+`spec_json` is a JSON string: a leaf is `{ leaf = true, path, preview, terminal, zoomed }`, where an edit leaf may add `cursor = { line, col }` and `top_line`, and a split is `{ orientation = "h"|"v", weights, children }`. Core's `app_state` builds it, so a change here lands there too ([why](../../notes/wolf-core-decisions.md#the-rebuild-layout-wire-format)).
 
-A preview leaf with a path becomes a preview of that source via `wolf_preview_file`, converting the window rather than replacing it so the handle survives; a plain leaf with a path is `:edit`ed; an empty leaf keeps its inherited buffer. A terminal leaf's window is returned untouched, since its `path` is a directory: core starts the leaf's session and binds it there once the handles return. Regions are created child-0-first, left-to-right and top-to-bottom. nvim supplies only the window count, topology, and per-window buffer; the front-end drives pane sizes from its own weights.
+A preview leaf with a path becomes a preview of that source via `wolf_preview_file`, converting the window so its handle survives; a plain leaf with a path is `:edit`ed, with its cursor line and `top_line` clamped to the buffer; an empty leaf keeps its inherited buffer. A terminal leaf's window is returned untouched, since its `path` is a directory: core starts the leaf's session and binds it there once the handles return. nvim supplies only the window count, topology, per-window buffer and saved view; the front-end drives pane sizes from its own weights.
 
 It then makes the first zoomed leaf's window current, whose `WinEnter` reports it active ahead of the barrier below, leaving no focus move in flight to unzoom the restore ([why](../../notes/wolf-core-decisions.md#the-persisted-zoom-mark)).
 
-It ends with `_G.wolf_sync_buffers`, so core reports every returned window before the RPC answers ([why a request](../../notes/wolf-core-decisions.md#threading-and-locking)). Without it the coalesced emit lands after the caller wakes, and a state commit in that gap persists the startup `Untitled.md`, or no file, in place of each restored one.
+It ends with `_G.wolf_sync_buffers`, so core reports every returned window before the RPC answers ([why a request](../../notes/wolf-core-decisions.md#threading-and-locking)). Without it a state commit straight after the RPC could persist the startup `Untitled.md` in place of each restored file.
 
 #### `wolf_close_tabpage(handle)`
 

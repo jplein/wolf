@@ -31,6 +31,12 @@ Where the wolf-core suite panics without a real nvim, these tests skip loudly th
 
 ## Files
 
+#### `app_state.rs`
+
+**Covers** — the application-state bridge end to end: the `wolf_ffi_app_state_*` builder over two windows, every field set through it read back through the `FfiAppState` family's accessors with unset fields reading `UNSET`, `NONE` or `false`, and `wolf_ffi_app_state_project_state` picking the tab the submitted recency names, or not `found`. Headless — target `//crates/wolf-ffi:app_state` stages no nvim and carries no `no-sandbox` tag; the store opens in `WOLF_STATE_DIR` pointed at a tempdir.
+
+**Gotchas** — one `#[test]` only, as in [`state.rs`](#staters): it sets the process-global `WOLF_STATE_DIR` before the process-wide `SHARED_APP_STATE` opens, so a sibling test could race it or find the store open elsewhere. The discriminants are local constants mirroring the bridge's private tables.
+
 #### `appearance.rs`
 
 **Covers**

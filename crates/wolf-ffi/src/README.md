@@ -272,28 +272,48 @@ The read side loads a saved tree; the write side pushes a fresh one through free
 
 All windows share one process-wide store, opened lazily over the platform state directory. Opening the same directory twice would race the per-store writer threads, which the store does not support. An unresolvable state directory disables persistence process-wide, logged and never fatal.
 
+### Application state
+
+The builder, submit and readers over core's [`AppStateStore`](../../wolf-core/src/README.md#app_state_storers), shaped like the saved-state surface above. Every window shares the process-wide `SHARED_APP_STATE`, opened lazily over the state directory, because the store's unchanged-tree check is per handle. `shutdown` does not flush it: the final write is a front-end step taken before any Neovim exits.
+
+- `wolf_ffi_app_state_begin()` — Clears the window state, its recency and the node stack.
+- `wolf_ffi_app_state_add_window(has_position, x, y, width, height, active_tab)` — Frontmost first. `x` and `y` are stored as unset when `has_position` is false.
+- `wolf_ffi_app_state_add_tab(directory, sidebar_visible, focused_kind, focused_index, zoomed_kind, zoomed_index)` — Attaches to the last window. Each reference is a `pane_ref` kind plus an index that only `PANE` reads; an unknown kind is unset.
+- `wolf_ffi_app_state_tab_sidebar(mode, query, case_sensitive, use_regex, all_files)`, `wolf_ffi_app_state_tab_drawer(open, share)` — The last tab's fields, unset until called. An unknown `mode`, or `UNSET`, is unset.
+- `wolf_ffi_app_state_push_pane(kind, path, weight)`, `wolf_ffi_app_state_push_layout(orientation, child_count, weight)`, `wolf_ffi_app_state_commit_root()` — The same post-order replay as the saved-state layout builder above. An unknown `kind` pushes an empty edit pane, so a later layout's count still matches.
+- `wolf_ffi_app_state_pane_cursor(line, col, top_line)`, `wolf_ffi_app_state_pane_scroll(scroll)` — Apply to the pane just pushed when it is an edit or a preview pane respectively.
+- `wolf_ffi_app_state_push_recency(tab)` — Appends to the last window's recency, most recently selected first. It picks a directory's project state and is never stored.
+- `wolf_ffi_app_state_commit()` — Submits the state with its recency; an unchanged tree writes nothing. `wolf_ffi_app_state_flush() -> bool` is as `wolf_ffi_state_flush`.
+- `wolf_ffi_app_state_window_state() -> FfiAppState` — The launch read. Empty with no store, nothing saved, or a table from a newer build.
+- `wolf_ffi_app_state_project_state(directory) -> FfiProjectState` — The Open Folder read, which marks the row used. `found` is false when there is none, and `tab().directory()` is the directory asked for.
+- `FfiAppState::windows`, `FfiAppWindow`, `FfiAppTab`, `FfiAppNode` — Accessors over core's model. A field that was not saved or does not apply reads 0, `""`, `false`, `UNSET` or `NONE`, with a `has_…` accessor wherever 0 is also a real value. A missing root and an out-of-range `child` read as an empty edit pane.
+
 ## Discriminant tables
 
 These `u8` values are the ABI: Swift decodes raw integers, so the numbers are content, not magic. They are append-only — see [`wolf-ffi-decisions.md`](../../../notes/wolf-ffi-decisions.md).
 
-| Module                  | Mirrors                          | Values                                                                                                                                                                    |
-| ----------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `kind`                  | `wolf_core::Key`                 | `CHAR` 0, `ENTER` 1, `ESC` 2, `TAB` 3, `BACKSPACE` 4, `DELETE` 5, `LEFT` 6, `RIGHT` 7, `UP` 8, `DOWN` 9, `HOME` 10, `END` 11, `PAGE_UP` 12, `PAGE_DOWN` 13, `FUNCTION` 14 |
-| `cursor_shape`          | `wolf_core::CursorShape`         | `BLOCK` 0, `HORIZONTAL` 1, `VERTICAL` 2                                                                                                                                   |
-| `appearance`            | `wolf_core::Appearance`          | `AUTO` 0, `DARK` 1, `LIGHT` 2                                                                                                                                             |
-| `intent_kind`           | `wolf_core::LayoutIntent`        | `SPLIT` 0, `FOCUS_DIR` 1, `DRAWER_OPEN` 2                                                                                                                                 |
-| `orientation`           | `wolf_core::SplitOrientation`    | `HORIZONTAL` 0, `VERTICAL` 1                                                                                                                                              |
-| `focus_dir`             | `wolf_core::FocusDir`            | `LEFT` 0, `RIGHT` 1, `UP` 2, `DOWN` 3                                                                                                                                     |
-| `mouse_button`          | `wolf_core::MouseButton`         | `LEFT` 0, `RIGHT` 1, `MIDDLE` 2, `NONE` 3                                                                                                                                 |
-| `mouse_action`          | `wolf_core::MouseAction`         | `PRESS` 0, `RELEASE` 1, `DRAG` 2                                                                                                                                          |
-| `scroll_dir`            | `wolf_core::ScrollDirection`     | `UP` 0, `DOWN` 1, `LEFT` 2, `RIGHT` 3                                                                                                                                     |
-| `liveness`              | `wolf_core::Liveness`            | `ALIVE` 0, `NOT_RESPONDING` 1, `DEAD` 2                                                                                                                                   |
-| `palette_row_kind`      | `wolf_core::PaletteRowKind`      | `STATIC` 0, `SWITCH_WINDOW` 1, `OPEN_RECENT` 2                                                                                                                            |
-| `terminal_target`       | `wolf_core::TerminalTarget`      | `WINDOW` 0, `SPLIT_HORIZONTAL` 1, `SPLIT_VERTICAL` 2                                                                                                                      |
-| `terminal_mouse_kind`   | `wolf_core::TerminalMouseKind`   | `PRESS` 0, `RELEASE` 1, `MOTION` 2                                                                                                                                        |
-| `terminal_cursor_style` | `wolf_core::TerminalCursorStyle` | `BLOCK` 0, `BAR` 1, `UNDERLINE` 2, `HOLLOW` 3                                                                                                                             |
-| `terminal_underline`    | `wolf_core::TerminalUnderline`   | `NONE` 0, `SINGLE` 1, `DOUBLE` 2, `CURLY` 3, `DOTTED` 4, `DASHED` 5                                                                                                       |
-| `terminal_cell_width`   | `wolf_core::TerminalCellWidth`   | `NARROW` 0, `WIDE` 1, `SPACER_TAIL` 2, `SPACER_HEAD` 3                                                                                                                    |
+| Module                  | Mirrors                                            | Values                                                                                                                                                                    |
+| ----------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `kind`                  | `wolf_core::Key`                                   | `CHAR` 0, `ENTER` 1, `ESC` 2, `TAB` 3, `BACKSPACE` 4, `DELETE` 5, `LEFT` 6, `RIGHT` 7, `UP` 8, `DOWN` 9, `HOME` 10, `END` 11, `PAGE_UP` 12, `PAGE_DOWN` 13, `FUNCTION` 14 |
+| `cursor_shape`          | `wolf_core::CursorShape`                           | `BLOCK` 0, `HORIZONTAL` 1, `VERTICAL` 2                                                                                                                                   |
+| `appearance`            | `wolf_core::Appearance`                            | `AUTO` 0, `DARK` 1, `LIGHT` 2                                                                                                                                             |
+| `intent_kind`           | `wolf_core::LayoutIntent`                          | `SPLIT` 0, `FOCUS_DIR` 1, `DRAWER_OPEN` 2                                                                                                                                 |
+| `orientation`           | `wolf_core::SplitOrientation`                      | `HORIZONTAL` 0, `VERTICAL` 1                                                                                                                                              |
+| `focus_dir`             | `wolf_core::FocusDir`                              | `LEFT` 0, `RIGHT` 1, `UP` 2, `DOWN` 3                                                                                                                                     |
+| `mouse_button`          | `wolf_core::MouseButton`                           | `LEFT` 0, `RIGHT` 1, `MIDDLE` 2, `NONE` 3                                                                                                                                 |
+| `mouse_action`          | `wolf_core::MouseAction`                           | `PRESS` 0, `RELEASE` 1, `DRAG` 2                                                                                                                                          |
+| `scroll_dir`            | `wolf_core::ScrollDirection`                       | `UP` 0, `DOWN` 1, `LEFT` 2, `RIGHT` 3                                                                                                                                     |
+| `liveness`              | `wolf_core::Liveness`                              | `ALIVE` 0, `NOT_RESPONDING` 1, `DEAD` 2                                                                                                                                   |
+| `palette_row_kind`      | `wolf_core::PaletteRowKind`                        | `STATIC` 0, `SWITCH_WINDOW` 1, `OPEN_RECENT` 2                                                                                                                            |
+| `terminal_target`       | `wolf_core::TerminalTarget`                        | `WINDOW` 0, `SPLIT_HORIZONTAL` 1, `SPLIT_VERTICAL` 2                                                                                                                      |
+| `terminal_mouse_kind`   | `wolf_core::TerminalMouseKind`                     | `PRESS` 0, `RELEASE` 1, `MOTION` 2                                                                                                                                        |
+| `terminal_cursor_style` | `wolf_core::TerminalCursorStyle`                   | `BLOCK` 0, `BAR` 1, `UNDERLINE` 2, `HOLLOW` 3                                                                                                                             |
+| `terminal_underline`    | `wolf_core::TerminalUnderline`                     | `NONE` 0, `SINGLE` 1, `DOUBLE` 2, `CURLY` 3, `DOTTED` 4, `DASHED` 5                                                                                                       |
+| `terminal_cell_width`   | `wolf_core::TerminalCellWidth`                     | `NARROW` 0, `WIDE` 1, `SPACER_TAIL` 2, `SPACER_HEAD` 3                                                                                                                    |
+| `pane_kind`             | `wolf_core::app_state::Pane`                       | `EDIT` 0, `PREVIEW` 1, `TERMINAL` 2                                                                                                                                       |
+| `pane_ref`              | `wolf_core::app_state::PaneRef` after an unset     | `NONE` 0, `PANE` 1, `DRAWER` 2                                                                                                                                            |
+| `sidebar_mode`          | `wolf_core::app_state::SidebarMode` after an unset | `UNSET` 0, `TREE` 1, `SEARCH` 2                                                                                                                                           |
+| `tristate`              | `Option<bool>`                                     | `UNSET` 0, `OFF` 1, `ON` 2                                                                                                                                                |
 
 `mod flag` is a bitset rather than an enum: `BOLD` `1 << 0`, `ITALIC` `1 << 1`, `UNDERLINE` `1 << 2`, `UNDERCURL` `1 << 3`, `STRIKETHROUGH` `1 << 4`, packed into `FfiCell::flags` and `FfiToastChunk::flags`.
 

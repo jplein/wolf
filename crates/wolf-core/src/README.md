@@ -8,7 +8,7 @@ The modules of [`wolf-core`](../README.md), one entry each. Everything the crate
 
 #### `lib.rs`
 
-Crate root. Declares every module and flattens the public surface into root re-exports, so consumers write `wolf_core::Snapshot` rather than `wolf_core::render::Snapshot`.
+Crate root. Declares every module and flattens the public surface into root re-exports, so consumers write `wolf_core::Snapshot` rather than `wolf_core::render::Snapshot`. The [`app_state`](#app_staters) model is the exception, reached as `wolf_core::app_state::…`, because its `WindowState` and `Cursor` would collide with the root's `state::WindowState` and `render::Cursor`.
 
 #### `api.rs`
 
@@ -144,7 +144,7 @@ Reads the user-preferences file `wolf-config.yaml` and resolves the per-platform
 
 #### `state.rs`
 
-Persists the application-state tree to `state.json` and renders a saved layout into the spec Neovim's rebuild helper decodes.
+Persists the `state.json` tree and renders a saved layout into the spec Neovim's rebuild helper decodes.
 
 **Public API**
 
@@ -156,13 +156,50 @@ Persists the application-state tree to `state.json` and renders a saved layout i
 
 **Decisions**
 
-- The spec is deliberately not `PaneNode`'s serde shape; leaves emit depth-first to zip onto `rebuild_layout`'s returned handles ([wolf-core-decisions.md](../../../notes/wolf-core-decisions.md); shape in [`runtime/nvim/README.md`](../../../runtime/nvim/README.md)).
+- The spec is deliberately not `PaneNode`'s serde shape; leaves emit depth-first, through `app_state`'s builders, to zip onto `rebuild_layout`'s returned handles ([why](../../../notes/wolf-core-decisions.md#the-rebuild-layout-wire-format); shape in [`runtime/nvim/README.md`](../../../runtime/nvim/README.md)).
 - One `wolf-state-writer` thread owns every write: coalesce, sibling-tmp, rename — no partial file after a crash. A failed write still advances the generation; `flush` cannot hang.
 - `WindowState.tabs` has no `#[serde(default)]`: a file without it fails deserialization and is ignored rather than half-migrated.
 
 **Gotchas**
 
 - Opening one directory twice in-process races two writers on the tmp name — clone one store. Across processes, last writer wins. Geometry is front-end `f64` points; non-positive means unset.
+
+#### `app_state.rs`
+
+Purpose: the model of [§2](../../../specs/application-state.md#2-the-state-model), the rule that picks a directory's project state, and the restore helpers of [§5](../../../specs/application-state.md#5-restoring-at-launch). Its types serialize to the spec's JSON.
+
+**Public API**
+
+- `Frame::x`/`y`, `root` and `zoomed` are always written, `null` when unset. The fields a front-end may not capture (`cursor`, `top_line`, `scroll`, `focused`, `drawer`, the sidebar's mode, query and toggles) are skipped when `None`, and absent means nothing to restore.
+- `project_tab(state, recency, directory)` — [§4's rule](../../../specs/application-state.md#which-tab-becomes-a-directorys-project-state), as `(window, tab)`; `None` for `""`. `recency[w]` lists window `w`'s tabs most recent first. Unlisted tabs, or a missing list, rank after the listed ones in tab order, so empty recency is correct at launch.
+- `project_states(state, recency)` — one entry per distinct non-empty directory: the chosen tab and its window's frame.
+- `restored_tab(content)` — a missing edit file or preview source becomes an empty edit pane in place. A zoom is dropped on such a pane, out of range, on a lone pane with no open drawer, or on a closed drawer. A replaced pane keeps the focus.
+- `tab_rebuild_spec(content)` — the `wolf_rebuild_layout` document, `None` without a root. It checks no file, so pass it `restored_tab`'s output.
+
+**Decisions**
+
+- `PaneRef` is a depth-first index, not a per-leaf mark ([why](../../../notes/wolf-core-decisions.md#the-persisted-zoom-mark)).
+- The crate-private `leaf_spec` and `layout_spec` build the rebuild document for both models ([why](../../../notes/wolf-core-decisions.md#the-rebuild-layout-wire-format)).
+
+#### `app_state_store.rs`
+
+Purpose: `AppStateStore`, over the `window_state` and `project_state` state tables of `wolf.sqlite`, both opened on one connection through [`db.rs`](#dbrs) and written by a `wolf-app-state-writer` thread.
+
+**Public API**
+
+- `open(dir)` — infallible. Clones share the writer.
+- `window_state()` for launch, and `project_state(directory)` for Open Folder, which marks the row most recently used. Each reads `None` for no row, a row that does not parse (left as it is), or a table from a newer build.
+- `submit(state, recency)` — the whole window state plus each window's tab recency, which feeds `project_tab` and is never stored. Only a changed tree wakes the writer; a changed recency alone waits for the next write.
+- `flush(timeout)` — as `StateStore::flush`. `PROJECT_STATE_LIMIT` is the spec's 200.
+
+**Decisions**
+
+- Each write is one immediate transaction: the window state, every chosen project state, then the prune ([§4](../../../specs/application-state.md#one-transaction-per-write)). The JSON is serialized first, because `with_conn` may run its closure twice.
+- `last_used` is a counter (`MAX + 1`), not a clock, as `folder_mru.seq` is, so eviction is deterministic within a millisecond and tests can seed it.
+
+**Gotchas**
+
+- Two handles on one directory are safe in the database, but the unchanged-tree baseline and the newer-table flags are per handle, so a front-end opens one per process ([why](../../../notes/wolf-core-decisions.md#the-application-state-store)).
 
 #### `layout.rs`
 
@@ -361,24 +398,26 @@ Purpose: the pure, IO-free fuzzy match and ordering behind the file picker — g
 
 #### `db.rs`
 
-Purpose: the crate-private open, versioning and recovery of the state database `wolf.sqlite`. Each store declares a `TableSpec` and reaches its table only through a `Table`; the policy is §1 of [the application-state spec](../../../specs/application-state.md#1-storage).
+Purpose: the crate-private open, versioning and recovery of `wolf.sqlite`, by [§1 of the application-state spec](../../../specs/application-state.md#1-storage). A store reaches its tables only through a `Table`.
 
 **Public API** (crate-private)
 
-- `Table::open(dir, spec)` — infallible and eager, so the file exists once it returns. `Table::disabled(spec)` never connects.
+- `Table::open(dir, spec)`, and `open_all(dir, specs)` for several tables on one connection — infallible and eager, so the file exists once it returns. `Table::disabled(spec)` never connects.
 - `with_conn(f)` — `None` for a disabled handle and on any failure; a missing connection is reopened lazily.
+- `is_newer(spec)` — lock-free, so a `with_conn` closure may call it.
 
 **Decisions**
 
-- `connect` installs `busy_timeout` before `journal_mode=WAL`. The conversion to `WAL` is the one statement that can need an exclusive lock, and with no back-off a handle opening a not-yet-converted file beside others fails it at once with `SQLITE_BUSY`.
-- `ensure_table` reads the stored version and recreates the table in one `BEGIN IMMEDIATE` transaction, or two handles opening at once would both see the mismatch and the later would drop the table the earlier had recreated and written to.
-- `TableSpec::version` is the only shape check, so bump it with `columns`. A table with no `schema` row counts as another version.
-- Only `SQLITE_CORRUPT` or `SQLITE_NOTADB` deletes the file and its sidecars: that destroys every table's rows, so a busy, locked or schema error must never reach it.
-- The legacy files are removed on every `Table::open`, which is idempotent and runs only at `WolfCore::start`.
+- `connect` installs `busy_timeout` before `journal_mode=WAL`, the one statement that can need an exclusive lock; without it, opening an unconverted file beside others fails at once with `SQLITE_BUSY`.
+- `ensure_table` checks, recreates or migrates a table in one `BEGIN IMMEDIATE` transaction, or of two handles opening at once the later would drop the table the earlier recreated and wrote.
+- `TableSpec::version` is the only shape check: bump it with `columns`, plus a state table's migration (`version` is `migrations.len() + 1`). A table with no `schema` row is recreated.
+- A newer state table's flag is sticky across reopens and heals ([why](../../../notes/wolf-core-decisions.md#the-application-state-store)).
+- Only `SQLITE_CORRUPT` or `SQLITE_NOTADB` deletes the file and its sidecars, destroying every table's rows; a busy, locked or schema error never may.
+- The legacy files are removed on every `Table::open_all`.
 
 **Gotchas**
 
-- A heal unlinks `wolf.sqlite` from under the other live connections. They keep the unlinked file until they meet the fault themselves, and that heal then deletes the file the first one recreated.
+- A heal unlinks `wolf.sqlite` under the other live connections, which keep the unlinked file until they meet the fault, and their heal then deletes the file the first one recreated.
 
 #### `mru.rs`
 
