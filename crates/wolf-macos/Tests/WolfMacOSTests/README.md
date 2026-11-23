@@ -196,6 +196,25 @@ A split, a close and the shell exiting each unzoom, and so does Toggle Terminal,
 - That an empty-path pane keeps the buffer it was split from is the rebuild helper's premise, which the test measures rather than assumes.
 - It writes `LiveCore`'s `WOLF_STATE_DIR`, as [`ZoomPaneTests.swift`](#zoompanetestsswift) does.
 
+#### `ViewportCaptureTests.swift`
+
+**Covers** — the cursor and top-line capture of [§4](../../../../specs/application-state.md#cursor-and-scroll-capture) in a `PaneContainerView` over a live core: moving the focus off a pane captures its cursor and top line into `paneViews`, and nothing captures them before; `captureViewports()`, which the quit runs, captures every edit pane at once.
+
+**Gotchas**
+
+- The expected top line is read through `window_cursor`, never a constant, and a premise requires it to be neither 1 nor the cursor line, so a capture that saves no top line, or the cursor line as one, fails.
+- A preview's scroll capture is manual-smoke, since no page loads here ([why](#what-renders-under-bazel-test)).
+
+#### `ExtrasRestoreTests.swift`
+
+**Covers** — the launch restore of a tab's extras, submitted through `WindowStateCodec`, flushed, loaded and rebuilt through `requestLayoutRebuild(_:tab:focused:drawer:)` over a live core and `/bin/sh`: a focused pane restores focused, and a focused drawer too; a saved cursor beyond a shortened file is clamped to its last line; an open drawer restores open at its saved share; and a zoomed drawer, or a zoomed pane beside an open drawer, restores zoomed.
+
+**Gotchas**
+
+- A focus or a zoom is sampled at every wake of a settle: Neovim reporting another pane a round trip after the rebuild would move the active pane, or unzoom it, after a first check had passed.
+- The share is read as the drawer pane's top against the container's midline, since the drawer's own rect is private.
+- It writes `LiveCore`'s `WOLF_STATE_DIR`, as [`SessionRestoreTests.swift`](#sessionrestoretestsswift) does. The tab-switch and window-close captures, a preview's saved scroll and the sidebar's change writes are manual-smoke, since AppKit routes no event offscreen and no page loads.
+
 #### `TerminalDrawerTests.swift`
 
 **Covers** — `toggle_terminal()` showing a terminal view in the drawer strip on the drawer window's session, painting a truecolour background the shell prints, hiding with the session kept, and showing the same session again on the next toggle.
@@ -303,6 +322,7 @@ Purpose: Checks the toolbar's sidebar control in a production `MainWindow`, neve
 - A direct `isCollapsed` write, as a restore or a divider drag makes, clearing and restoring the selection.
 - Clicks switching, hiding and showing as `SidebarToolbarSeam.click` decides.
 - Both panels' tops at the sidebar's safe-area top.
+- `restoreSidebar(_:)`: a search sidebar shows its query and toggles, runs the search and selects the search segment; a tree sidebar keeps its query and toggles and runs nothing.
 
 **Gotchas**
 

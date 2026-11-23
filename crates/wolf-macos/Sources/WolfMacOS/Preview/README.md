@@ -45,7 +45,7 @@ Purpose: The `WKScriptMessageHandler` that forwards a preview page's pushed scro
 **Decisions**
 
 - The push direction, and why it cannot be a pull, is in [wolf-macos-decisions.md](../../../../../notes/wolf-macos-decisions.md).
-- A body missing `s` degrades to `0` rather than dropping the message, so a partially decodable push still refreshes the cache.
+- A body missing `s` or `m`, the scrollable height, degrades it to `0` rather than dropping the message, so a partially decodable push still refreshes the cache. An `m` of `0` saves a scroll of `0`.
 - `container` is weak: the web view's `WKUserContentController` retains this handler strongly.
 
 #### `PreviewSelectionHandler.swift`

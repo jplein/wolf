@@ -144,11 +144,11 @@ Runs `tabnew`, roots the new tabpage at `cwd` via `:tcd` when `cwd` is non-empty
 
 Realizes a saved pane-split tree in the current tabpage's lone window and returns the window handles in depth-first leaf order, so each handle zips to its rebuilt leaf. A malformed spec returns an empty list.
 
-`spec_json` is a JSON string: a leaf is `{ leaf = true, path, preview, terminal, zoomed }`, where an edit leaf may add `cursor = { line, col }` and `top_line`, and a split is `{ orientation = "h"|"v", weights, children }`. Core's `app_state` builds it, so a change here lands there too ([why](../../notes/wolf-core-decisions.md#the-rebuild-layout-wire-format)).
+`spec_json` is a JSON string: a leaf is `{ leaf = true, path, preview, terminal, zoomed }`, where an edit leaf may add `cursor = { line, col }` and `top_line`, the focused leaf adds `focused = true`, and a split is `{ orientation = "h"|"v", weights, children }`. Core's `app_state` builds it, so a change here lands there too ([why](../../notes/wolf-core-decisions.md#the-rebuild-layout-wire-format)).
 
-A preview leaf with a path becomes a preview of that source via `wolf_preview_file`, converting the window so its handle survives; a plain leaf with a path is `:edit`ed, with its cursor line and `top_line` clamped to the buffer; an empty leaf keeps its inherited buffer. A terminal leaf's window is returned untouched, since its `path` is a directory: core starts the leaf's session and binds it there once the handles return. nvim supplies only the window count, topology, per-window buffer and saved view; the front-end drives pane sizes from its own weights.
+A preview leaf with a path becomes a preview of that source via `wolf_preview_file`, converting the window so its handle survives; a plain leaf with a path is `:edit`ed, with its cursor line and `top_line` clamped to the buffer; an empty leaf keeps its inherited buffer. A terminal leaf's window is returned untouched, since its `path` is a directory: core starts the leaf's session and binds it there once the handles return. nvim supplies no sizes: the front-end drives them from its own weights.
 
-It then makes the first zoomed leaf's window current, whose `WinEnter` reports it active ahead of the barrier below, leaving no focus move in flight to unzoom the restore ([why](../../notes/wolf-core-decisions.md#the-persisted-zoom-mark)).
+It then makes the first zoomed leaf's window current, else the first focused leaf's, so its `WinEnter` reports it ahead of the barrier below and no focus move is left in flight ([why](../../notes/wolf-core-decisions.md#the-persisted-zoom-mark)).
 
 It ends with `_G.wolf_sync_buffers`, so core reports every returned window before the RPC answers ([why a request](../../notes/wolf-core-decisions.md#threading-and-locking)). Without it a state commit straight after the RPC could persist the startup `Untitled.md` in place of each restored file.
 

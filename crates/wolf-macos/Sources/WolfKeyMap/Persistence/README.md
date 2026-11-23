@@ -12,13 +12,14 @@ Purpose: The pure codec between the live `PaneTree` layout and the shapes that p
 
 **Public API**
 
-- `SavedPaneNode` — a `Hashable` mirror of the split tree keyed by per-leaf buffer path. `leafCount` is how many nvim window handles the rebuild path zips onto the leaves. `isEmptyLeaf` is the suppress-from-persistence predicate for a lone pane: true only for an unnamed leaf that is neither a preview nor a terminal, so a lone pane bound to a file, a preview or a terminal still persists. `zoomedLeafIndex` is the first zoomed leaf's depth-first index into the rebuilt leaf ids.
-- `encode(_:paths:previews:terminals:zoomed:)` — maps leaf ids to buffer paths; a leaf missing from `paths` becomes `""`. A terminal leaf's path is the directory its shell starts in. It marks the leaf whose id is `zoomed`, and the drawer's id marks none, so a zoomed drawer persists unzoomed.
+- `SavedPaneNode` — a `Hashable` mirror of the split tree keyed by per-leaf buffer path. `leafCount` is how many window handles the rebuild zips onto the leaves. `isEmptyLeaf` is the suppress-from-persistence predicate for a lone pane: true only for an unnamed leaf that is neither a preview nor a terminal, whatever its view. `zoomedLeafIndex` is the first zoomed leaf's depth-first index, and `leafViews` each leaf's `view` in that order.
+- `SavedPaneView` — an edit leaf's captured `cursor` and `topLine`, or a preview's `scroll`.
+- `encode(_:paths:previews:terminals:zoomed:views:)` — maps leaf ids to paths and views, an unmapped id to `""` and an empty view. A terminal leaf's path is the directory its shell starts in. It marks the leaf whose id is `zoomed`, and the drawer's id marks none: the drawer's zoom is `SavedDrawer.zoomed`.
 - `postOrderTokens(_:)` and its inverse `decodeTokens(_:)` — the post-order stream the FFI app-state builder replays; `decodeTokens` returns `nil` on a malformed stream.
 
 **Decisions**
 
-- There is no Swift renderer for the layout-rebuild document. The restore hands the restored `FfiAppTab` to `WolfCoreHandle.rebuild_tab`, so Rust's `tab_rebuild_spec` renders it and the format cannot drift between front-ends ([the rebuild-layout wire format](../../../../../notes/wolf-core-decisions.md#the-rebuild-layout-wire-format)).
+- There is no Swift renderer for the layout-rebuild document: `WolfCoreHandle.rebuild_tab` renders the restored `FfiAppTab` in Rust, so the format cannot drift between front-ends ([the rebuild-layout wire format](../../../../../notes/wolf-core-decisions.md#the-rebuild-layout-wire-format)).
 - A `preview` leaf stores the source Markdown file's absolute path, not the scratch buffer's, because restore reopens it through `wolf_preview_file` rather than `:edit`.
 
 **Gotchas**
@@ -32,7 +33,7 @@ Purpose: The pure restore planner: one planned tab per saved tab, each to start 
 **Public API**
 
 - `plan(windows:home:isDirectory:) -> [PlannedTab]` — in window then tab order. `isDirectory` is the seam's only injected impurity (the app passes a `FileManager` check, tests pass a set lookup).
-- `SavedTab` and `SavedWindow` are the inputs; `SavedTab` is also what a live view contributes to a commit, through [`SessionSeam`](#sessionseamswift). A `PlannedTab` retains its `groupIndex` and `positionInGroup` so the window-assembly phase can drop it back into the right OS window and tab group.
+- `SavedTab` and `SavedWindow` are the inputs; `SavedTab` is also what a live view contributes to a commit, through [`SessionSeam`](#sessionseamswift). Its `focused` is a `SavedPaneRef`, a depth-first leaf index or the drawer. Its `sidebar` is a `SavedSidebar`, each field `nil` when unsaved, and its `drawer` a `SavedDrawer`, whose `zoomed` is the drawer's zoom, since the drawer is no leaf to mark. A `PlannedTab` retains its `groupIndex` and `positionInGroup` so the window-assembly phase can drop it back into the right OS window and tab group.
 - `PlannedTab.launchCwd` and `hasFolder` are [`launchDecision`](#stateseamswift)'s: the saved directory when it still is one, else `home` in the empty state. `PlannedTab.cwd` still carries the original saved string.
 - `selectedPosition(active:materialized:)` — the saved active position when its tab materialized, else the first that did, `nil` when none did.
 
@@ -42,20 +43,19 @@ Purpose: The pure restore planner: one planned tab per saved tab, each to start 
 
 #### `SessionSeam.swift`
 
-Purpose: The write side of state persistence, ported from wolf-gnome's [`state_seam.rs`](../../../../wolf-gnome/src/README.md#state_seamrs): what each live view contributes to the window state, and whether a commit or a close writes anything. The rules are in [wolf-macos-decisions.md](../../../../../notes/wolf-macos-decisions.md#state-is-a-tree-and-the-front-end-owns-every-write).
+Purpose: The write side of state persistence, as in wolf-gnome's [`state_seam.rs`](../../../../wolf-gnome/src/README.md#state_seamrs): what each live view contributes to the window state, and whether a commit or a close writes anything. The rules are in [wolf-macos-decisions.md](../../../../../notes/wolf-macos-decisions.md#state-is-a-tree-and-the-front-end-owns-every-write).
 
 **Public API**
 
-- `gatherTab(...) -> TabGather` — `.refuse` when a folder view's cwd is `""` or any leaf is `.unreported` or missing from `content`. `zoomed` is [`encode`](#panelayoutcodecswift)'s.
+- `gatherTab(...) -> TabGather` — `.refuse` when a folder view's cwd is `""` or any leaf is `.unreported` or missing from `content`. `zoomed` and `views` are [`encode`](#panelayoutcodecswift)'s, and `active` and `drawer` give the tab's `focused` and `drawer`; a view without a folder keeps only `sidebar`.
+- `terminate(_:capture:commit:flush:teardown:)` — the quit's order: captures, commit, flush, then teardowns, so no Neovim exits before the final write.
 - `mayGather(...)`, `contribution(mayGather:gather:cache:)` — the gathered tab when the gate is open and the gather ready, else `cache`, which the caller stores as its next cache. `gather` is not evaluated behind a shut gate.
 - `windowState(live:stacking:orphans:)` — the windows a commit writes, frontmost first by [`StackingOrder`](#stackingorderswift), minimized ones last, orphans after the live windows of their class. A window keeps only its contributing tabs, or drops; `activeTab` falls back to its most recently focused contributing tab.
 - `closeCommit(terminating:otherLiveViews:)`, `committedWindows(liveViews:windows:)` and `orphanedSlots(savedTabCounts:materialized:)` — `nil` from `committedWindows` means commit nothing.
-- `CloseBurst(scheduleEnd:read:commit:)` and its `close(terminating:otherLiveViews:)` — `closeCommit` over one runloop turn's closes, which ends when `scheduleEnd`'s closure runs.
+- `CloseBurst(scheduleEnd:read:commit:)` and its `close(terminating:otherLiveViews:)` — `closeCommit` over the closes of one runloop turn, ended by `scheduleEnd`'s closure.
 
 **Decisions**
 
-- A partial read refuses the whole tab: a leaf with no reported window would persist `""` over the restored file.
-- The cache starts as the restored tab, so a view not yet read or behind a shut gate still writes its saved files.
 - A keep commits the tree read at its burst's first close, while a tabbed window's earlier tabs are live: its close button closes each tab in turn, so a later read keeps only the last.
 
 #### `StackingOrder.swift`
@@ -96,10 +96,10 @@ Purpose: Converts between the front-end's persistence types and the `wolf_ffi_ap
 **Public API**
 
 - `submit(_:)` — writes `Window`s in list order, frontmost first, each with its normal frame, `activeTab`, `minimized` and `recency`, the tab indices most recently selected first that §4's project-state rule reads. The store writes the window state and the project states in one transaction. It does not flush.
-- `load(_:) -> [LoadedWindow]` — frontmost first, a window with no tabs dropped. A `frame` is `nil` when the saved one has no position. Each `LoadedTab` carries `saved`, the tab as saved, which a view caches, and `rebuild`, the layout and bridge tab after `FfiAppTab.restored()`, `nil` with no root.
+- `load(_:) -> [LoadedWindow]` — frontmost first, a window with no tabs dropped. A `frame` is `nil` when the saved one has no position. Each `LoadedTab` carries `saved`, the tab as saved, which a view caches, and `rebuild`, the layout, bridge tab, focus and drawer after `FfiAppTab.restored()`, `nil` with no root.
 
 **Decisions**
 
-- `SavedTab` and `SavedPaneNode` stay the gather, cache and plan types, the zoom a mark on its leaf. The codec converts the mark to and from the tab's `zoomed` pane index, the leaf's depth-first index, so `SessionSeam`, `PaneLayoutCodec` and `PaneZoom` need not know the bridge's shape.
-- An empty tab (`cwd == ""`) writes no root, whatever its cache holds. A folder tab with no layout writes a lone edit pane on no file, which reads back as no layout, so a round trip is the identity.
-- The per-tab extras are written as absent: `focused`, cursor, `top_line`, scroll, the sidebar's mode, query and toggles, and the drawer.
+- `SavedTab` and `SavedPaneNode` stay the gather, cache and plan types, the zoom a mark on its leaf. The codec converts the mark to and from the tab's `zoomed` pane index, the leaf's depth-first index, and `SavedDrawer.zoomed` to and from a `zoomed` drawer, so `SessionSeam`, `PaneLayoutCodec` and `PaneZoom` need not know the bridge's shape.
+- An empty tab (`cwd == ""`) writes its sidebar and no root, focus, zoom or drawer, whatever its cache holds. A folder tab with no layout writes a lone edit pane on no file, which reads back as no layout, so a round trip is the identity.
+- A sidebar with any field set writes every field, an unset mode as `UNSET` and an unset query or toggle as `""` or `false`.

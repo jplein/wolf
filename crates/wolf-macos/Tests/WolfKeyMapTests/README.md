@@ -106,6 +106,7 @@ Note that the nearby `swift_format_srcs` glob feeds lint and format only, not te
 - `DrawerLayout`: the pinned `defaultWeight`, the no-drawer case (editor fills the pane area, `drawerRect` is `nil`), the drawer as a full-width strip sitting directly below the editor, and the invariant that `editorHeight + drawerHeight` tile the pane area exactly.
 - The `minPaneHeight` floor on both sides, the cap at the pane area when the floor exceeds it, and the collapse to `(0, 0)` on a non-finite weight, floor or pane-area height or a non-positive pane area.
 - `draggedWeight`: the share below the pointer, held at the drawer's and the editor's minimum, `nil` in an area too short for both and on a non-finite input. A dragged share scales with a pane-area resize, and a shorter area clamps it at the editor's floor.
+- `restoredWeight`: a share strictly inside `(0, 1)` is kept, and a non-finite, zero, one or out-of-range share gives `defaultWeight`.
 
 **Gotchas**
 
@@ -182,7 +183,7 @@ It also covers `terminalRestore(splits:drawerOpen:live:)`: live splits once, asc
 
 #### `PaneLayoutCodecTests.swift`
 
-**Covers** — the `PaneLayoutCodec` / `SavedPaneNode` bridge: `encode` (leaf ids to buffer paths, an unmapped leaf to the empty path, preview and terminal marking, and the zoom mark on the zoomed leaf alone, none for the drawer's id), `zoomedLeafIndex` as the depth-first index of the first marked leaf, the `postOrderTokens` / `decodeTokens` round-trip over leaf, two-child, n-ary and perpendicular-nested trees and a zoomed leaf, `isEmptyLeaf`, and `PaneTree.rebuilt(from:firstLeafId:)`.
+**Covers** — the `PaneLayoutCodec` / `SavedPaneNode` bridge: `encode` (leaf ids to buffer paths, an unmapped leaf to the empty path, preview and terminal marking, and the zoom mark on the zoomed leaf alone, none for the drawer's id), `zoomedLeafIndex` as the depth-first index of the first marked leaf, `encode` putting each view on its leaf, the `postOrderTokens` / `decodeTokens` round-trip over leaf, two-child, n-ary and perpendicular-nested trees, a zoomed leaf and leaf views, `isEmptyLeaf` whatever a leaf's view, and `PaneTree.rebuilt(from:firstLeafId:)`.
 
 **Gotchas** — a preview leaf's `path` is its source Markdown file, and `isEmptyLeaf` is false for an empty-path preview or terminal leaf because the leaf's kind has to survive persistence.
 
@@ -300,10 +301,12 @@ The three pure file-picker seams, each as a table of cases: `isPickerTrigger` (t
 
 - `PreviewScrollSeam`'s anchor arithmetic (`anchorColumn`, `anchorIds` and their dedup at column zero), the edge-threshold band including its inclusive boundaries and the short-viewport cap, `winsNeedingScroll`, `splitDocument`'s first-open / last-close scan and the shapes it refuses, and the ordered rules of `captureDecision`, `updateStrategy` and `loadCommitOutcome`.
 - The synthesized JavaScript: that each tuning constant's rendered value appears in the generated source, and that `inPlaceUpdateJS`'s free identifiers are exactly `inPlaceUpdateArgumentNames`.
+- The saved scroll: `scrollFraction`'s clamps, `scrollFractionJS`'s argument and guarded re-applies, the state script's posted `m`, and `__wolfScrollFraction` scrolling through `moveTo`.
+- The state script's three `__wolfUserScrolled = false` sites, the document-start one and one inside each of `__wolfRestore` and `__wolfScrollFraction`, and none in `__wolfUpdate`'s region, which must keep a user's scroll.
 
 **Gotchas**
 
-- Scalar and string inputs only — no AppKit, no `WKWebView`, no Neovim. The on-screen scrolling and the `PaneContainerView` wiring are compile-and-manual-smoke only.
+- No AppKit, no `WKWebView`, no Neovim. The saved-scroll tests run the generated script in a JavaScriptCore `JSContext` over a stub `window` and `document`; the rest match strings. The on-screen scrolling and the `PaneContainerView` wiring are compile-and-manual-smoke only.
 - `markerColumnStride` is asserted equal to the literal `100` that `wolf_core::markdown::MARKER_COLUMN_STRIDE` also carries. Neither side reads the other, so this catches Swift-side drift only; a Rust-side change fails nothing here.
 
 #### `PreviewSeamTests.swift`
@@ -369,13 +372,13 @@ The `PreviewSeam` reload gate plus the click-to-focus surface. `winsNeedingReloa
 
 #### `SessionSeamTests.swift`
 
-**Covers** — the [`SessionSeam`](../../Sources/WolfKeyMap/Persistence/README.md#sessionseamswift) write-side decisions: the three close answers; that a walk with no live view or no window commits nothing; `gatherTab` resolving file, preview, terminal and unnamed leaves with their weights, a lone terminal pane persisting, an empty-state lone pane persisting no layout, the zoomed leaf persisting marked while a zoomed drawer marks none, and refusal on an unreported or missing leaf or a folder view's empty cwd; `contribution` keeping or replacing the cache, never gathering behind a shut gate; both `mayGather` gates; and `orphanedSlots` in saved order.
+**Covers** — the [`SessionSeam`](../../Sources/WolfKeyMap/Persistence/README.md#sessionseamswift) write-side decisions: the three close answers; `terminate`'s order; that a walk with no live view or no window commits nothing; `gatherTab` resolving file, preview, terminal and unnamed leaves with their weights, a lone terminal pane persisting, an empty-state lone pane persisting no layout, the zoom of a leaf or of the drawer, the focus, drawer, views and sidebar, only the sidebar for an empty-state view, and refusal on an unreported or missing leaf or a folder view's empty cwd; `contribution` keeping or replacing the cache, never gathering behind a shut gate; both `mayGather` gates; and `orphanedSlots` in saved order.
 
-Of `windowState`, it covers ordering live windows by the stacking order, keeping each window's contributing tabs with their recency, falling back to the most recently focused one for an active tab that contributes nothing, dropping a window with none, and putting a non-minimized orphan ahead of a minimized live window.
+Of `windowState`: live windows in stacking order, each keeping its contributing tabs with their recency, an active tab that contributes nothing falling back to the most recently focused one, a window with none dropped, and a non-minimized orphan ahead of a minimized live window.
 
-Of `CloseBurst`, it covers that a tab group closed in one turn keeps the tree read once, at its first close, a tab closed alone stays dropped once its burst's end has run, and a terminating close reads, commits and schedules nothing.
+Of `CloseBurst`: a tab group closed in one turn keeps the tree read once, at its first close, a tab closed alone stays dropped once its burst's end has run, and a terminating close reads, commits and schedules nothing.
 
-**Gotchas** — the seed and live fixtures differ in every field, so an assertion that the cache survived cannot pass on a live tab by coincidence. The burst tests hold every end closure and run it only when a test says the turn is over. The `WolfMacOS` glue that feeds these decisions — `TabCore.onWake`, `teardown`, `AppDelegate.closeBurst`, the live filter in `gatherTree` and `leafContents()` — is compile-verified and manual-smoke.
+**Gotchas** — the seed and live fixtures differ in every field, so a surviving cache cannot pass on a live tab by coincidence. The burst tests run each end closure only when a test says the turn is over. The `WolfMacOS` glue that feeds these decisions — `TabCore.onWake`, `teardown`, `AppDelegate.closeBurst`, the live filter in `gatherTree` and `leafContents()` — is compile-verified and manual-smoke.
 
 #### `ShortcutSeamTests.swift`
 
@@ -466,5 +469,7 @@ Of `CloseBurst`, it covers that a tab group closed in one turn keeps the tree re
 #### `WindowStateRoundTripTests.swift`
 
 **Covers**: the macOS save and restore of [application-state.md](../../../../specs/application-state.md) §4 and §5 over a real `wolf.sqlite`, through `SessionSeam.windowState`, `WindowStateCodec` and the bridge, with no window or Neovim. A quit is the terminate path's calls, and a relaunch the launch's pure steps followed by another quit. Two windows with several tabs come back in stacking order with their frames, active tabs and zoom, an empty tab without its layout; a minimized window comes back minimized and behind; and the project states of a directory open in two windows follow §4's rule, rule 2 by recency rather than tab order.
+
+Every per-tab extra survives a quit and a relaunch: a focus on a pane or the drawer, a sidebar's mode, query and toggles, an open drawer's share and zoom, an edit pane's cursor and top line, and a preview's scroll; an empty tab keeps only its sidebar.
 
 **Gotchas**: a private once-per-process fence points `WOLF_STATE_DIR` at a fresh directory before the process-wide store first opens, so every test calls it first, and a new test that touches the store belongs in this file. The store's rows outlive a test, so each test names its directories with a fresh `UUID()`. Every live window list is passed out of stacking order, so only the stacking can put it right.

@@ -158,7 +158,7 @@ What the markers cost the stylesheet is in [`src/markdown/README.md`](../crates/
 
 `app_state::tab_rebuild_spec` renders a saved tab into the JSON `_G.wolf_rebuild_layout` decodes, and the shared `runtime/nvim/init.lua` is its one decoder, so a change to the shape lands in `app_state.rs` and `init.lua` only. GNOME calls `tab_rebuild_spec` directly; macOS hands the restored `FfiAppTab` back across the FFI to `WolfCoreHandle::rebuild_tab`, which renders it in Rust, so no front-end can drift from the other. The shape is documented once, in [`runtime/nvim/README.md`](../runtime/nvim/README.md).
 
-The document keeps `preview` and `terminal` booleans rather than the model's `kind`, because that is the shape `init.lua` decodes. An edit leaf's `cursor` and `top_line` are emitted only when set.
+The document keeps `preview` and `terminal` booleans rather than the model's `kind`, because that is the shape `init.lua` decodes. An edit leaf's `cursor` and `top_line` are emitted only when set, and `"focused": true` only on the tab's focused leaf.
 
 The wire document is deliberately not the model's serde shape, so nothing can be shared by serializing the type directly. A leaf path is arbitrary filesystem text, and one unescaped quote makes the Lua side's `pcall(vim.json.decode, …)` fail and abort the whole restore with no window handles at all — which is why the renderer does not hand-roll the JSON, and why it lives in core rather than once per front-end.
 
@@ -168,7 +168,7 @@ Leaf order is the other half of the contract. Children are emitted depth-first, 
 
 A tab's `zoomed` is a depth-first pane index, as [the spec's JSON](../specs/application-state.md#2-the-state-model) has it. The index is safe because `app_state::restored_tab` drops no pane: a pane it cannot restore becomes an empty edit pane in the same position, so no index shifts, and a zoom on that pane is dropped. A zoom is dropped for a replaced pane only, never because a pane was saved with an empty path, which restores as it was saved. A terminal pane restores whether or not its directory exists, so its zoom is kept.
 
-The rebuild document carries `zoomed` on every leaf, and `wolf_rebuild_layout` ends with Neovim's current window on the first zoomed leaf. Under the contract, Neovim reporting another pane is a focus move, which unzooms. A `focus_win` sent after the rebuild would leave a round trip in which a wake reads the last rebuilt window and unzooms the restore; making the window current inside the rebuild leaves no focus move in flight when `rebuild_layout` returns.
+The rebuild document carries `zoomed` on every leaf, and `wolf_rebuild_layout` ends with Neovim's current window on the first zoomed leaf, else on the focused one. Under the contract, Neovim reporting another pane is a focus move, which unzooms. A `focus_win` sent after the rebuild would leave a round trip in which a wake reads the last rebuilt window and unzooms the restore; making the window current inside the rebuild leaves no focus move in flight when `rebuild_layout` returns. A focused pane is made current inside the rebuild for the same reason, and a zoom wins over a focus, since the zoomed pane is the one shown.
 
 ## The application-state store
 

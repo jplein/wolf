@@ -60,6 +60,7 @@ Real Neovim (`//crates/wolf-core:app_state_rebuild`: staged nvim runfiles, `WOLF
 **Covers**
 
 - `restored_tab` and `tab_rebuild_spec` through `WolfCore::rebuild_layout`: a missing edit file rebuilds as the inherited `Untitled.md` with its zoom dropped, so `active_win` is the last leaf's; a saved cursor and top line restore; a cursor past the end of its file is clamped.
+- `window_cursor_reads_each_windows_own_cursor_and_top_line`: `WolfCore::window_cursor` reads a window other than the current one with its own cursor and top line, and answers `None` for an unknown window and for window `0`.
 
 **Gotchas**
 
@@ -518,13 +519,13 @@ Real Neovim: needs `WOLF_NVIM_BIN`, the staged nvim runfiles, and `tags = ["no-s
 - `WolfCore::rebuild_layout(spec_json)` realizing `tab_rebuild_spec`'s document: one handle per spec leaf, distinct, in DFS/leaf order, each bound to the requested buffer — across nested splits, lone leaves, empty-path leaves, and `preview: true` leaves reopened as previews, not `:edit`ed.
 - `rebuild_reports_every_leaf_window_on_return`: when the rebuild returns, `win_buffers` already reports every returned window with its leaf's file, and Neovim lists all three files, which rules out the `:edit`s themselves racing startup. It repeats on `BARRIER_ROUNDS` fresh cores.
 - A terminal leaf's session, bound into its window and started in the leaf's directory, else the tabpage cwd.
-- `rebuild_ends_on_the_zoomed_leaf`: `active_win` on return is the zoomed middle leaf's window, where an unzoomed control rebuild ends on the last leaf.
+- `rebuild_ends_on_the_zoomed_leaf` and `_focused_leaf`: `active_win` on return is the zoomed leaf's window, else the focused leaf's, where an unmarked rebuild ends on the last leaf.
 
 **Gotchas**
 
-- Assert handle count, distinctness and the per-window buffer, never literal handle values.
-- An empty-path leaf inherits the named `Untitled.md` startup buffer, matched by basename suffix so `/var` versus `/private/var` does not break it.
-- The reporting and zoom tests read the snapshot once, with no poll and no flush wait, because that instant is what a launch-time state commit sees. Do not add a poll: it would pass without the `wolf_barrier` guarantee they pin.
+- Assert handle count, distinctness and buffers, never literal handle values.
+- An empty-path leaf inherits the `Untitled.md` startup buffer, matched by basename so `/var` versus `/private/var` does not break it.
+- The reporting, zoom and focus tests read the snapshot once, with no poll and no flush wait, because that instant is what a launch-time state commit sees. Do not add a poll: it would pass without the `wolf_barrier` guarantee they pin.
 - The race it catches is a scheduling race: with the guarantee removed, a single round passes most of the time. Across `BARRIER_ROUNDS` rounds, macOS fails in 33 of 40 runs and Linux in 10 of 10, at a rate that varies with machine load.
 
 #### `recent_dirs.rs`

@@ -17,17 +17,17 @@ Crate root. Declares every module and flattens the public surface into root re-e
 **Public API**
 
 - `CoreConfig.cwd` is nvim's launch directory and the search/MRU root until nvim reports its own cwd (`live_cwd`).
-- `SnapshotReadGuard` owns an `Arc` of the lock, so it outlives `&self`. Hold it for one paint only.
-- The blocking queries (`list_buffers` and siblings) return an empty or zero fallback on any RPC error or timeout, indistinguishable from an empty answer. The rest is fire-and-forget on the ordered input channel: `split_pane` splits the window an earlier `focus_win` made current.
-- `restart_nvim` returns `Ok(false)` when no respawn happened (already `Alive` or in flight) and reopens nothing: capture `open_files_for_tabpage` first. After `Ok(true)` the snapshot, intents and history start over ([what carries](../../../notes/wolf-core-decisions.md#liveness-and-restart)). Typing sent before the swap never reaches the fresh nvim, so no half-typed Ex command lands as keys; state input still applies.
+- `SnapshotReadGuard` outlives `&self`, owning an `Arc` of the lock; hold it for one paint only.
+- The blocking queries (`list_buffers` and siblings) return an empty or zero fallback on any RPC error or timeout, indistinguishable from an empty answer. Among them, `window_cursor(win)` reads any window's own cursor and top line as a `WindowCursor`. The rest is fire-and-forget on the ordered input channel: `split_pane` splits the window an earlier `focus_win` made current.
+- `restart_nvim` returns `Ok(false)` when no respawn happened (already `Alive` or in flight) and reopens nothing: capture `open_files_for_tabpage` first. After `Ok(true)` the snapshot, intents and history start over ([what carries](../../../notes/wolf-core-decisions.md#liveness-and-restart)).
 - `start` ignores `SIGPIPE` process-wide ([why](../../../notes/wolf-core-decisions.md#liveness-and-restart)).
 - `recent_dirs` omits non-directories (a stat each, on the calling thread) and never prunes the store, so a returning folder reappears.
 
 **Decisions**
 
-- `block_on_rpc` detaches a call that outlives `WOLF_RPC_TIMEOUT_MS` rather than dropping it: dropping an `nvim-rs` response receiver mid-flight kills the io loop, which reads as a crash.
+- `block_on_rpc` detaches a call that outlives `WOLF_RPC_TIMEOUT_MS` rather than dropping it: dropping its `nvim-rs` response receiver kills the io loop, which reads as a crash.
 - `WolfCore` is `!Send` and keeps the process in a `RefCell`, so a restart can swap one in through `&self`. Never hold a borrow across an `.await`.
-- Stale typing is cut by `send_input`'s generation stamp, not liveness: input sent while `Alive` can still be queued at the swap.
+- Typing sent before a restart's swap never reaches the fresh nvim, while state input applies: `send_input`'s generation stamp cuts it, not liveness, since input sent while `Alive` can still be queued then.
 
 #### `pump.rs`
 
@@ -55,12 +55,12 @@ Spawns and supervises the captive Neovim child, and wraps every RPC core issues 
 - `NvimConfig::from_env` resolves the binary and creates the private state root. Its `Arc<TempDir>` guard keeps those directories only while a clone of the config lives.
 - `NvimProcess::handle` yields a cloned RPC handle usable without borrowing the process; the browser-preview server re-renders through one.
 - The `setup_*` methods install the nvim-side wiring behind every out-of-band `wolf_*` notification. A respawn re-runs the whole chain; a fresh nvim emits nothing until it does.
-- `NvimError::Timeout` is never constructed here; it comes from `api`'s RPC chokepoint.
+- `NvimError::Timeout` comes only from `api`'s RPC chokepoint.
 
 **Decisions**
 
 - Every method reachable from that chokepoint returns `impl Future<..> + Send + 'static` (a cloned handle plus owned arguments) never `async fn(&self)`: the timeout path spawns the future as a task and detaches it, and a detached task cannot hold a borrow.
-- Channel ids, modes, and paths reach `nvim_exec_lua` as varargs, never interpolated into the code string.
+- Channel and window ids, modes and paths reach `nvim_exec_lua` as varargs, never interpolated into the code string.
 - `yank_visual_selection` checks the mode before yanking: a bare `y` outside visual mode leaves nvim in operator-pending and the call never returns.
 - `shutdown` and `kill_in_place` both set `shutting_down` before the process exits, so the supervisor reads the stdout EOF as intentional rather than as a crash.
 - `kill_in_place` then waits, bounded, for the supervisor ([why](../../../notes/wolf-core-decisions.md#liveness-and-restart)). It skips the wait once the supervisor has finished: a failed respawn leaves the same process, and polling a completed `JoinHandle` again panics.
@@ -161,7 +161,7 @@ Purpose: the model of [§2](../../../specs/application-state.md#2-the-state-mode
 - `project_tab(state, recency, directory)` — [§4's rule](../../../specs/application-state.md#which-tab-becomes-a-directorys-project-state), as `(window, tab)`; `None` for `""`. `recency[w]` lists window `w`'s tabs most recent first. Unlisted tabs, or a missing list, rank after the listed ones in tab order, so empty recency is correct at launch.
 - `project_states(state, recency)` — one entry per distinct non-empty directory: the chosen tab and its window's frame.
 - `restored_tab(content)` — a missing edit file or preview source becomes an empty edit pane in place. A zoom is dropped on such a pane, out of range, on a lone pane with no open drawer, or on a closed drawer. A replaced pane keeps the focus.
-- `tab_rebuild_spec(content)` — the `wolf_rebuild_layout` document, `None` without a root. It checks no file, so pass it `restored_tab`'s output.
+- `tab_rebuild_spec(content)` — the `wolf_rebuild_layout` document, `None` without a root, marking the zoomed and the focused leaf. It checks no file, so pass it `restored_tab`'s output.
 
 **Decisions**
 

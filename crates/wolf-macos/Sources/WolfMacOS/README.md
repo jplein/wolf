@@ -15,25 +15,25 @@ Each compiles into this module and has its own README with the entries for its f
 
 #### `AppDelegate.swift`
 
-Purpose: The application coordinator: launch setup, the live `WolfWindowController`s (one per tab), window/tab restore and persistence, tab focus, and the dynamic menus.
+Purpose: The application coordinator: launch setup, the live `WolfWindowController`s, window/tab restore and persistence, tab focus, and the dynamic menus.
 
 **Public API**
 
-- `makeNewWindow(originatingCwd:)` — an empty-state tab in its own window; the argument serves `CommandDispatcher`'s shared call site.
+- `makeNewWindow(originatingCwd:)` — an empty-state tab in its own window, for `CommandDispatcher`'s shared call site.
 - `makeNewTab(from:)` — a tab in `key`'s group, its Neovim launched at `key`'s folder or at home.
-- `refreshTabFocus()` — sends each [`TabFocusSeam`](../WolfKeyMap/README.md#tabfocusseamswift) edge to its tab's core, and focuses the main window's tab in the [stacking order](../WolfKeyMap/Persistence/README.md#stackingorderswift).
+- `refreshTabFocus()` — sends each [`TabFocusSeam`](../WolfKeyMap/README.md#tabfocusseamswift) edge to its tab's core, and focuses the main window's tab in the [stacking order](../WolfKeyMap/Persistence/README.md#stackingorderswift). A main-tab change first captures the tab left ([capture](../../../../notes/wolf-macos-decisions.md#the-per-tab-extras)).
 - `windowMinimizedChanged(_:minimized:)` — marks or unmarks the controller's whole tab group there.
 - `scheduleStateSnapshot()` / `snapshotNow()` — throttled versus immediate whole-tree commit to the window state ([write model](../../../../notes/wolf-macos-decisions.md#state-is-a-tree-and-the-front-end-owns-every-write)).
-- `closeCommit(for:)` — a closing view's commit, through [`SessionSeam.CloseBurst`](../WolfKeyMap/Persistence/README.md#sessionseamswift).
+- `closeCommit(for:)` — a closing view's commit, through [`SessionSeam.CloseBurst`](../WolfKeyMap/Persistence/README.md#sessionseamswift), after capturing its tab group.
 - `otherWindows(excluding:)`, `controllerForCwd(_:)`, `raiseWindow(tabId:)` — the palette's candidates and raise target.
 - `appAppearance(for:)` — a mode's forced `NSApp.appearance`; `nil` under `auto`.
 
 **Decisions**
 
 - Launch order is fonts, config, metrics: measuring needs the config's font settings, and the bundled families must reach CoreText first.
-- `appearanceObservation` must stay stored: a deallocated `NSKeyValueObservation` invalidates itself, silently ending auto-mode appearance tracking.
+- `appearanceObservation` must stay stored: a deallocated `NSKeyValueObservation` invalidates itself, ending auto-mode appearance tracking.
 - Tab focus and the stacking order follow main ([why](../../../../notes/wolf-macos-decisions.md#one-neovim-per-tab)). Its loss rides `didResignActive`, where `NSApp.isActive` reads `false`.
-- The About panel's credits discharge the fonts' and libraries' attribution: Linux's preamble, then `wolf_ffi_font_license_notices()` and `wolf_ffi_library_license_notices()` verbatim. Their `.foregroundColor` stays `labelColor`, since uncoloured credits render black in dark mode.
+- The About panel's credits are Linux's attribution preamble, then the `wolf_ffi_*_license_notices()` verbatim, coloured `labelColor`: uncoloured, they render black in dark mode.
 
 **Gotchas**
 
@@ -294,19 +294,20 @@ Purpose: The single editor window: an `EditorSplitViewController` under a transp
 
 **Public API**
 
-- `protocol HistoryNavigating` — Back and Forward from `WolfWindowController`, delegated explicitly because that controller is no `NSWindowController` and so is not in the responder chain.
+- `protocol HistoryNavigating` — Back and Forward, delegated to `WolfWindowController` ([why](#wolfwindowcontrollerswift)).
 - `init(sidebar:paneContainer:metrics:cols:rows:)` — sizes the content so the editor pane keeps exactly `cols` × `rows` cells below the chrome.
 - `showSidebar(panel:)`, `toggleSidebar()` and `sidebarPanel`, which `WolfWindowController` forwards to; `sidebarPanelsItemIdentifier` names the sidebar control's toolbar item.
+- `savedSidebar`, `restoreSidebar(_:)` — the window state's sidebar mode, query and toggles.
 - `applyTitlebarBackground(_:)` — idempotent; `.system` restores the pristine `backgroundColor` the first `.colour` captured.
 
 **Decisions**
 
 - `isReleasedWhenClosed = false`: the controller holds the window, and the default's unbalanced release crashes the deferred close-animation dealloc.
 - The toolbar is installed before the chrome is measured, or `contentLayoutRect` misses the toolbar band and the grid silently loses rows.
-- The navigation items set `autovalidates = false`, so an `isEnabled` set by `refreshHistoryToolbar(canBack:canForward:)` sticks rather than being overwritten by AppKit's validation.
+- The navigation items set `autovalidates = false`, so AppKit's validation does not overwrite the `isEnabled` that `refreshHistoryToolbar(canBack:canForward:)` sets.
 - Item order lives in the pure `HistorySeam.itemIdentifiers` ([why](../../../../notes/wolf-macos-decisions.md#the-toolbar)). The sidebar control's item is navigational, placing it beside Back and Forward, not after the title.
 - The sidebar control is an `NSSegmentedControl`, not an `NSToolbarItemGroup`, whose `.selectOne` mode cannot show nothing selected.
-- No caller sets the control's selection: `SidebarToolbarSeam` derives it on the `isCollapsed` KVO and at the end of `showSidebar(panel:)`, after the mode switch the KVO fires too early to see.
+- No caller sets the control's selection: `SidebarToolbarSeam` derives it on the `isCollapsed` KVO and at the end of `showSidebar(panel:)` and `restoreSidebar(_:)`, after the mode switch the KVO fires too early to see.
 - `appearance` stays `nil`, so the window and its title inherit the app appearance `AppDelegate` forces ([why](../../../../notes/wolf-macos-decisions.md#the-titlebar)).
 
 #### `NvimRestartedBannerView.swift`
@@ -345,8 +346,8 @@ Purpose: The editor area: one flipped first-responder `NSView` painting every pa
 
 **Public API**
 
-- `resetAfterRestart()` — drops every pane after a crash-restart, so the next wake binds the fresh Neovim's window.
-- `paneLayout`, `leafContents()`, `restoreFailed` — `SessionSeam`'s inputs; leaves by window, terminals included.
+- `resetAfterRestart()` — drops every pane and hosted view after a crash-restart, since a respawned Neovim reuses window handles.
+- `paneLayout`, `leafContents()`, `restoreFailed`, `paneViews`, `activePaneId`, `drawerPane`, `drawerShare` — `SessionSeam`'s inputs; leaves by window, terminals included. `captureViewports()` fills `paneViews`, as leaving a pane does ([capture](../../../../notes/wolf-macos-decisions.md#the-per-tab-extras)).
 - `capturedTerminals()`, `requestTerminalRestore(_:)` — a restart's capture and restore.
 - `activeTerminal`, `activeTerminalSelection` — `nil` off a terminal pane.
 - `activeWin` — the pane this view shows as active, `0` before one binds.
@@ -354,6 +355,7 @@ Purpose: The editor area: one flipped first-responder `NSView` painting every pa
 - `otherPaneTarget(prefer:)` — `0` splits, `nil` is a no-op.
 - `canClosePane`, `closeActivePane()`, `splitActivePane(_:)` — Close Pane's gate and action, and the splits' ([why](../../../../notes/wolf-macos-decisions.md#terminal-panes)).
 - `toggleZoom()`, `toggleTerminal()`, `isZoomed`, `zoomedPaneId`, `visiblePaneFrames` — Zoom Pane, Toggle Terminal unzooming first, the saved zoom, frames by window ([why](../../../../notes/wolf-macos-decisions.md#zoom-pane)).
+- `requestLayoutRebuild(_:tab:focused:drawer:)` — the launch restore, at the first pane's bind, with the tab's focus and drawer ([order](../../../../notes/wolf-macos-decisions.md#the-per-tab-extras)).
 
 **Decisions**
 
@@ -361,7 +363,6 @@ Purpose: The editor area: one flipped first-responder `NSView` painting every pa
 - Grids are skipped only under an opaque, loaded preview web view; the flag survives reloads: WebKit shows the outgoing document.
 - Scroll follows `scrollingDeltaY`'s natural-scroll-aware sign; `isDirectionInvertedFromDevice` double-corrects.
 - The terminal drawer is a pane outside `tree`, so leaves, neighbours and splits exclude it ([why](../../../../notes/wolf-macos-decisions.md#terminal-panes)).
-- A restart drops every pane and hosted view: a respawned Neovim reuses window handles.
 - Only a terminal pane gets `NSTextInputClient` ([why](../../../../notes/wolf-macos-decisions.md#terminal-panes)), its input going to its session; `doCommand(by:)` [passes the rest on](../../../../notes/wolf-macos-decisions.md#key-equivalents-over-a-preview).
 
 #### `PickerChrome.swift`
@@ -476,15 +477,16 @@ Purpose: The sidebar content-search panel — a query field and three toggles ab
 **Public API**
 
 - `init(handle:paneContainer:)`, `seedToggles()`, `focusSearchField()`, `setSidebarVisible(_:)`, `scheduleRefresh()`, `refresh()`, `close()`.
+- `query`, `caseSensitive`, `useRegex`, `allFiles`, `searchedQuery`, `restore(…)` — the panel the window state saves and restores. `onChange` reports Return and toggle clicks, which wake no core.
 - `SearchFileItem` / `SearchLineItem` — the outline's row models. `absPath` is the identity `NSOutlineView` keys expansion and selection on.
 
 **Decisions**
 
-- Searching is wired to the field's action (Return) and `controlTextDidChange` is deliberately left unwired, because each run spawns an rg subprocess. Assigning `search` replaces the session, which cancels the previous subprocess.
-- `focusSearchField()` defers `makeFirstResponder` by one runloop tick. Invoked from the Command Palette, the palette's `close()` runs afterwards and ends in `makeFirstResponder(paneContainer)`, clobbering a synchronous focus. Other entry points have no competing refocus, so the one deferral serves every path.
-- `refresh()` rebuilds only when the snapshot version or the char budget has advanced, so repeated batches and idle wakes cost nothing. The budget is part of the gate so a sidebar resize re-windows the lines.
+- Searching is wired to the field's action (Return), and `controlTextDidChange` and the toggles deliberately run nothing, because each run spawns an rg subprocess. Assigning `search` replaces the session, which cancels the previous subprocess.
+- `focusSearchField()` defers `makeFirstResponder` by one runloop tick. Invoked from the Command Palette, the palette's `close()` runs afterwards and ends in `makeFirstResponder(paneContainer)`, clobbering a synchronous focus.
+- `refresh()` rebuilds only when the snapshot version or the char budget has advanced, so repeated batches and idle wakes cost nothing, while a sidebar resize re-windows the lines.
 - Collapsed files are tracked by path so a rebuild preserves them; every other file row expands.
-- Activating a line row routes on the active pane's mode, as the pickers do: a preview pane gets `preview_file`, falling back to `open_at` on `0`. A preview has no cursor, so the match's line and column reach nvim only on the edit path.
+- Activating a line row routes on the active pane's mode: a preview pane gets `preview_file`, falling back to `open_at` on `0`. A preview has no cursor, so the match's line and column reach nvim only on the edit path.
 
 #### `SearchWakeBridge.swift`
 
@@ -511,6 +513,7 @@ Purpose: The sidebar body — `FileTreeView` or `SearchView`, one shown at a tim
 
 - `init(tree:search:)`, plus `tree` and `search` so the controller can reach either child.
 - `mode`, `setMode(_:)`, and `setSidebarVisible(_:)`, which is where the split item's `isCollapsed` KVO is relayed.
+- `onChange` — fired by a mode change and relayed from `search.onChange`, so the controller can schedule a state write.
 
 **Decisions**
 
@@ -652,18 +655,19 @@ Purpose: One view — a single tab's whole UI stack, owning its [`TabCore`](#tab
 
 **Public API**
 
-- `build()` — shows the stack and becomes its core's view.
+- `build()` — shows the stack, becoming its core's view.
 - `hasFolder` — false in the empty state, so its sidebar never scans `home`.
 - `persistedCwd` — the tab's live cwd, `""` in the empty state, unlike `currentCwd`.
 - `persistedTab()` — this view's [`SessionSeam`](../WolfKeyMap/Persistence/README.md#sessionseamswift) contribution, seeded from the restored tab.
 - `normalFrame` — [`StatePersistence`](#statepersistenceswift)'s, `nil` before one is recorded.
-- `canCopy` — Copy's gate, as `copy()` decides it; in a terminal pane, Copy and Paste use its session.
+- `canCopy` — Copy's gate; in a terminal pane, Copy and Paste use its session.
 - `drainAndDispatchCommands()` — apart from `onRenderWake()`, so the tab's core drains in every state ([why](../WolfKeyMap/README.md#livenessseamswift)).
+- `captureViewports()` — a no-op once torn down.
 
 **Decisions**
 
 - `tabCore` is held strong and shut down in `teardown()`, and holds this view weakly.
-- `teardown()` takes its close commit before setting `isTornDown`, which the burst's read skips: taken after, a last close would commit nothing. It is idempotent and defers `removeController` one turn, capturing `self` strongly: during `windowWillClose` the coordinator holds the last strong reference, so a synchronous drop frees the `NSWindow` mid-close.
-- `window.historyNav = self` is explicit: this is not an `NSWindowController`, so a `target: nil` toolbar action never reaches it.
-- The file tree starts last in `build()`, after the sidebar's collapse state seeds its refresh gate, so a restored collapsed sidebar defers outline work.
+- `teardown()` takes its close commit before setting `isTornDown`, which the burst's read skips: taken after, a last close would commit nothing. It is idempotent and defers `removeController` one turn, capturing `self` strongly: in `windowWillClose` the coordinator holds the last strong reference, and a synchronous drop frees the `NSWindow` mid-close.
+- `window.historyNav = self` is explicit: this is no `NSWindowController`, so no `target: nil` toolbar action reaches it.
+- The file tree starts last in `build()`, after the sidebar's collapse state seeds its refresh gate, so a collapsed sidebar defers outline work.
 - Both key edges sync terminal focus; tab focus follows `windowDidBecomeMain` ([why](../../../../notes/wolf-macos-decisions.md#one-neovim-per-tab)).

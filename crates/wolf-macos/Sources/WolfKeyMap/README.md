@@ -162,6 +162,7 @@ Purpose: Pure geometry for the terminal drawer, the full-width strip below the e
 - `init(paneAreaHeight:hasDrawer:weight:minPaneHeight:)` — sets `editorHeight` and `drawerHeight`; with no drawer the editor takes it all.
 - `draggedWeight(pointerY:paneAreaHeight:minPaneHeight:) -> Double?` — a top-edge drag as a share; `nil` keeps the current one.
 - `drawerRect(width:) -> Rect?` — the bottom strip, `nil` without a drawer.
+- `restoredWeight(_:) -> Double` — a saved share when finite and strictly inside `(0, 1)`, else `defaultWeight`.
 
 **Decisions**
 
@@ -551,19 +552,20 @@ Purpose: Classifies a link clicked in the Markdown preview web view into one of 
 
 #### `PreviewScrollSeam.swift`
 
-Purpose: Every decision behind Markdown-preview scroll-sync — which marker a cursor anchors to, whether that anchor warrants scrolling, how a fresh render reaches the page, and the scroll JavaScript the preview web view evaluates. Foundation only.
+Purpose: Every decision behind Markdown-preview scroll-sync — which marker a cursor anchors to, whether that anchor warrants scrolling, how a fresh render reaches the page — and a preview's saved scroll, with the JavaScript for each. Foundation only.
 
 **Public API**
 
 - `CursorPos` — `line` is 1-based, `0` meaning unknown; `col` a 0-based character column. `anchorColumn(_:)` and `anchorIds(line:col:)` give the id preference order the injected script mirrors.
 - `edgeThreshold(viewportHeight:)` and `followDecision(anchorTop:viewportHeight:)` — the comfort band, inclusive at both ends, and where an anchor lands on leaving it.
-- `winsNeedingScroll(current:applied:)`, `captureDecision(…)`, `splitDocument(_:)`, `updateStrategy(…)`, `loadCommitOutcome(remaining:pending:succeeded:)` — the per-window gates; each carries its ordered rules on its doc comment.
-- `stateHandlerName`, `stateScriptJS(handlerName:)`, `followJS(line:col:)`, `restoreJS(_:)`, `inPlaceUpdateArgumentNames`, `inPlaceUpdateJS()`.
+- `winsNeedingScroll(current:applied:)`, `captureDecision(…)`, `splitDocument(_:)`, `updateStrategy(…)`, `loadCommitOutcome(remaining:pending:succeeded:)` — the per-window gates, each with its ordered rules on its doc comment.
+- `stateHandlerName`, `stateScriptJS(handlerName:)`, `followJS(line:col:)`, `restoreJS(_:)`, `inPlaceUpdateArgumentNames`, `inPlaceUpdateJS()`, and `scrollFractionJS(_:)`, restoring what `scrollFraction(_:)` saves.
 
 **Decisions**
 
 - Every tuning constant is interpolated into the generated JavaScript rather than written twice, so a test proves what the page runs.
-- `markerColumnStride` mirrors `wolf_core::markdown::MARKER_COLUMN_STRIDE`, but neither side reads the other: the test here pins only this literal, so a Rust-side change must be mirrored by hand.
+- `markerColumnStride` mirrors `wolf_core::markdown::MARKER_COLUMN_STRIDE`, but neither side reads the other: the test pins only this literal, so a Rust-side change must be mirrored by hand.
+- `__wolfScrollFraction` clears `__wolfUserScrolled`, as `__wolfRestore` does, re-opening the gate on its re-applies.
 - The capture and commit rules live here, not in `PaneContainerView`: their ordering is their correctness, and that AppKit block cannot be tested. The caller keeps a mechanical `switch`.
 
 **Gotchas**

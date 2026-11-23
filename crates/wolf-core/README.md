@@ -39,7 +39,7 @@ Everything below is re-exported from the crate root as `wolf_core::…`. The own
 | Library licences   | `LibraryLicense`, `LIBRARY_LICENSES`, `LIBRARY_LICENSE_NOTICES`               |
 | Liveness           | `Liveness`                                                                    |
 | Preferences        | `WolfConfig`, `load_or_create`, `preferences_dir`, `Appearance`               |
-| Persisted state    | `AppStateStore`, `PROJECT_STATE_LIMIT`, `state_dir`                           |
+| Persisted state    | `AppStateStore`, `PROJECT_STATE_LIMIT`, `state_dir`, `WindowCursor`           |
 | Logging            | `init_tracing`                                                                |
 
 `app_state::…` is reached through its module rather than the root: the model `AppStateStore` saves, with the rule that picks a directory's project state and the restore helpers, among them `tab_rebuild_spec`, which renders a saved tab into the JSON `WolfCore::rebuild_layout` takes, so a front-end restoring a pane layout never hand-rolls that document ([entry](src/README.md#app_staters)). [wolf-core-decisions.md](../../notes/wolf-core-decisions.md#the-rebuild-layout-wire-format) has the contract it shares with `init.lua`.
