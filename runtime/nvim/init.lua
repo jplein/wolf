@@ -899,6 +899,16 @@ function _G.wolf_rebuild_layout(spec_json)
 				wolf_preview_file(win, node.path)
 			elseif node.path ~= nil and node.path ~= "" then
 				vim.cmd("edit " .. vim.fn.fnameescape(node.path))
+				local line_count = vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(win))
+				local cursor = node.cursor
+				if type(cursor) == "table" and type(cursor.line) == "number" then
+					-- Neovim rejects a line past the buffer but clamps an over-long column itself.
+					local line = math.min(math.max(cursor.line, 1), line_count)
+					pcall(vim.api.nvim_win_set_cursor, win, { line, math.max(tonumber(cursor.col) or 0, 0) })
+				end
+				if type(node.top_line) == "number" then
+					vim.fn.winrestview({ topline = math.min(math.max(node.top_line, 1), line_count) })
+				end
 			end
 			return { win }
 		end

@@ -1074,8 +1074,10 @@ impl WolfCore {
     /// [`block_on_rpc`](Self::block_on_rpc) (the same bounded pattern
     /// [`create_tabpage`](Self::create_tabpage) uses, bounded by
     /// [`rpc_timeout`](Self::rpc_timeout)) to run the `wolf_rebuild_layout` helper.
-    /// nvim produces only the window COUNT + TOPOLOGY + per-window BUFFER; sizes
-    /// come from the front-end's weights. An RPC error (including a
+    /// nvim produces only the window COUNT + TOPOLOGY + per-window BUFFER, plus the
+    /// cursor and top line an edit leaf carries as `cursor` and `top_line`, with the
+    /// line clamped to the buffer; sizes come from the front-end's weights. An RPC
+    /// error (including a
     /// [`NvimError::Timeout`] on a wedged nvim) is logged and returns `vec![]`.
     ///
     /// When it returns, [`Snapshot::win_buffers`] and [`Snapshot::previews`] already

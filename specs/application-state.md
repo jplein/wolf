@@ -119,7 +119,7 @@ The window state holds every open window in stacking order, frontmost first, wit
 
 ### Project state
 
-A project state is a directory plus one window holding exactly one tab. There is at most one per directory. It is what Open Folder restores, and it is never read at launch.
+A project state is a directory plus one window holding exactly one tab. Its JSON holds that window's `frame` and its tab as `tab`, with no `active_tab`, which a one-tab window does not need; the directory is the row's key. There is at most one per directory. It is what Open Folder restores, and it is never read at launch.
 
 ## 3. Stacking order and tab recency
 

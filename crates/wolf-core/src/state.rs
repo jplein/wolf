@@ -38,9 +38,10 @@
 //!
 //! [`rebuild_layout_spec`] renders a [`PaneNode`] into the JSON string
 //! `runtime/nvim/init.lua`'s `_G.wolf_rebuild_layout` decodes. That wire shape is
-//! NOT [`PaneNode`]'s own serde shape, so the renderer lives here — next to the
-//! type it renders and inside the crate that already depends on `serde_json` —
-//! rather than being re-derived once per front-end.
+//! NOT [`PaneNode`]'s own serde shape, so the renderer lives in core rather than
+//! being re-derived once per front-end. Its leaves and splits come from
+//! [`crate::app_state`]'s builders, which [`crate::app_state::tab_rebuild_spec`]
+//! shares, so the document has one shape whichever model produced it.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -411,9 +412,10 @@ fn clear_unrestorable_zoom(node: &mut PaneNode) {
 }
 
 /// Renders `node` into the JSON string `runtime/nvim/init.lua`'s
-/// `_G.wolf_rebuild_layout` decodes, and the only renderer of that document:
-/// GNOME calls it directly, and macOS reaches it through wolf-ffi's
-/// `WolfCoreHandle::rebuild_layout`.
+/// `_G.wolf_rebuild_layout` decodes, for the `state.json` model: GNOME calls it
+/// directly, and macOS reaches it through wolf-ffi's
+/// `WolfCoreHandle::rebuild_layout`. [`crate::app_state::tab_rebuild_spec`]
+/// renders the same document for the application-state model.
 ///
 /// **This is NOT [`PaneNode`]'s serde shape.** The Lua helper reads a different,
 /// terser document:
@@ -431,10 +433,8 @@ fn clear_unrestorable_zoom(node: &mut PaneNode) {
 /// so a front-end can zip the returned handles onto its own DFS leaf order.
 ///
 /// TOTAL: it cannot fail and it never panics. A NON-FINITE weight (NaN, ±inf) is
-/// emitted as `0.0`, because `serde_json` has no representation for one; the
-/// substitution is purely cosmetic, since `wolf_rebuild_layout` produces the
-/// window COUNT and TOPOLOGY only and never reads `weights` (pane sizes come from
-/// the front-end). Serializing an already-built `Value` cannot fail either, but
+/// emitted as `0.0`, for the reason `layout_spec` in [`crate::app_state`] gives.
+/// Serializing an already-built `Value` cannot fail either, but
 /// the `Err` arm degrades to `"{}"` rather than panicking — that is precisely
 /// what the Lua side's `pcall(vim.json.decode, …)` failure path produces, i.e. a
 /// no-op rebuild returning no handles.
@@ -443,11 +443,8 @@ pub fn rebuild_layout_spec(node: &PaneNode) -> String {
     serde_json::to_string(&spec_value(node)).unwrap_or_else(|_| "{}".to_string())
 }
 
-/// Recursively builds the `serde_json` document [`rebuild_layout_spec`] renders.
-///
-/// Weights are sanitized to `0.0` when non-finite BEFORE conversion:
-/// `serde_json::Number::from_f64` rejects NaN/±inf, and an unsanitized value
-/// would silently become `null` and change the document's shape.
+/// Recursively builds the `serde_json` document [`rebuild_layout_spec`] renders,
+/// through [`crate::app_state`]'s leaf and split builders.
 fn spec_value(node: &PaneNode) -> serde_json::Value {
     match node {
         PaneNode::Leaf {
@@ -455,32 +452,14 @@ fn spec_value(node: &PaneNode) -> serde_json::Value {
             preview,
             terminal,
             zoomed,
-        } => serde_json::json!({
-            "leaf": true,
-            "path": path,
-            "preview": preview,
-            "terminal": terminal,
-            "zoomed": zoomed,
-        }),
+        } => crate::app_state::leaf_spec(path, *preview, *terminal, *zoomed, None, None),
         PaneNode::Split {
             orientation,
             weights,
             children,
         } => {
-            let tag = match orientation {
-                PaneOrientation::Vertical => "v",
-                PaneOrientation::Horizontal => "h",
-            };
-            let weights: Vec<serde_json::Value> = weights
-                .iter()
-                .map(|w| serde_json::Value::from(if w.is_finite() { *w } else { 0.0 }))
-                .collect();
             let children: Vec<serde_json::Value> = children.iter().map(spec_value).collect();
-            serde_json::json!({
-                "orientation": tag,
-                "weights": weights,
-                "children": children,
-            })
+            crate::app_state::layout_spec(*orientation, weights, children)
         }
     }
 }

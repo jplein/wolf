@@ -47,13 +47,14 @@ use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
+use wolf_core::app_state as app;
 use wolf_core::{
-    rank_buffers, rank_matches_top_n, rank_palette, Appearance, BufInfo, BufferRow, Cmdline,
-    Command, CommandMru, CoreConfig, CursorShape, FileSearch, FocusDir, Grid, HighlightTable,
-    InputEvent, Key, KeyEvent, LayoutIntent, Liveness, MarkdownCursor, MouseAction, MouseButton,
-    MouseEvent, PaletteRow, PaletteRowKind, PaletteWindow, PaneNode, PaneOrientation, PaneStatus,
-    PreviewInfo, Pum, ResolvedStyle, Rgb, ScrollDirection, ScrollEvent, SearchMatch, SearchOptions,
-    SearchSession, SplitOrientation, StateStore, TabFiles, TabState, TerminalCell,
+    rank_buffers, rank_matches_top_n, rank_palette, AppStateStore, Appearance, BufInfo, BufferRow,
+    Cmdline, Command, CommandMru, CoreConfig, CursorShape, FileSearch, FocusDir, Grid,
+    HighlightTable, InputEvent, Key, KeyEvent, LayoutIntent, Liveness, MarkdownCursor, MouseAction,
+    MouseButton, MouseEvent, PaletteRow, PaletteRowKind, PaletteWindow, PaneNode, PaneOrientation,
+    PaneStatus, PreviewInfo, Pum, ResolvedStyle, Rgb, ScrollDirection, ScrollEvent, SearchMatch,
+    SearchOptions, SearchSession, SplitOrientation, StateStore, TabFiles, TabState, TerminalCell,
     TerminalCellWidth, TerminalCommand, TerminalCursor, TerminalCursorStyle, TerminalFrame,
     TerminalId, TerminalMouseEvent, TerminalMouseKind, TerminalScrollEvent, TerminalTarget,
     TerminalUnderline, Toast, WakeFn, WinInfo, WindowState, WolfCore, WolfState,
@@ -295,6 +296,49 @@ mod mouse_action {
     pub const RELEASE: u8 = 1;
     /// Pointer dragged with the button held.
     pub const DRAG: u8 = 2;
+}
+
+/// The pane-kind discriminants of the application-state builder and readers,
+/// mirroring the variant order of [`wolf_core::app_state::Pane`].
+mod pane_kind {
+    /// An editor pane.
+    pub const EDIT: u8 = 0;
+    /// A Markdown preview pane.
+    pub const PREVIEW: u8 = 1;
+    /// A terminal pane.
+    pub const TERMINAL: u8 = 2;
+}
+
+/// The pane-reference discriminants of a tab's `focused` and `zoomed`, carried
+/// beside an index that only [`pane_ref::PANE`] reads.
+mod pane_ref {
+    /// No reference: nothing focused or zoomed to restore.
+    pub const NONE: u8 = 0;
+    /// The pane at the index, in depth-first order.
+    pub const PANE: u8 = 1;
+    /// The terminal drawer.
+    pub const DRAWER: u8 = 2;
+}
+
+/// The sidebar-mode discriminants, mirroring [`wolf_core::app_state::SidebarMode`]
+/// after an "unset" of their own.
+mod sidebar_mode {
+    /// No mode to restore.
+    pub const UNSET: u8 = 0;
+    /// The file tree.
+    pub const TREE: u8 = 1;
+    /// The content-search panel.
+    pub const SEARCH: u8 = 2;
+}
+
+/// The discriminants of an optional boolean read back across the bridge.
+mod tristate {
+    /// Nothing to restore.
+    pub const UNSET: u8 = 0;
+    /// `false`.
+    pub const OFF: u8 = 1;
+    /// `true`.
+    pub const ON: u8 = 2;
 }
 
 /// How long [`wolf_ffi_state_flush`] (and the shutdown-time flush) blocks
@@ -1079,6 +1123,144 @@ mod ffi {
         // Blocks until every pending state write is attempted (bounded by `STATE_FLUSH_TIMEOUT`).
         // Returns whether all flushed in time; true when no store exists.
         fn wolf_ffi_state_flush() -> bool;
+    }
+
+    extern "Rust" {
+        type FfiAppState;
+
+        // The saved windows, frontmost first; empty when nothing was saved.
+        fn windows(&self) -> Vec<FfiAppWindow>;
+    }
+
+    extern "Rust" {
+        type FfiAppWindow;
+
+        // Whether the frame carries a position; false means x and y read 0.
+        fn has_position(&self) -> bool;
+        fn x(&self) -> f64;
+        fn y(&self) -> f64;
+        fn width(&self) -> f64;
+        fn height(&self) -> f64;
+        fn active_tab(&self) -> u32;
+        fn tabs(&self) -> Vec<FfiAppTab>;
+    }
+
+    extern "Rust" {
+        type FfiAppTab;
+
+        // The tab's directory: "" for an empty tab, and the asked one for a project state's tab.
+        fn directory(&self) -> String;
+        fn has_root(&self) -> bool;
+        // The root node, or an empty edit pane when `has_root` is false.
+        fn root(&self) -> FfiAppNode;
+        // A `pane_ref` discriminant, and the pane index that `PANE` reads.
+        fn focused_kind(&self) -> u8;
+        fn focused_index(&self) -> u32;
+        fn zoomed_kind(&self) -> u8;
+        fn zoomed_index(&self) -> u32;
+        fn sidebar_visible(&self) -> bool;
+        // A `sidebar_mode` discriminant.
+        fn sidebar_mode(&self) -> u8;
+        fn has_query(&self) -> bool;
+        fn query(&self) -> String;
+        // Each a `tristate` discriminant.
+        fn case_sensitive(&self) -> u8;
+        fn use_regex(&self) -> u8;
+        fn all_files(&self) -> u8;
+        fn has_drawer(&self) -> bool;
+        fn drawer_open(&self) -> bool;
+        fn drawer_share(&self) -> f64;
+    }
+
+    extern "Rust" {
+        type FfiAppNode;
+
+        // Whether this node is a pane (vs. a layout). A field that does not apply reads 0 or "".
+        fn is_pane(&self) -> bool;
+        // A `pane_kind` discriminant.
+        fn kind(&self) -> u8;
+        fn path(&self) -> String;
+        fn has_cursor(&self) -> bool;
+        fn cursor_line(&self) -> u32;
+        fn cursor_col(&self) -> u32;
+        fn has_top_line(&self) -> bool;
+        fn top_line(&self) -> u32;
+        fn has_scroll(&self) -> bool;
+        fn scroll(&self) -> f64;
+        // An `orientation` discriminant (0 = horizontal, 1 = vertical).
+        fn orientation(&self) -> u8;
+        fn child_count(&self) -> u32;
+        // The weight of child `index` (0.0 out of range).
+        fn weight(&self, index: u32) -> f64;
+        // Child `index` (an empty edit pane out of range).
+        fn child(&self, index: u32) -> FfiAppNode;
+    }
+
+    extern "Rust" {
+        type FfiProjectState;
+
+        // Whether the directory has a project state; every other field reads 0 when false.
+        fn found(&self) -> bool;
+        fn has_position(&self) -> bool;
+        fn x(&self) -> f64;
+        fn y(&self) -> f64;
+        fn width(&self) -> f64;
+        fn height(&self) -> f64;
+        fn tab(&self) -> FfiAppTab;
+    }
+
+    extern "Rust" {
+        // Clears the app-state scratch: the window state, its recency and the node stack.
+        fn wolf_ffi_app_state_begin();
+        // Pushes a window; x and y are dropped when `has_position` is false.
+        fn wolf_ffi_app_state_add_window(
+            has_position: bool,
+            x: f64,
+            y: f64,
+            width: f64,
+            height: f64,
+            active_tab: u32,
+        );
+        // Pushes a tab onto the last window; each reference is a `pane_ref` kind and an index.
+        fn wolf_ffi_app_state_add_tab(
+            directory: String,
+            sidebar_visible: bool,
+            focused_kind: u8,
+            focused_index: u32,
+            zoomed_kind: u8,
+            zoomed_index: u32,
+        );
+        // Sets the last tab's sidebar mode (`sidebar_mode`), query and toggles.
+        fn wolf_ffi_app_state_tab_sidebar(
+            mode: u8,
+            query: String,
+            case_sensitive: bool,
+            use_regex: bool,
+            all_files: bool,
+        );
+        // Sets the last tab's drawer.
+        fn wolf_ffi_app_state_tab_drawer(open: bool, share: f64);
+        // Pushes a pane (`pane_kind`) weighing `weight` in its parent: a post-order replay.
+        fn wolf_ffi_app_state_push_pane(kind: u8, path: String, weight: f64);
+        // Sets the cursor and top line of the pane just pushed, when it is an edit pane.
+        fn wolf_ffi_app_state_pane_cursor(line: u32, col: u32, top_line: u32);
+        // Sets the scroll of the pane just pushed, when it is a preview pane.
+        fn wolf_ffi_app_state_pane_scroll(scroll: f64);
+        // Pops `child_count` nodes into a layout (`orientation`) weighing `weight`.
+        fn wolf_ffi_app_state_push_layout(orientation: u8, child_count: u32, weight: f64);
+        // Moves the one remaining node to the last window's last tab's root.
+        fn wolf_ffi_app_state_commit_root();
+        // Appends a tab index to the last window's recency, most recent first.
+        fn wolf_ffi_app_state_push_recency(tab: u32);
+        // Submits the scratch window state with its recency to the shared app-state store.
+        fn wolf_ffi_app_state_commit();
+        // Blocks until the pending app-state write is attempted (bounded by
+        // `STATE_FLUSH_TIMEOUT`); true when all flushed in time or no store exists.
+        fn wolf_ffi_app_state_flush() -> bool;
+        // The saved window state, for launch; empty when nothing was saved or readable.
+        fn wolf_ffi_app_state_window_state() -> FfiAppState;
+        // `directory`'s project state, for Open Folder, which marks it used.
+        fn wolf_ffi_app_state_project_state(directory: String) -> FfiProjectState;
     }
 
     extern "Rust" {
@@ -2080,6 +2262,727 @@ pub fn wolf_ffi_state_snapshot_commit() {
 #[must_use]
 pub fn wolf_ffi_state_flush() -> bool {
     shared_store().is_none_or(|store| store.flush(STATE_FLUSH_TIMEOUT))
+}
+
+// --- The application-state surface: builder, submit and readers over `AppStateStore` ---
+
+/// The process-wide application-state store, opened once over
+/// [`wolf_core::state_dir`], as [`SHARED_STORE`] is: its unchanged-tree check is
+/// per store, so every window shares one. `None` when no state dir resolved.
+///
+/// [`WolfCoreHandle::shutdown`] does not flush it: the final write is a front-end
+/// step taken before any Neovim exits, through [`wolf_ffi_app_state_flush`].
+static SHARED_APP_STATE: OnceLock<Option<AppStateStore>> = OnceLock::new();
+
+/// Returns a clone of the process-wide [`AppStateStore`], opening it on first use.
+fn shared_app_state() -> Option<AppStateStore> {
+    SHARED_APP_STATE
+        .get_or_init(|| wolf_core::state_dir().map(|dir| AppStateStore::open(&dir)))
+        .clone()
+}
+
+/// The app-state builder's scratch: the window state, each window's recency, and
+/// the `(node, weight)` stack one tab's tree is replayed onto in post order.
+#[derive(Default)]
+struct AppScratch {
+    state: app::WindowState,
+    recency: Vec<Vec<usize>>,
+    stack: Vec<(app::Node, f64)>,
+}
+
+/// The process-wide app-state scratch. Driven from the AppKit main thread only, but
+/// the lock keeps the free fns sound regardless.
+static APP_SCRATCH: OnceLock<Mutex<AppScratch>> = OnceLock::new();
+
+/// Locks the app-state scratch, initializing it empty on first use.
+fn app_scratch() -> std::sync::MutexGuard<'static, AppScratch> {
+    APP_SCRATCH
+        .get_or_init(|| Mutex::new(AppScratch::default()))
+        .lock()
+        .expect("app-state scratch mutex poisoned")
+}
+
+/// An edit pane on no file, with nothing to restore.
+fn empty_edit_pane() -> app::Pane {
+    app::Pane::Edit {
+        path: String::new(),
+        cursor: None,
+        top_line: None,
+    }
+}
+
+/// Maps a `pane_ref` discriminant and its index to a reference; an unknown kind
+/// maps to `None`.
+fn pane_ref_from_ffi(kind: u8, index: u32) -> Option<app::PaneRef> {
+    match kind {
+        pane_ref::PANE => Some(app::PaneRef::Pane(index as usize)),
+        pane_ref::DRAWER => Some(app::PaneRef::Drawer),
+        _ => None,
+    }
+}
+
+/// The `pane_ref` discriminant and index of `r`.
+fn pane_ref_to_ffi(r: Option<app::PaneRef>) -> (u8, u32) {
+    match r {
+        None => (pane_ref::NONE, 0),
+        Some(app::PaneRef::Pane(i)) => (pane_ref::PANE, u32::try_from(i).unwrap_or(u32::MAX)),
+        Some(app::PaneRef::Drawer) => (pane_ref::DRAWER, 0),
+    }
+}
+
+/// The `tristate` discriminant of `value`.
+fn tristate_of(value: Option<bool>) -> u8 {
+    match value {
+        None => tristate::UNSET,
+        Some(false) => tristate::OFF,
+        Some(true) => tristate::ON,
+    }
+}
+
+/// Clears the app-state scratch, starting a fresh window state.
+///
+/// The front-end then calls [`wolf_ffi_app_state_add_window`] per window,
+/// frontmost first, each followed by its tabs, their trees and the window's
+/// recency, then [`wolf_ffi_app_state_commit`].
+pub fn wolf_ffi_app_state_begin() {
+    *app_scratch() = AppScratch::default();
+}
+
+/// Pushes a window with an empty tab list and an empty recency list. `x` and `y`
+/// are stored as `None` when `has_position` is false, which GNOME's model writes
+/// as `null`.
+pub fn wolf_ffi_app_state_add_window(
+    has_position: bool,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    active_tab: u32,
+) {
+    let mut scratch = app_scratch();
+    scratch.state.windows.push(app::Window {
+        frame: app::Frame {
+            x: has_position.then_some(x),
+            y: has_position.then_some(y),
+            width,
+            height,
+        },
+        active_tab: active_tab as usize,
+        tabs: Vec::new(),
+    });
+    scratch.recency.push(Vec::new());
+}
+
+/// Pushes a tab with no root onto the last window, its `focused` and `zoomed`
+/// each a `pane_ref` kind plus an index. Sidebar mode, query, toggles and
+/// drawer start as nothing to restore. A no-op with no window.
+pub fn wolf_ffi_app_state_add_tab(
+    directory: String,
+    sidebar_visible: bool,
+    focused_kind: u8,
+    focused_index: u32,
+    zoomed_kind: u8,
+    zoomed_index: u32,
+) {
+    if let Some(window) = app_scratch().state.windows.last_mut() {
+        window.tabs.push(app::Tab {
+            directory,
+            content: app::TabContent {
+                root: None,
+                focused: pane_ref_from_ffi(focused_kind, focused_index),
+                zoomed: pane_ref_from_ffi(zoomed_kind, zoomed_index),
+                sidebar: app::Sidebar {
+                    visible: sidebar_visible,
+                    ..app::Sidebar::default()
+                },
+                drawer: None,
+            },
+        });
+    }
+}
+
+/// The last window's last tab in `scratch`, if any.
+fn last_tab(scratch: &mut AppScratch) -> Option<&mut app::TabContent> {
+    scratch
+        .state
+        .windows
+        .last_mut()
+        .and_then(|w| w.tabs.last_mut())
+        .map(|t| &mut t.content)
+}
+
+/// Sets the last tab's sidebar mode (a `sidebar_mode` discriminant, where
+/// `UNSET` or an unknown value maps to `None`), query and three toggles. A no-op
+/// with no tab.
+pub fn wolf_ffi_app_state_tab_sidebar(
+    mode: u8,
+    query: String,
+    case_sensitive: bool,
+    use_regex: bool,
+    all_files: bool,
+) {
+    let mut scratch = app_scratch();
+    if let Some(tab) = last_tab(&mut scratch) {
+        tab.sidebar.mode = match mode {
+            sidebar_mode::TREE => Some(app::SidebarMode::Tree),
+            sidebar_mode::SEARCH => Some(app::SidebarMode::Search),
+            _ => None,
+        };
+        tab.sidebar.query = Some(query);
+        tab.sidebar.case_sensitive = Some(case_sensitive);
+        tab.sidebar.use_regex = Some(use_regex);
+        tab.sidebar.all_files = Some(all_files);
+    }
+}
+
+/// Sets the last tab's drawer. A no-op with no tab.
+pub fn wolf_ffi_app_state_tab_drawer(open: bool, share: f64) {
+    let mut scratch = app_scratch();
+    if let Some(tab) = last_tab(&mut scratch) {
+        tab.drawer = Some(app::Drawer { open, share });
+    }
+}
+
+/// Pushes a pane of `pane_kind` `kind` on `path`, weighing `weight` in its
+/// parent, onto the node stack. An unknown kind pushes an empty edit pane, so a
+/// later [`wolf_ffi_app_state_push_layout`] count still matches.
+pub fn wolf_ffi_app_state_push_pane(kind: u8, path: String, weight: f64) {
+    let pane = match kind {
+        pane_kind::EDIT => app::Pane::Edit {
+            path,
+            cursor: None,
+            top_line: None,
+        },
+        pane_kind::PREVIEW => app::Pane::Preview { path, scroll: None },
+        pane_kind::TERMINAL => app::Pane::Terminal { path },
+        _ => empty_edit_pane(),
+    };
+    app_scratch().stack.push((app::Node::Pane(pane), weight));
+}
+
+/// Sets the cursor (`line` 1-based, `col` a 0-based byte column) and the 1-based
+/// `top_line` of the node on top of the stack, when it is an edit pane.
+pub fn wolf_ffi_app_state_pane_cursor(line: u32, col: u32, top_line: u32) {
+    if let Some((
+        app::Node::Pane(app::Pane::Edit {
+            cursor,
+            top_line: top,
+            ..
+        }),
+        _,
+    )) = app_scratch().stack.last_mut()
+    {
+        *cursor = Some(app::Cursor { line, col });
+        *top = Some(top_line);
+    }
+}
+
+/// Sets the scroll of the node on top of the stack, when it is a preview pane.
+pub fn wolf_ffi_app_state_pane_scroll(scroll: f64) {
+    if let Some((app::Node::Pane(app::Pane::Preview { scroll: s, .. }), _)) =
+        app_scratch().stack.last_mut()
+    {
+        *s = Some(scroll);
+    }
+}
+
+/// Pops the top `child_count` nodes, in push order, into a layout along
+/// `orientation` (an `orientation` discriminant) and pushes it back weighing
+/// `weight`. A no-op when the stack holds fewer nodes.
+pub fn wolf_ffi_app_state_push_layout(orientation: u8, child_count: u32, weight: f64) {
+    let mut scratch = app_scratch();
+    let count = child_count as usize;
+    if scratch.stack.len() < count {
+        tracing::warn!(
+            "wolf-ffi: app-state push_layout wants {count} children but only {} on the stack",
+            scratch.stack.len()
+        );
+        return;
+    }
+    let split_at = scratch.stack.len() - count;
+    let popped = scratch.stack.split_off(split_at);
+    let orientation = match orientation {
+        orientation::VERTICAL => PaneOrientation::Vertical,
+        _ => PaneOrientation::Horizontal,
+    };
+    let weights = popped.iter().map(|(_, w)| *w).collect();
+    let children = popped.into_iter().map(|(node, _)| node).collect();
+    scratch.stack.push((
+        app::Node::Layout(app::Layout {
+            orientation,
+            weights,
+            children,
+        }),
+        weight,
+    ));
+}
+
+/// Moves the one remaining node to the last window's last tab's `root`, then
+/// clears the stack. A no-op, still clearing it, unless exactly one node remains
+/// and a tab exists.
+pub fn wolf_ffi_app_state_commit_root() {
+    let mut scratch = app_scratch();
+    let stack = std::mem::take(&mut scratch.stack);
+    let [(node, _)]: [(app::Node, f64); 1] = match stack.try_into() {
+        Ok(one) => one,
+        Err(stack) => {
+            tracing::warn!(
+                "wolf-ffi: app-state commit_root expected 1 root node, found {}",
+                stack.len()
+            );
+            return;
+        }
+    };
+    if let Some(tab) = last_tab(&mut scratch) {
+        tab.root = Some(node);
+    }
+}
+
+/// Appends tab index `tab` to the last window's recency, which lists the most
+/// recently selected tab first. A no-op with no window.
+pub fn wolf_ffi_app_state_push_recency(tab: u32) {
+    if let Some(recency) = app_scratch().recency.last_mut() {
+        recency.push(tab as usize);
+    }
+}
+
+/// Submits the scratch window state and its recency to the shared app-state
+/// store, where an unchanged tree writes nothing. A no-op with no state dir.
+pub fn wolf_ffi_app_state_commit() {
+    let (state, recency) = {
+        let scratch = app_scratch();
+        (scratch.state.clone(), scratch.recency.clone())
+    };
+    if let Some(store) = shared_app_state() {
+        store.submit(state, recency);
+    }
+}
+
+/// Blocks until the pending app-state write has been attempted, bounded by
+/// `STATE_FLUSH_TIMEOUT`. Returns whether it was in time; `true` with no store.
+#[must_use]
+pub fn wolf_ffi_app_state_flush() -> bool {
+    shared_app_state().is_none_or(|store| store.flush(STATE_FLUSH_TIMEOUT))
+}
+
+/// The saved window state, for launch, through the shared store. Empty when there
+/// is no store, nothing saved, or a `window_state` table from a newer build.
+#[must_use]
+pub fn wolf_ffi_app_state_window_state() -> FfiAppState {
+    let state = shared_app_state()
+        .and_then(|store| store.window_state())
+        .unwrap_or_default();
+    FfiAppState {
+        windows: state
+            .windows
+            .into_iter()
+            .map(|window| FfiAppWindow { window })
+            .collect(),
+    }
+}
+
+/// `directory`'s project state, for Open Folder, through
+/// [`AppStateStore::project_state`], so a found row is marked used.
+#[must_use]
+pub fn wolf_ffi_app_state_project_state(directory: String) -> FfiProjectState {
+    let state = shared_app_state().and_then(|store| store.project_state(&directory));
+    FfiProjectState { directory, state }
+}
+
+/// The saved window state (opaque to Swift), vending its windows.
+pub struct FfiAppState {
+    windows: Vec<FfiAppWindow>,
+}
+
+impl FfiAppState {
+    /// The saved windows, frontmost first.
+    #[must_use]
+    pub fn windows(&self) -> Vec<FfiAppWindow> {
+        self.windows.clone()
+    }
+}
+
+/// One saved window (opaque to Swift, so a `Vec` of it is supported).
+#[derive(Clone)]
+pub struct FfiAppWindow {
+    window: app::Window,
+}
+
+impl FfiAppWindow {
+    /// Whether the frame carries a position.
+    #[must_use]
+    pub fn has_position(&self) -> bool {
+        self.window.frame.x.is_some() && self.window.frame.y.is_some()
+    }
+
+    /// The origin's x coordinate, 0 without a position.
+    #[must_use]
+    pub fn x(&self) -> f64 {
+        self.window.frame.x.unwrap_or(0.0)
+    }
+
+    /// The origin's y coordinate, 0 without a position.
+    #[must_use]
+    pub fn y(&self) -> f64 {
+        self.window.frame.y.unwrap_or(0.0)
+    }
+
+    /// The width.
+    #[must_use]
+    pub fn width(&self) -> f64 {
+        self.window.frame.width
+    }
+
+    /// The height.
+    #[must_use]
+    pub fn height(&self) -> f64 {
+        self.window.frame.height
+    }
+
+    /// The index of the selected tab.
+    #[must_use]
+    pub fn active_tab(&self) -> u32 {
+        u32::try_from(self.window.active_tab).unwrap_or(u32::MAX)
+    }
+
+    /// The window's tabs, in tab-bar order.
+    #[must_use]
+    pub fn tabs(&self) -> Vec<FfiAppTab> {
+        self.window
+            .tabs
+            .iter()
+            .map(|tab| FfiAppTab {
+                directory: tab.directory.clone(),
+                content: tab.content.clone(),
+            })
+            .collect()
+    }
+}
+
+/// One saved tab (opaque to Swift). A field with nothing to restore reads
+/// `UNSET`, `NONE`, `false`, 0 or `""`.
+#[derive(Clone)]
+pub struct FfiAppTab {
+    directory: String,
+    content: app::TabContent,
+}
+
+impl FfiAppTab {
+    /// The tab's directory, `""` for an empty tab.
+    #[must_use]
+    pub fn directory(&self) -> String {
+        self.directory.clone()
+    }
+
+    /// Whether the tab has a root.
+    #[must_use]
+    pub fn has_root(&self) -> bool {
+        self.content.root.is_some()
+    }
+
+    /// The root node, or an empty edit pane when there is none.
+    #[must_use]
+    pub fn root(&self) -> FfiAppNode {
+        FfiAppNode {
+            node: self
+                .content
+                .root
+                .clone()
+                .unwrap_or_else(|| app::Node::Pane(empty_edit_pane())),
+        }
+    }
+
+    /// The `pane_ref` discriminant of `focused`.
+    #[must_use]
+    pub fn focused_kind(&self) -> u8 {
+        pane_ref_to_ffi(self.content.focused).0
+    }
+
+    /// The pane index of `focused`, 0 unless it is a pane.
+    #[must_use]
+    pub fn focused_index(&self) -> u32 {
+        pane_ref_to_ffi(self.content.focused).1
+    }
+
+    /// The `pane_ref` discriminant of `zoomed`.
+    #[must_use]
+    pub fn zoomed_kind(&self) -> u8 {
+        pane_ref_to_ffi(self.content.zoomed).0
+    }
+
+    /// The pane index of `zoomed`, 0 unless it is a pane.
+    #[must_use]
+    pub fn zoomed_index(&self) -> u32 {
+        pane_ref_to_ffi(self.content.zoomed).1
+    }
+
+    /// Whether the sidebar is visible.
+    #[must_use]
+    pub fn sidebar_visible(&self) -> bool {
+        self.content.sidebar.visible
+    }
+
+    /// The `sidebar_mode` discriminant of the sidebar's mode.
+    #[must_use]
+    pub fn sidebar_mode(&self) -> u8 {
+        match self.content.sidebar.mode {
+            None => sidebar_mode::UNSET,
+            Some(app::SidebarMode::Tree) => sidebar_mode::TREE,
+            Some(app::SidebarMode::Search) => sidebar_mode::SEARCH,
+        }
+    }
+
+    /// Whether the search query was saved.
+    #[must_use]
+    pub fn has_query(&self) -> bool {
+        self.content.sidebar.query.is_some()
+    }
+
+    /// The search query, `""` when none was saved.
+    #[must_use]
+    pub fn query(&self) -> String {
+        self.content.sidebar.query.clone().unwrap_or_default()
+    }
+
+    /// The `tristate` of the case-sensitivity toggle.
+    #[must_use]
+    pub fn case_sensitive(&self) -> u8 {
+        tristate_of(self.content.sidebar.case_sensitive)
+    }
+
+    /// The `tristate` of the regex toggle.
+    #[must_use]
+    pub fn use_regex(&self) -> u8 {
+        tristate_of(self.content.sidebar.use_regex)
+    }
+
+    /// The `tristate` of the all-files toggle.
+    #[must_use]
+    pub fn all_files(&self) -> u8 {
+        tristate_of(self.content.sidebar.all_files)
+    }
+
+    /// Whether the drawer was saved.
+    #[must_use]
+    pub fn has_drawer(&self) -> bool {
+        self.content.drawer.is_some()
+    }
+
+    /// Whether the drawer is open, `false` when none was saved.
+    #[must_use]
+    pub fn drawer_open(&self) -> bool {
+        self.content.drawer.is_some_and(|d| d.open)
+    }
+
+    /// The drawer's share of the pane area's height, 0 when none was saved.
+    #[must_use]
+    pub fn drawer_share(&self) -> f64 {
+        self.content.drawer.map_or(0.0, |d| d.share)
+    }
+}
+
+/// One node of a saved tab's tree (opaque to Swift), read recursively through
+/// [`FfiAppNode::child`]. A field that does not apply reads 0, `""` or `false`.
+pub struct FfiAppNode {
+    node: app::Node,
+}
+
+impl FfiAppNode {
+    /// The pane, when this node is one.
+    fn pane(&self) -> Option<&app::Pane> {
+        match &self.node {
+            app::Node::Pane(pane) => Some(pane),
+            app::Node::Layout(_) => None,
+        }
+    }
+
+    /// The layout, when this node is one.
+    fn layout(&self) -> Option<&app::Layout> {
+        match &self.node {
+            app::Node::Layout(layout) => Some(layout),
+            app::Node::Pane(_) => None,
+        }
+    }
+
+    /// The edit pane's cursor and top line, when this node is an edit pane.
+    fn edit(&self) -> (Option<app::Cursor>, Option<u32>) {
+        match self.pane() {
+            Some(app::Pane::Edit {
+                cursor, top_line, ..
+            }) => (*cursor, *top_line),
+            _ => (None, None),
+        }
+    }
+
+    /// The preview pane's scroll, when this node is a preview pane.
+    fn preview_scroll(&self) -> Option<f64> {
+        match self.pane() {
+            Some(app::Pane::Preview { scroll, .. }) => *scroll,
+            _ => None,
+        }
+    }
+
+    /// Whether this node is a pane (vs. a layout).
+    #[must_use]
+    pub fn is_pane(&self) -> bool {
+        self.pane().is_some()
+    }
+
+    /// The pane's `pane_kind` discriminant, `EDIT` for a layout.
+    #[must_use]
+    pub fn kind(&self) -> u8 {
+        match self.pane() {
+            Some(app::Pane::Preview { .. }) => pane_kind::PREVIEW,
+            Some(app::Pane::Terminal { .. }) => pane_kind::TERMINAL,
+            Some(app::Pane::Edit { .. }) | None => pane_kind::EDIT,
+        }
+    }
+
+    /// The pane's path, `""` for a layout.
+    #[must_use]
+    pub fn path(&self) -> String {
+        self.pane().map(|p| p.path().to_owned()).unwrap_or_default()
+    }
+
+    /// Whether the edit pane's cursor was saved.
+    #[must_use]
+    pub fn has_cursor(&self) -> bool {
+        self.edit().0.is_some()
+    }
+
+    /// The cursor's 1-based line.
+    #[must_use]
+    pub fn cursor_line(&self) -> u32 {
+        self.edit().0.map_or(0, |c| c.line)
+    }
+
+    /// The cursor's 0-based byte column.
+    #[must_use]
+    pub fn cursor_col(&self) -> u32 {
+        self.edit().0.map_or(0, |c| c.col)
+    }
+
+    /// Whether the edit pane's top line was saved.
+    #[must_use]
+    pub fn has_top_line(&self) -> bool {
+        self.edit().1.is_some()
+    }
+
+    /// The 1-based first visible line.
+    #[must_use]
+    pub fn top_line(&self) -> u32 {
+        self.edit().1.unwrap_or(0)
+    }
+
+    /// Whether the preview pane's scroll was saved.
+    #[must_use]
+    pub fn has_scroll(&self) -> bool {
+        self.preview_scroll().is_some()
+    }
+
+    /// The preview pane's scroll fraction.
+    #[must_use]
+    pub fn scroll(&self) -> f64 {
+        self.preview_scroll().unwrap_or(0.0)
+    }
+
+    /// The layout's `orientation` discriminant, 0 for a pane.
+    #[must_use]
+    pub fn orientation(&self) -> u8 {
+        match self.layout().map(|l| l.orientation) {
+            Some(PaneOrientation::Vertical) => orientation::VERTICAL,
+            _ => orientation::HORIZONTAL,
+        }
+    }
+
+    /// The layout's child count, 0 for a pane.
+    #[must_use]
+    pub fn child_count(&self) -> u32 {
+        self.layout()
+            .map_or(0, |l| u32::try_from(l.children.len()).unwrap_or(u32::MAX))
+    }
+
+    /// The weight of child `index`, 0.0 out of range.
+    #[must_use]
+    pub fn weight(&self, index: u32) -> f64 {
+        self.layout()
+            .and_then(|l| l.weights.get(index as usize).copied())
+            .unwrap_or(0.0)
+    }
+
+    /// Child `index`, an empty edit pane out of range.
+    #[must_use]
+    pub fn child(&self, index: u32) -> FfiAppNode {
+        FfiAppNode {
+            node: self
+                .layout()
+                .and_then(|l| l.children.get(index as usize).cloned())
+                .unwrap_or_else(|| app::Node::Pane(empty_edit_pane())),
+        }
+    }
+}
+
+/// One directory's project state (opaque to Swift). When [`FfiProjectState::found`]
+/// is false every other field reads 0 and the tab is empty.
+pub struct FfiProjectState {
+    directory: String,
+    state: Option<app::ProjectState>,
+}
+
+impl FfiProjectState {
+    /// Whether the directory has a project state.
+    #[must_use]
+    pub fn found(&self) -> bool {
+        self.state.is_some()
+    }
+
+    /// The stored frame, if any.
+    fn frame(&self) -> Option<app::Frame> {
+        self.state.as_ref().map(|s| s.frame)
+    }
+
+    /// Whether the stored frame carries a position.
+    #[must_use]
+    pub fn has_position(&self) -> bool {
+        self.frame().is_some_and(|f| f.x.is_some() && f.y.is_some())
+    }
+
+    /// The stored origin's x coordinate, 0 without a position.
+    #[must_use]
+    pub fn x(&self) -> f64 {
+        self.frame().and_then(|f| f.x).unwrap_or(0.0)
+    }
+
+    /// The stored origin's y coordinate, 0 without a position.
+    #[must_use]
+    pub fn y(&self) -> f64 {
+        self.frame().and_then(|f| f.y).unwrap_or(0.0)
+    }
+
+    /// The stored width.
+    #[must_use]
+    pub fn width(&self) -> f64 {
+        self.frame().map_or(0.0, |f| f.width)
+    }
+
+    /// The stored height.
+    #[must_use]
+    pub fn height(&self) -> f64 {
+        self.frame().map_or(0.0, |f| f.height)
+    }
+
+    /// The stored tab, whose directory is the one asked for.
+    #[must_use]
+    pub fn tab(&self) -> FfiAppTab {
+        FfiAppTab {
+            directory: self.directory.clone(),
+            content: self
+                .state
+                .as_ref()
+                .map(|s| s.tab.clone())
+                .unwrap_or_default(),
+        }
+    }
 }
 
 // --- Opaque handles ---

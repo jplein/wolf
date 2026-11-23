@@ -894,7 +894,8 @@ impl NvimProcess {
     /// `runtime/nvim/init.lua`) over `nvim_exec_lua`, passing `spec_json` as a Lua
     /// vararg (never interpolated) that the helper `vim.json.decode`s. The helper
     /// creates the splits with `:split`/`:vsplit`, `:edit`s each non-empty leaf
-    /// path, and returns the window handles in DFS order. Each handle is decoded
+    /// path, applies an edit leaf's `cursor` and `top_line` with the line clamped
+    /// to the buffer, and returns the window handles in DFS order. Each handle is decoded
     /// via [`crate::redraw::ext_handle`].
     pub fn rebuild_layout(
         &self,

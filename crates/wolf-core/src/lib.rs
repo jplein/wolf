@@ -50,11 +50,18 @@
 //!   list into the sidebar's per-directory children (shared by all front-ends).
 //! - [`terminal`]: the terminal sessions core owns (pty, shell, libghostty-vt
 //!   emulator) and the frames they publish.
+//! - [`app_state`]: the application-state model, the rule that picks a
+//!   directory's project state, and the restore-side helpers, reached as
+//!   `wolf_core::app_state::…`.
+//! - [`app_state_store`]: the application-state store ([`AppStateStore`]), the
+//!   `window_state` and `project_state` tables of `state_dir()/wolf.sqlite`.
 //! - [`api`]: the FFI-shaped front-end surface ([`WolfCore`]).
 //! - [`config`]: the GUI-free user-preferences reader ([`WolfConfig`]).
 //! - [`state`]: the GUI-free application-state persistence ([`StateStore`]).
 
 pub mod api;
+pub mod app_state;
+pub mod app_state_store;
 pub mod browser_preview;
 pub mod buffer_picker;
 pub mod command;
@@ -85,6 +92,7 @@ pub mod terminal;
 pub mod tree;
 
 pub use api::{CoreConfig, CoreError, SnapshotReadGuard, WolfCore};
+pub use app_state_store::{AppStateStore, PROJECT_STATE_LIMIT};
 pub use browser_preview::BrowserPreview;
 pub use buffer_picker::{rank_buffers, BufInfo, BufferRow};
 pub use command::{Command, CommandSpec, MenuGroup, COMMAND_SPECS};
