@@ -40,6 +40,18 @@ The other files below cover what a seam cannot reach: a real Neovim, a real wind
 
 - Pure: no display, Neovim or filesystem; `is_dir` answers from a fixed list. Whether the coordinator feeds them the live windows is [`smoke_headless/restore.rs`](#smoke_headlessrestorers)'s question.
 
+#### `cell_text_paint.rs`
+
+**Covers**
+
+- `render::draw_cells` onto an offscreen ARGB32 `ImageSurface` exactly the size of a one-line toast's box: a line of narrow glyphs leaves the right padding without ink and inks its last cell, at a size where the same line laid out as one Pango run overruns the box.
+- Its return value, which `draw_toast` advances each chunk by: two cells for a wide character, none for a combining mark, and none for empty text, which draws nothing.
+
+**Gotchas**
+
+- Headless: no display, no Neovim and no compositor, but it needs the dev shell's pinned fontconfig, as [`paint_golden.rs`](#paint_goldenrs) does.
+- The font size is chosen by the precondition `a_pango_run_of_the_line_outgrows_the_toast_box`. If a font update makes it fail, choose another size by it; weakening the clip assertions instead leaves a test that passes whether the line is drawn on its cells or as a run.
+
 #### `drawer_share.rs`
 
 **Covers**
@@ -289,7 +301,7 @@ The handle's y comes from `terminal.rs`'s `drawer_strip_edges`, and no assertion
 
 #### `smoke_headless/editor.rs`
 
-Editor smokes: typed text, the file and buffer pickers, the empty state, a new untitled buffer, the command palette, navigation history, completion, messages and the confirm prompt, the clipboard, and saving.
+Editor smokes: typed text, the file and buffer pickers, the empty state, a new untitled buffer, the command palette, navigation history, completion, messages and the confirm prompt, the clipboard, and saving. The multi-line message smoke also reads the toast's box from the capture's pixels: as wide as its widest line's cells, a wide character paying two, plus the padding on both sides, and no wider.
 
 #### `smoke_headless/extras.rs`
 
@@ -702,12 +714,13 @@ Being scrupulous about this is the point of the section.
 - **Nothing on the toast's scroll path reaches an assertion.** No smoke can produce a message longer than the budget — half the space above the strip, many lines at the smokes' geometry — so the offset never moves, and the widget-side rules under it are unreachable for the same reason: that the gesture re-places the surface before queueing the draw, and that it accumulates against `mouse::scroll_threshold(unit, cell_h)` so a `ScrollUnit::Surface` device's sub-line deltas park a carry. Nothing observes that the toast consumes a scroll rather than forwarding it either: the surface sits above the pane areas with its own controller, and `wheel_scroll_moves_the_viewport_under_cage` scrolls where no toast is showing. Every arithmetic seam beneath is table-tested.
 - **A grid-anchored completion popup.** The popup smoke drives cmdline completion, where `Pum::grid` is `-1`. The insert-mode branch — the one that reads a pane's `compute_bounds` and `editor_inset::grid_rect` — is exercised by nothing, so its anchor arithmetic is unmeasured end to end.
 - **The popup's selected-row reverse video.** OCR reads neither a fill nor an inversion, the same shape as the status bar's active treatment. `pum_selection` and `pum_view` are table-tested and `draw_pum` demonstrably reads both.
+- **That the toast and the popup paint on their cells.** That `draw_toast` and `draw_pum` draw through `render::draw_cells` rather than as one run is unobserved end to end: at the smokes' 28 pt, DejaVu's advance rounds down, so a run is narrower than its cells and nothing clips either way. [`cell_text_paint.rs`](#cell_text_paintrs) pins `draw_cells` itself.
 - **The re-prompt path of a `confirm()` dialog.** The confirm smoke answers with a valid key. An **invalid** key, which makes Neovim re-emit a matching `cmdline_show` and core restore the stashed messages, is covered by `wolf-core`'s own `cmdline_show_matching_reprompt_restores_stashed_confirm` and by no smoke.
 - **The confirm smoke's third assertion has no front-end falsifier.** `wolf_core::redraw::cmdline_hide` does a `mem::take` on the toast's messages, so the second capture's toast is empty by either route, and `draw_toast` caches nothing to keep drawing from. What that assertion states is a no-caching property rather than an active dismissal — the Linux half of the feat-list row is that this front-end adds no dismissal of its own — and its only genuine falsifier, core failing to take the messages, lives in `wolf-core`.
 - **`prompt_answered`'s only production effect is observed by nothing.** All it drives is resetting `toast_scroll` and `toast_lines`, and no assertion reads either; its unit test asserts a two-term boolean against itself, which holds whatever the caller does with the answer. Discriminating it needs a toast scrolled back, a prompt resolved, and the next message read from its newest line — unreachable for the reason the toast entry above gives, since no smoke can overflow the budget at all.
 - **`typed_cd_reroots_the_sidebar_under_cage`'s assertion-4 revert is not isolated.** Measured: with no re-root at all the sidebar keeps its launch root label, so assertion 4 fails before assertion 6 is evaluated and assertion 6 has no red run under that revert. The asymmetry is inherent rather than a fixture weakness — the same shape as the project-search smoke's assertion 6 above — and the other direction is isolated: assertion 6's own revert reddens 6 alone, with 3, 4 and 5 green.
-- **That a decoration-free cell builds no `AttrList`.** It is a stated performance decision in `draw_glyph` with no assertion behind it, and probably unreachable from a pixel test in any case: an attribute list carrying nothing renders exactly what no attribute list renders.
-- **That the decorations reach the command-line strip, the message toast, the completion popup and the block-cursor glyph.** All four draw through the single `draw_glyph`, so it follows by construction and nothing observes it. No smoke is evidence about the decorations at all: the captive Neovim under `cage` runs with no colorscheme, no spell and no LSP, so it emits no undercurl or strikethrough cell in the first place.
+- **That a decoration-free cell builds no `AttrList`.** It is a stated performance decision in `GlyphPainter::draw` with no assertion behind it, and probably unreachable from a pixel test in any case: an attribute list carrying nothing renders exactly what no attribute list renders.
+- **That the decorations reach the command-line strip, the message toast, the completion popup and the block-cursor glyph.** All four draw through `GlyphPainter::draw`, the strip and the cursor by way of `draw_glyph` and the toast and the popup by way of `draw_cells`, so it follows by construction and nothing observes it. No smoke is evidence about the decorations at all: the captive Neovim under `cage` runs with no colorscheme, no spell and no LSP, so it emits no undercurl or strikethrough cell in the first place.
 - **Nothing proves the clipboard reaches another Wayland client.** A `gdk::Clipboard` can serve a `read_text_async` from its own local content provider when the same client owns the selection, so `copy_and_paste_round_trip_through_the_clipboard_under_cage`'s round trip may never leave the process. Adding `wl-clipboard` would not settle it either: wlroots offers the selection to the keyboard-focused client, and a second client started under `cage` beside the app has no focus. Proving the compositor half needs a focus dance no smoke performs.
 - **`shell::copy_selection`'s write-nothing-never-clear branch, and the paste callback's ordering.** That an absent or empty yank writes nothing rather than clearing whatever the user copied from another application, and that the callback upgrades its `Weak` before it borrows the core, are widget-layer facts neither suite can execute. `clipboard_ui`'s tables cover the rules; what is unobserved is the glue carrying them out.
 - **Anything a desktop portal supplies.** Every cage's bus activates no portal, so every smoke runs GTK's portal-less path: font and xft settings from the pinned `settings.ini`, the dpi from the app's own pin, and the in-process file chooser. What a real desktop's portal hands GTK in their place is observed by nothing.

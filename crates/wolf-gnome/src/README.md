@@ -141,13 +141,15 @@ Purpose: the pure rulebook behind the command-line strip, the message toast and 
 - `cmdline_columns(prefix, text, byte)` — `prefix` is the dialog `prompt` plus `firstc`.
 - The toast rules: `toast_budget_rows`, `toast_view`, `toast_scroll_next`, `toast_scroll_clamp`, `toast_width_cols`, `carried_scroll`, `toast_is_shown`, `prompt_answered`.
 - The popup rules: `pum_selection`, `pum_view`, `pum_item_label`, `pum_width_cols`.
+- The cell rule: `text_cells`, `cell_clusters`, `clip_to_cells`.
 
 **Decisions**
 
-- `cmdline_columns` is one function because the caret and the popup's cmdline anchor both need it, and a second copy is how a popup ends up a column away from the caret it belongs to.
+- `cmdline_columns` is one function because the caret and the popup's cmdline anchor both need it: a second copy puts the popup a column off its caret.
 - A zero offset pins the toast to its newest line — `toast_scroll_next` inverts the grid's sign for that reason — and `carried_scroll` drops the offset when the line count changes, since that is a different message.
 - `pum_selection` refuses an out-of-range index rather than clamping: a selection the item list cannot explain is a fold error, and highlighting the last row would hide it.
-- Both width seams measure the visible rows only: measuring the whole list would make the popup jump wider the moment a long item scrolled into range, and would leave a scrolled toast sized for a line it is not drawing.
+- Both width seams measure the visible rows only: the whole list would make the popup jump wider as a long item scrolled into range, and size a scrolled toast for a line it is not drawing.
+- Widths are grid cells by GLib's Unicode tables: a wide character is two cells, and a zero-width one none, joining the cluster before it. [`render.rs`](#renderrs)'s `draw_cells` draws the toast and popup on those cells, so a box sized here holds its text.
 
 **Gotchas**
 
@@ -786,22 +788,23 @@ Purpose: the Cairo/Pango paint seam — one grid and its highlight table onto an
 
 **Public API**
 
-- `CellMetrics::for_font(cr, family, size_pt, line_height_percent)` — `cr` supplies a Pango context only. The cell is measured from `family` alone, and `font` names `family_list(family)`.
-- `family_list(configured)` — `configured`, then `SYMBOLS_FAMILY`, unless a member already names that face as fontconfig compares names.
-- `paint(cr, grid, highlights, metrics)` — one grid, not a `Snapshot`: under `ext_multigrid` a front-end paints one grid per surface.
+- `CellMetrics::for_font(cr, family, size_pt, line_height_percent)` — `cr` supplies only a Pango context. The cell is measured from `family` alone; `font` names `family_list(family)`.
+- `family_list(configured)` — `configured`, then `SYMBOLS_FAMILY` unless a member names it, as fontconfig compares names.
+- `paint(cr, grid, highlights, metrics)` — one grid, not a `Snapshot`: under `ext_multigrid` each surface paints its own grid.
+- `draw_cells(cr, metrics, x, y, text, fg, style) -> usize` — the toast's and popup's text; returns the cells covered.
 
 **Decisions**
 
 - The face order, and why the cell ignores the symbols face: [Typography](../../../notes/wolf-gnome-decisions.md#typography).
-- `paint` re-texts one `GlyphPainter`'s layout per cell: each `pangocairo::create_layout` costs a `PangoContext` and a font-map lookup, and one string per run would advance by the face's hinted advance, not `metrics.cell_w`.
-- The painter clears the attribute list ahead of an undecorated cell and re-sets the face when `(bold, italic)` changes, or one cell's underline or weight runs on.
-- A glyph's move-to is `y + baseline - ascent`, not the cell top, where Pango would hang a taller cell's glyphs.
-- A row's backgrounds all precede its glyphs, so no fill cuts off a symbols icon, about one em wide, or a wide character's right half.
+- `paint` and `draw_cells` draw cell by cell through one `GlyphPainter`: a Pango run advances by whole-pixel-rounded glyph widths, not `metrics.cell_w`, outgrowing its cells; each `create_layout` costs a `PangoContext` and a font-map lookup.
+- The painter clears its attributes before an undecorated cell and re-sets the face when `(bold, italic)` changes, or one cell's underline or weight runs on.
+- A glyph's move-to is `y + baseline - ascent`, not the cell top, where a taller cell's glyphs would hang.
+- A row's backgrounds precede its glyphs, so no fill cuts off a symbols icon or a wide character's right half.
 
 **Gotchas**
 
-- `GlyphPainter::new(cr)` and `draw(cr, …)` take the context twice with nothing binding them; every call site passes the same one.
-- The fallback colours, `GlyphPainter`, `draw_glyph`, `set_source` and `draw_text_line`, the statusbar strip's free text, are `pub(crate)` for [`cursor.rs`](#cursorrs), [`pane_view.rs`](#pane_viewrs) and [`terminal/canvas.rs`](terminal/README.md#canvasrs); a reimplementation drifts from the grid paint.
+- `GlyphPainter::new(cr)` and `draw(cr, …)` take the context twice, unbound; every caller passes the same one.
+- The fallback colours, `GlyphPainter`, `draw_glyph`, `set_source` and `draw_text_line` are `pub(crate)` for [`cursor.rs`](#cursorrs), [`pane_view.rs`](#pane_viewrs) and [`terminal/canvas.rs`](terminal/README.md#canvasrs); a copy drifts from the grid paint.
 
 #### `save_ui.rs`
 
