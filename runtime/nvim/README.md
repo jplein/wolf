@@ -256,6 +256,10 @@ Edits the active preview pane's source in another pane and returns `nvim_win_get
 
 Target validation is shared with `wolf_preview_in_other`, and an unusable target falls back to the split path. A usable target has the source bound into it — preferring the window-scoped bufnr bind, falling back to focusing plus `:edit` of the recorded path — and is then focused. On the split path the new right window keeps the scratch and the source is bound into the original window, which is focused: net editor-left, preview-right. Focus follows the edit-mode view of the document. No MRU is recorded; the two guarded re-emits mirror `wolf_edit_source`.
 
+#### `wolf_open_split_left(path)`
+
+Opens `path` with `topleft vsplit`, a new window left of the whole tab, and returns that window, which is current. It emits no `wolf_layout` split, because a front-end applies a split intent to the pane it came from, never to the whole tab; the caller binds the window it is handed. A missing `path` opens as a new buffer for it.
+
 #### `wolf_next_untitled(cwd, exclude_buf, extra_collision)`
 
 Pure name generator. Returns `(name, abspath)` for the first index whose name collides with neither a file or directory on disk in `cwd` nor any existing buffer's name, skipping `exclude_buf`. Index 1 is un-numbered `Untitled.md`, so the literal `Untitled 1.md` is never generated.

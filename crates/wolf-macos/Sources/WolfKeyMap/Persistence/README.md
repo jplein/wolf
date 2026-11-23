@@ -14,6 +14,7 @@ Purpose: The pure decision behind Open Folder ([§6](../../../../../specs/applic
 
 - `step(directory:current:windows:stacking:) -> Step` — `.focus(tab:)` names the tab id §4's rule picks, through `WindowStateCodec.projectTab`; else `.fill` when `current`'s directory is `""`, else `.newWindow`. `current` is `nil` when no Wolf window is key. A `LiveTab`'s directory is `""` for an empty tab.
 - `canonicalDirectory(_:)` — `realpath(3)`, falling back to the path as given.
+- `liveDirectory(hasFolder:reportedCwd:launchCwd:)` — the directory a tab counts as being on: `""` without a folder, else the reported cwd, else the launch directory ([why](../../../../../notes/wolf-macos-decisions.md#opening-files-from-outside-wolf)).
 - `fillFrame(stored:windowTabs:screenVisibleFrames:) -> CGRect?` — `stored`, validated by `StateSeam.restoredWindowFrame`, only when the filled tab is its window's only tab; `nil` keeps the window's frame.
 
 **Decisions**
@@ -113,12 +114,12 @@ Purpose: Converts between the front-end's persistence types and the `wolf_ffi_ap
 **Public API**
 
 - `submit(_:)` — writes `Window`s frontmost first, each `recency` most recently selected first, which §4's project-state rule reads. One transaction writes the window state and the project states, unflushed.
-- `load(_:) -> [LoadedWindow]` — frontmost first, a window with no tabs dropped, a `frame` `nil` without a position. Each `LoadedTab` carries `saved`, as saved, which a view caches, and `rebuild`, the tab after `FfiAppTab.restored()`, `nil` with no root.
-- `projectTab(_:windows:)` — the tab §4's rule picks for Open Folder, `nil` when none is open. It feeds the builder without committing.
+- `load(_:) -> [LoadedWindow]` — frontmost first, dropping a window with no tabs; `frame` is `nil` without a position. Each `LoadedTab` carries `saved`, as saved, which a view caches, and `rebuild`, the tab after `FfiAppTab.restored()`, `nil` with no root.
+- `projectTab(_:windows:)`, `projectDirectory(_:windows:)` — the tab §4's rule picks for Open Folder, `nil` when none is open, and a file's project directory by [§5.1](../../../../../specs/cli-and-file-open.md#51-choosing-the-tab) step 2; neither commits.
 - `loadProject(_:)` — a directory's project state, read as `load` reads a window, else `nil`.
 
 **Decisions**
 
-- `SavedTab` and `SavedPaneNode` stay the gather, cache and plan types, the zoom a mark on its leaf. The codec converts the mark to and from the tab's `zoomed` pane index, the leaf's depth-first index, and `SavedDrawer.zoomed` to and from a `zoomed` drawer, so `SessionSeam`, `PaneLayoutCodec` and `PaneZoom` need not know the bridge's shape.
+- `SavedTab` and `SavedPaneNode` stay the gather, cache and plan types. The codec converts a zoom mark on a leaf to and from the tab's depth-first `zoomed` pane index, and `SavedDrawer.zoomed` to and from a `zoomed` drawer, so `SessionSeam`, `PaneLayoutCodec` and `PaneZoom` need not know the bridge's shape.
 - An empty tab (`cwd == ""`) writes its sidebar and no root, focus, zoom or drawer, whatever its cache holds. A folder tab with no layout writes a lone edit pane on no file, which reads back as no layout, so a round trip is the identity.
 - A sidebar with any field set writes every field, an unset mode as `UNSET` and an unset query or toggle as `""` or `false`.

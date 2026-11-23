@@ -2,7 +2,7 @@
 
 `lib.rs` is the crate root: one `#[swift_bridge::bridge] mod ffi` plus the hand-written Rust glue behind it. It builds as a `staticlib` (the archive the `.app` links through the generated Swift) and as an `rlib`, so the Rust integration tests link and drive the same surface headlessly with no Swift runtime present. `bin/gen_bindings.rs` regenerates the committed bindings.
 
-Read [`wolf-ffi-decisions.md`](../../../notes/wolf-ffi-decisions.md) first. It holds the durable constraints behind this file — the registered C function pointer that carries the wake, the per-core wake tokens, the four wake channels, the append-only discriminant rule, and the generated-bindings workflow — and none of that is repeated here.
+Read [`wolf-ffi-decisions.md`](../../../notes/wolf-ffi-decisions.md) first. It holds the durable constraints behind this file — the registered C function pointer that carries the wake, the per-core wake tokens, the wake channels, the append-only discriminant rule, and the generated-bindings workflow — and none of that is repeated here.
 
 **Shapes that repeat across the whole surface.** Knowing these makes the entries below read as signatures rather than as a list of exceptions.
 
@@ -22,7 +22,7 @@ Read [`wolf-ffi-decisions.md`](../../../notes/wolf-ffi-decisions.md) first. It h
 - `shutdown(&self)` — Takes the core out of the handle and drops it; every method afterwards returns its empty-backed value.
 - `set_ui_focus(&self, gained: bool)` — `nvim_ui_set_focus`, reporting whether the tab this core serves has focus. nvim fires `FocusGained` on every `true`, which runs the autoread `:checktime`, so the front-end sends each edge once.
 
-The four `extern "C"` wake registrations (`wolf_ffi_set_wake`, `wolf_ffi_set_filesearch_wake`, `wolf_ffi_set_tree_wake`, `wolf_ffi_set_search_wake`) live in `generated/wolf_ffi_wake.h` rather than in `mod ffi`; see [`wolf-ffi-decisions.md`](../../../notes/wolf-ffi-decisions.md).
+The `extern "C"` wake registrations, `wolf_ffi_set_wake` and its siblings, live in `generated/wolf_ffi_wake.h` rather than in `mod ffi`; see [`wolf-ffi-decisions.md`](../../../notes/wolf-ffi-decisions.md).
 
 ### Liveness and restart
 
@@ -82,6 +82,7 @@ The four `extern "C"` wake registrations (`wolf_ffi_set_wake`, `wolf_ffi_set_fil
 - `focus_win(&self, win: i64)` — Click-to-focus and resolved focus-direction moves.
 - `close_pane(&self)` — `:close`, which closes the split rather than the buffer.
 - `split_horizontal(&self)`, `split_vertical(&self)` — Stacked (`:split`) and side-by-side (`:vsplit`) splits of Neovim's current window, through `WolfCore::split_pane`.
+- `open_split_left(&self, path: String) -> i64` — [`WolfCore::open_split_left`](../../wolf-core/src/README.md#apirs), the whole-tab split with `path` on the left. No split intent follows, so the caller binds the window it returns. Blocks briefly; 0 on failure or after shutdown.
 - `rebuild_tab(&self, tab: &FfiAppTab) -> Vec<i64>` — Realizes a saved tab's root in the current tabpage's lone window, returning the window handles in leaf order; empty when the tab has no root or the core is gone. Rust renders it with `wolf_core::app_state::tab_rebuild_spec`, so no front-end renders the spec, and it checks no file, so pass it `FfiAppTab::restored`'s output. Sizes come from the front-end's weights. When it returns, `win_buffer` and `previews` already report every returned window, so a state commit straight after it reads the restored files rather than the startup buffer. A terminal pane's window already shows its new session, and Neovim's current window and `active_win` are already the zoomed pane's, else the focused pane's, when the tab names one.
 - `pane_status_for_grid(&self, grid: u64) -> FfiPaneStatus` — The statusbar strings for the window drawing into `grid`.
 - `win_buffer(&self, win: i64) -> FfiWinBuffer` — What window `win` shows, read from core's `win_buffers` by handle. That map spans every tabpage, so a window on a tabpage that is not current is still reported, where `pane_status_for_grid` joins through the current-tabpage `windows` map and answers `[No Name]`. The front-end reads persisted leaf paths through it.
@@ -112,6 +113,7 @@ The four `extern "C"` wake registrations (`wolf_ffi_set_wake`, `wolf_ffi_set_fil
 - `terminal_focus(&self, id: u64, gained: bool)` — Pane focus or window activation, reported to a program that set mode 1004.
 - `resize_terminal(&self, id: u64, cols: u16, rows: u16, cell_w_px: u32, cell_h_px: u32)` — Sizes the session and its pty. The cell pixel size is also the unit of later pointer positions.
 - `close_terminal(&self, id: u64)` — Hangs the session up.
+- `assign_tab_id(&self) -> String` — A fresh [tab ID](../../../specs/cli-and-file-open.md#3-tab-ids), lowercase, which every session the core starts from then on carries. `""` after shutdown.
 - `live_terminals(&self) -> Vec<u64>` — Running sessions, ascending. An exited session is not listed, though its frame stays readable.
 - `terminal_selection_text(&self, id: u64) -> String` — `""` when nothing is selected.
 
@@ -153,6 +155,16 @@ Core's tabpage API, for a front-end whose tabs are tabpages of one Neovim. A mac
 - `recent_dirs(&self) -> Vec<String>` — [`WolfCore::recent_dirs`](../../wolf-core/src/README.md#apirs) as strings, empty once the core is gone. Drives File > Open Recent.
 - `record_recent_dir(&self, path: String)` — [`WolfCore::record_recent_dir`](../../wolf-core/src/README.md#apirs), Open Folder's record of the folder it opened, on the core of the tab that lands there. A no-op once the core is gone.
 - `wolf_ffi_ancestors_to_reveal(rel_path: String) -> Vec<String>` — A free function, no session needed: the ancestor directories the sidebar expands before revealing a file.
+
+### The open channel
+
+The app's side of the [`wolf` command's channel](../../../specs/cli-and-file-open.md#2-the-channel), over core's [`OpenListener`](../../wolf-core/src/README.md#open_channelrs). The listener is process-wide, not per core ([why](../../../notes/wolf-core-decisions.md#opening-files-from-outside-wolf)).
+
+- `wolf_ffi_open_listen(state_dir: String) -> String` — Binds the listener in `state_dir`, `""` meaning core's, first dropping one already bound. `""` on success, else the error's message.
+- `wolf_ffi_open_stop()` — Drops the listener, which removes its socket.
+- `wolf_ffi_open_drain() -> Vec<FfiOpenItem>` — The requests taken since the last drain, in arrival order, each resolved through `OpenRequest::target`.
+- `wolf_ffi_open_item(path: String) -> FfiOpenItem` — `path` resolved as a request with no tab ID, which is Finder's route ([§7](../../../specs/cli-and-file-open.md#7-finder-and-gnome-files)). `""` is an activate.
+- `FfiOpenItem::kind/path/tab_id` — `kind` per `mod open_kind`, `tab_id` lowercase; a string is `""` when absent.
 
 ### Commands and the command palette
 
@@ -271,6 +283,8 @@ The builder, submit and readers over core's [`AppStateStore`](../../wolf-core/sr
 - `wolf_ffi_app_state_window_state() -> FfiAppState` — The launch read. Empty with no store, nothing saved, or a table from a newer build.
 - `wolf_ffi_app_state_project_state(directory) -> FfiProjectState` — The Open Folder read, which marks the row used. `found` is false when there is none, and `tab().directory()` is the directory asked for.
 - `wolf_ffi_app_state_project_tab(directory) -> FfiProjectTab` — The tab Open Folder focuses, by `app_state::project_tab` over the scratch as the builder fed it, without a commit. It clears nothing and never opens the store, so a seam test can ask it outside the store's lifetime. `FfiProjectTab::found()` is false when no tab is open on `directory`; `window()`, frontmost first, and `tab()`, in tab-bar order, then read 0.
+- `wolf_ffi_app_state_choose_pane(file) -> FfiPaneChoice` — [§5.2](../../../specs/cli-and-file-open.md#52-choosing-the-pane)'s choice for `file` in the scratch's last window's last tab, by `file_open::choose_pane`; with no tab, a split. `FfiPaneChoice::placement` is per `mod pane_placement`, and `pane` is depth-first, 0 for a split.
+- `wolf_ffi_app_state_project_directory(file) -> String` — By `file_open::project_directory`, every scratch tab's non-empty directory counting as open.
 - `FfiAppState::windows`, `FfiAppWindow`, `FfiAppTab`, `FfiAppNode` — Accessors over core's model. A field that was not saved or does not apply reads 0, `""`, `false`, `UNSET` or `NONE`, with a `has_…` accessor wherever 0 is also a real value. A missing root and an out-of-range `child` read as an empty edit pane. `FfiAppWindow::minimized` is the saved flag.
 - `FfiAppTab::restored() -> FfiAppTab` — The tab as [`app_state::restored_tab`](../../wolf-core/src/README.md#app_staters) restores it, with the same directory: a missing file becomes an empty pane in place, and a zoom on it is dropped. The front-end reads its saved tab as is and rebuilds this one.
 
@@ -300,6 +314,8 @@ These `u8` values are the ABI: Swift decodes raw integers, so the numbers are co
 | `pane_ref`              | `wolf_core::app_state::PaneRef` after an unset     | `NONE` 0, `PANE` 1, `DRAWER` 2                                                                                                                                            |
 | `sidebar_mode`          | `wolf_core::app_state::SidebarMode` after an unset | `UNSET` 0, `TREE` 1, `SEARCH` 2                                                                                                                                           |
 | `tristate`              | `Option<bool>`                                     | `UNSET` 0, `OFF` 1, `ON` 2                                                                                                                                                |
+| `open_kind`             | `wolf_core::OpenTarget`                            | `ACTIVATE` 0, `DIRECTORY` 1, `FILE` 2                                                                                                                                     |
+| `pane_placement`        | `wolf_core::PanePlacement`                         | `FOCUS` 0, `OPEN` 1, `CONVERT` 2, `SPLIT_LEFT` 3                                                                                                                          |
 
 `mod flag` is a bitset rather than an enum: `BOLD` `1 << 0`, `ITALIC` `1 << 1`, `UNDERLINE` `1 << 2`, `UNDERCURL` `1 << 3`, `STRIKETHROUGH` `1 << 4`, packed into `FfiCell::flags` and `FfiToastChunk::flags`.
 

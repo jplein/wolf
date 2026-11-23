@@ -277,7 +277,7 @@ The output `.xcodeproj` is uncommitted and `.gitignore`d, and exists for LLDB an
 
 ### What the bundle ships
 
-The `.app` is self-contained, so a double-clicked bundle runs with no shell environment: it carries its own pinned Neovim and `init.lua`, ripgrep, the vendored Neovim plugins and colorscheme, the compiled treesitter parsers, the `xterm-ghostty` terminfo entry its terminal panes use, both editor font families, the Symbols Nerd Font Mono icon face, and the app icon. [`crates/wolf-macos/README.md`](crates/wolf-macos/README.md) has the inventory, with a link to the `//bazel` package behind each entry, and `bundle_layout_test` asserts it. Exported `WOLF_NVIM_BIN`, `WOLF_RG_BIN`, `WOLF_TERMINFO_DIR` and `WOLF_INIT_LUA` values override their bundled counterparts, so a development override still wins.
+The `.app` is self-contained, so a double-clicked bundle runs with no shell environment: it carries its own pinned Neovim and `init.lua`, ripgrep, the vendored Neovim plugins and colorscheme, the compiled treesitter parsers, the `xterm-ghostty` terminfo entry its terminal panes use, both editor font families, the Symbols Nerd Font Mono icon face, the `wolf` command, and the app icon. [`crates/wolf-macos/README.md`](crates/wolf-macos/README.md) has the inventory, with a link to the `//bazel` package behind each entry, and `bundle_layout_test` asserts it. Exported `WOLF_NVIM_BIN`, `WOLF_RG_BIN`, `WOLF_TERMINFO_DIR` and `WOLF_INIT_LUA` values override their bundled counterparts, so a development override still wins.
 
 ## The `wolf` command
 
@@ -290,7 +290,9 @@ bazel build //crates/wolf-core:wolf    # macOS: bazel-bin/crates/wolf-core/wolf
 
 Run the built binary by its path from the directory a relative `PATH` should resolve against. `bazel run` would start it in its runfiles tree, where a relative `PATH` resolves instead.
 
-The command reaches Wolf through a socket in `state_dir()`, which `WOLF_STATE_DIR` overrides. Neither front-end listens on it, so the command exits `2` saying Wolf is not running ([limitations](notes/wolf-core-decisions.md#present-limitations)).
+On macOS, `:Wolf` and `:WolfRelease` bundle it at `Wolf.app/Contents/Resources/bin/wolf`, through the `:wolf_cli_tree` copy of `//crates/wolf-core:wolf`, and the app's Install `wolf` Command links `/usr/local/bin/wolf` to it ([`crates/wolf-macos`](crates/wolf-macos/README.md#the-wolf-command-and-finder)).
+
+The command reaches Wolf through a socket in `state_dir()`, which `WOLF_STATE_DIR` overrides. The macOS app listens on it from launch, and with nothing listening the command launches `Wolf.app` by bundle identifier, unless `WOLF_STATE_DIR` is set ([why](notes/wolf-core-decisions.md#opening-files-from-outside-wolf)). wolf-gnome does not listen, so on Linux the command exits `2` saying Wolf is not running ([limitations](notes/wolf-core-decisions.md#present-limitations)).
 
 ## Running the tests
 
@@ -319,7 +321,7 @@ What each target covers belongs with the code it tests:
 | [`//crates/wolf-vt:*`](crates/wolf-vt/tests/README.md)                                   | The libghostty-vt binding, headless.                                         |
 | [`//crates/wolf-macos:WolfKeyMapTests`](crates/wolf-macos/README.md)                     | The AppKit-free Swift seams, through XCTest.                                 |
 | [`//crates/wolf-macos:WolfMacOSTests`](crates/wolf-macos/Tests/WolfMacOSTests/README.md) | What AppKit views from `WolfMacOS` draw, rendered offscreen, through XCTest. |
-| `//crates/wolf-macos:bundle_layout_test`                                                 | The built `.app`'s resource layout.                                          |
+| `//crates/wolf-macos:bundle_layout_test`                                                 | The built `.app`'s resource layout, `wolf` command and document types.       |
 | [`//bazel/...`](#repinning-a-vendored-asset)                                             | One test per vendored asset, asserting the assembled tree.                   |
 
 ### The app-launch smoke

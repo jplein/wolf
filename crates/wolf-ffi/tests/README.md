@@ -295,6 +295,12 @@ Real-nvim coverage of multi-core identity and wake routing, running two cores at
 
 **Gotchas** — one `#[test]` only: the builder's scratch is process-wide, so two tests in one binary would race it.
 
+#### `open_requests.rs`
+
+**Covers** — the open channel's bridge, over real sockets and `wolf-core`'s real `OpenClient`. Drained requests resolve by kind: a file through a `..` segment, a canonical directory, and an activate, each with its tab ID lowercase or `""`. The wake `wolf_ffi_set_open_wake` registers runs once per taken request, and `wolf_ffi_open_stop` removes the socket, after which nothing listens and a drain is empty. An over-long socket path answers an error, and `wolf_ffi_open_item` resolves as a request with no tab ID, `""` as an activate. Headless, but `//crates/wolf-ffi:open_requests` carries `no-sandbox`, since the macOS build sandbox forbids the sockets, and depends on `//crates/wolf-core:wolf_core` for `OpenClient`.
+
+**Gotchas** — every test holds one lock for its whole body, because the listener and the wake are process-wide. The binary enters a kept, canonical temp dir and names each state dir relative to it, because no absolute socket path under Bazel's test `TMPDIR` fits 103 bytes. The discriminants are local constants mirroring the bridge's private `open_kind`.
+
 #### `other_pane.rs`
 
 **Covers**

@@ -67,6 +67,20 @@ Purpose: Pure line-composition and caret-prefix math behind the macOS command-li
 
 - `bytePrefix` is public because both `CmdlineView` and `PaneContainerView`'s `pumAnchorX` need it. Sharing one implementation is what keeps the completion popup anchored to the same column the caret is drawn at.
 
+#### `CommandInstallSeam.swift`
+
+Purpose: Install and Uninstall `wolf` Command ([§1](../../../../specs/cli-and-file-open.md#installing-it)): creates and removes the `/usr/local/bin/wolf` link to the bundled binary. Foundation only.
+
+**Public API**
+
+- `install(linkPath:bundled:runPrivileged:)`, `uninstall(linkPath:runPrivileged:) -> Outcome` — `runPrivileged` runs an AppleScript with administrator privileges and answers whether it succeeded. `Outcome.refused` and `.failed` carry a description for the alert.
+- `bundledSuffix` — the end of every bundled binary's path, which marks a link as Wolf's.
+
+**Decisions**
+
+- Only a path with nothing at it, or a link to some `Wolf.app`'s binary, is touched ([why](../../../../notes/wolf-macos-decisions.md#opening-files-from-outside-wolf)), so a link from another bundle is re-pointed.
+- The privileged script single-quotes each path for the shell, then escapes `\` and `"` for the AppleScript string literal, so a bundle path holding a space or a quote survives both.
+
 #### `CommandSeam.swift`
 
 Purpose: `CommandKind`, the typed form of a no-parameter, no-return user action, plus the guarded decode of its FFI discriminant. Foundation only, no AppKit or NSMenu.
@@ -196,6 +210,26 @@ Purpose: Pure arithmetic for the per-pane text-grid inset. Given one pane's size
 
 - `gridRect` is pane-local: its origin is the pane's top-left, and the caller offsets it into the pane's view rect.
 - `textLeftInset` is the distance from the pane's left edge to the grid, not the statusbar text's origin. That origin also picks up the column-cap centering offset, which this seam knows nothing about; `StatusbarTextSpan` owns that step.
+
+#### `FileOpenSeam.swift`
+
+Purpose: Routes a request from the `wolf` command or Finder to Open Folder, to the tab its `WOLF_TAB_ID` names, or to its file's project ([§4, §5.1](../../../../specs/cli-and-file-open.md)), and decodes core's §5.2 pane choice for a tab.
+
+**Public API**
+
+- `Request(_:)` — decodes a drained or Finder `FfiOpenItem`; an unknown kind is an activate.
+- `route(_:windows:tabIds:stacking:) -> Route` — `tabIds` maps each live tab's `WOLF_TAB_ID` to its tab id, and an ID whose tab is not in `windows` counts as none. `current` is the named tab when live, else `currentTab(windows:stacking:)`.
+- `currentTab(windows:stacking:)` — the frontmost window's selected tab, else its most recent one, as `OpenFolderSeam.step` reads them.
+- `choosePane(_:layout:focused:drawerZoomed:) -> PaneChoice` — `file` in core's resolved form, `focused` `nil` while the drawer is active. Each `Placement` index counts `PaneTree.leaves()` depth-first.
+
+**Decisions**
+
+- A live named tab routes `.openFile` before any project is resolved, whatever project the file lies in and even for an empty tab, as §5.1 rule 1 has it ([why](../../../../notes/wolf-macos-decisions.md#opening-files-from-outside-wolf)).
+
+**Gotchas**
+
+- `OpenKind` and `PanePlacement` mirror wolf-ffi's `mod open_kind` and `mod pane_placement`, so a change to either table lands in both.
+- `route` for a file and `choosePane` both feed the `WindowStateCodec` builder's scratch. `choosePane`'s feed pushes the tab's root even with directory `""`, which `submit` drops, since the choice ignores the directory.
 
 #### `FontSizeSeam.swift`
 
@@ -418,7 +452,7 @@ Purpose: The n-ary pane-layout tree behind the macOS split-panes UI, matching Ne
 
 **Public API**
 
-- `PaneTree` is a reference type mutated in place; it is never empty. `rebuilt(from:firstLeafId:)` reconstructs a tree from a `SavedPaneNode` and returns leaf ids in the same DFS order as `leaves()`, so the caller can zip them to restored window handles.
+- `PaneTree` is a reference type mutated in place; it is never empty. `splitRootLeft(_:)` is [§5.2](../../../../specs/cli-and-file-open.md#52-choosing-the-pane) rule 4's whole-tab split, the new leaf first. `rebuilt(from:firstLeafId:)` reconstructs a tree from a `SavedPaneNode` and returns leaf ids in the same DFS order as `leaves()`, so the caller can zip them to restored window handles.
 - `Divider.lineRect` is zero-thickness — the hit tolerance supplies the clickable width. `pairStart` / `pairSpan` cover only the two children that divider governs, which are the same two `setPairFraction` reweights.
 - `Orientation` and `FocusDir` carry `init?(ffi:)` decoders for the `wolf-ffi` discriminant tables. `Rect`, `PaneId` and `PaneLayout` are reused by the other geometry seams in this module.
 
@@ -452,7 +486,7 @@ Purpose: The rules of Zoom Pane: which pane a toggle or a restore zooms, which e
 
 **Gotchas**
 
-- `PaneContainerView` applies `.panesChanged` right after close detection, `.split` and `.drawerOpen` in the intents that add a pane, `.focusMove` from both `applyFocus` and Neovim's reported window, `.toggleTerminal` before every drawer toggle, `.restore` after a launch rebuild, and `.toggle` from Zoom Pane ([why](../../../../notes/wolf-macos-decisions.md#zoom-pane)).
+- `PaneContainerView` applies `.panesChanged` right after close detection, `.split` and `.drawerOpen` in the intents that add a pane, `.openFile` when core's choice for a file from outside Wolf unzooms, `.focusMove` from both `applyFocus` and Neovim's reported window, `.toggleTerminal` before every drawer toggle, `.restore` after a launch rebuild, and `.toggle` from Zoom Pane ([why](../../../../notes/wolf-macos-decisions.md#zoom-pane)).
 
 #### `PickerPanelSeam.swift`
 

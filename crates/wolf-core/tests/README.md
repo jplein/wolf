@@ -724,7 +724,7 @@ Real Neovim (staged runfiles, wired `WOLF_NVIM_BIN`, `no-sandbox`).
 
 Real Neovim and real `/bin/sh` sessions in ptys (`//crates/wolf-core:split_commands`, as `terminal_input`).
 
-**Covers** — `WolfCore::split_pane` both ways from an editor window, a terminal pane and a preview pane: each yields a `Split` intent of that orientation from the active window, and the new window shows the same buffer, a second live session, or a preview of the same source. The horizontal terminal case also checks the new shell starts in the origin shell's directory. From the drawer, neither orientation changes the window count, the live sessions or the `Split` intents.
+**Covers** — `WolfCore::split_pane` both ways from an editor window, a terminal pane and a preview pane: each yields a `Split` intent of that orientation from the active window, and the new window shows the same buffer, a second live session, or a preview of the same source. The horizontal terminal case also checks the new shell starts in the origin shell's directory. From the drawer, neither orientation changes the window count, the live sessions or the `Split` intents. `open_split_left` from the right window of a vertical pair answers a new current window showing the file, as the first child of `winlayout()`'s root; on a missing path it splits onto a buffer named for it and creates no file.
 
 **Gotchas** — The `Split` intent is sent from inside the split, ahead of the new window's notifications, so the editor and preview cases read the new window only after a blocking request and `SPLIT_SETTLE`. The drawer case's barrier is a `focus_win` queued behind both splits: its landing proves Neovim handled them, and the negative settle follows it.
 
@@ -899,4 +899,5 @@ The real `wolf` binary, against a real `OpenListener` or a raw `UnixListener` th
 **Gotchas**
 
 - The binary is Cargo's `CARGO_BIN_EXE_wolf`, else the Bazel runfile, resolved before the test binary enters its base dir, which it does for `open_channel.rs`' socket-path reason. Each `wolf` runs in its case's `work` dir with a relative `WOLF_STATE_DIR` and no inherited `WOLF_TAB_ID`.
+- Every case sets `WOLF_STATE_DIR`, under which the command never launches the app, so nothing listening exits `2` here on macOS too and never starts an installed Wolf.
 - Exit `2` alone cannot show a refusal came before connecting, since a `wolf` that gets no answer exits `2` too, so the raw listener asserts that nobody connected.

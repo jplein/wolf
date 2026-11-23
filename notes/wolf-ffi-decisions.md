@@ -16,13 +16,13 @@ void wolf_ffi_set_wake(void (*wake)(uint64_t token));   // generated/wolf_ffi_wa
 
 The obvious design is an `extern "Swift"` symbol, and it is wrong here: a Rust-only integration test could never resolve one at link time. Registration keeps `wolf_ffi_start` linkable and runnable with no Swift runtime present, which is what lets the real-nvim tests drive the bridge at all. An unregistered wake is a harmless no-op.
 
-Each callback carries the firing core's wake token, a `u64` minted in `wolf_ffi_start`, so one process-global callback routes each wake to the right core without clobbering. The token identifies one core, which on macOS is one tab's captive Neovim, and the front-end hands the wake to that tab.
+Each per-core callback carries the firing core's wake token, a `u64` minted in `wolf_ffi_start`, so one process-global callback routes each wake to the right core without clobbering. The token identifies one core, which on macOS is one tab's captive Neovim, and the front-end hands the wake to that tab.
 
 The wake fires on a tokio worker thread and must not touch the `!Send` handle, which is precisely why identity crosses the boundary as a plain `Send` scalar rather than a pointer. The registered thunk must stay `@convention(c)`, so it can capture nothing but globals.
 
 ## Wake channels
 
-There are four, each independently registered:
+Each is registered independently:
 
 | Registration                   | Fires for                                             |
 | ------------------------------ | ----------------------------------------------------- |
@@ -30,12 +30,15 @@ There are four, each independently registered:
 | `wolf_ffi_set_filesearch_wake` | File-picker traversal                                 |
 | `wolf_ffi_set_tree_wake`       | File-tree traversal                                   |
 | `wolf_ffi_set_search_wake`     | Content-search results                                |
+| `wolf_ffi_set_open_wake`       | An open request the listener took, with token `0`     |
+
+The open wake is process-wide, because one listener serves the app rather than one core, so its token is always `0`, and it fires on the listener's connection threads rather than on tokio's.
 
 This distinction governs regeneration. An additive `WolfCoreHandle` method rides an existing wake and its regen touches only `wolf-ffi.swift` and `wolf-ffi.h`, leaving `wolf_ffi_wake.h` byte-identical. Only a genuinely new streaming channel adds a registration, and that is the change worth scrutiny — it means a new callback the front-end must register and a new thread-safety question to answer.
 
 ## Discriminant tables are append-only
 
-The `u8` discriminant modules in `src/lib.rs` (`command_kind`, `palette_row_kind`, `liveness`, the mouse, scroll, split, and focus enums, the `terminal_*` enums and bitsets, and the application-state `pane_kind`, `pane_ref`, `sidebar_mode` and `tristate`) are the ABI. Swift decodes raw integers, so renumbering an existing value silently changes behavior on the other side of the boundary rather than failing to compile.
+The `u8` discriminant modules in `src/lib.rs` (`command_kind`, `palette_row_kind`, `liveness`, the mouse, scroll, split, and focus enums, the `terminal_*` enums and bitsets, the application-state `pane_kind`, `pane_ref`, `sidebar_mode` and `tristate`, and the file-open `open_kind` and `pane_placement`) are the ABI. Swift decodes raw integers, so renumbering an existing value silently changes behavior on the other side of the boundary rather than failing to compile.
 
 Append at the end, never renumber or reuse. `command_kind` is contiguous from `0` and is the Rust side's record of each `wolf_core::Command` discriminant. The `//crates/wolf-ffi:commands` test requires every `COMMAND_SPECS` row to drain as its index, which turns a renumbering or a reorder into a test failure, and `CommandSeamTests` checks Swift's decode against it over the bridge.
 

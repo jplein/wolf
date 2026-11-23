@@ -199,6 +199,8 @@ A state table at a newer version is frozen per `db::Table` handle. Its flag is s
 - The 103-byte limit measures the socket path as given, so a relative state directory passes. The tests rely on it, because Bazel's test `TMPDIR` on macOS leaves no room for an absolute socket path.
 - The wire is one JSON object per line, and unknown keys are ignored, so either side can gain a field. A path that is not UTF-8 has no JSON string, so the command refuses it.
 - A linked worktree is recognised by reading `.git` and `commondir`, not by running `git`: a GUI app's `PATH` is minimal, and on macOS `/usr/bin/git` is an Xcode shim that can prompt.
+- On macOS the command's `launcher` runs `/usr/bin/open -b` on Wolf's bundle identifier, which `crates/wolf-macos/Info.plist` also holds. Under a non-empty `WOLF_STATE_DIR` there is no launcher: an app started by Launch Services inherits no environment, so it listens in the default state directory and never in the override, and a launch could only wait out `LAUNCH_TIMEOUT`. This also keeps every test, which sets `WOLF_STATE_DIR`, from launching an installed Wolf.
+- [§5.2](../specs/cli-and-file-open.md#52-choosing-the-pane) rule 4's whole-tab split is `WolfCore::open_split_left`, a `topleft vsplit` that answers the new window synchronously and emits no `Split` intent. A `Split` intent names the pane it split from, which a front-end splits, never the whole tab, so the front-end binds the window it is handed.
 
 ## Present limitations
 
@@ -209,7 +211,7 @@ A state table at a newer version is frozen per `db::Table` handle. Its flag is s
 - The file-search watcher does not cover a root it cannot watch, a session started with `WOLF_FS_WATCH=0` whose root no watched session shares, or any root when the watcher cannot start. A recursive inotify watch adds one watch per directory, ignored and skipped trees included, so a root as large as `$HOME` can exhaust `max_user_watches`. An FSEvents stream that fails to start is silent, because notify 8.2.0 ignores `FSEventStreamStart`'s result. An external change under such a root waits for an nvim trigger, and GNOME forwards no OS focus, so `FocusGained` never fires there.
 - An edit to `.git/info/exclude`, to the global excludes file, or to a `.gitignore` above the session root changes what the walk lists without forcing a rescan. The watcher's filter can also go on judging events by the rules it read before such an edit until the root stops being watched.
 - The open listener refuses every wait, so `wolf --wait` exits `2`.
-- Neither front-end binds an `OpenListener` or calls `set_tab_id`, and the command's `launcher` hook starts nothing. `wolf` therefore exits `2` saying Wolf is not running, and every terminal session starts with `WOLF_TAB_ID` removed.
+- wolf-gnome binds no `OpenListener` and calls no `set_tab_id`, and the command's `launcher` starts nothing on Linux. There `wolf` exits `2` saying Wolf is not running, and every terminal session starts with `WOLF_TAB_ID` removed.
 
 ## Deferred
 

@@ -18,10 +18,10 @@ Crate root. Declares every module and flattens the public surface into root re-e
 
 - `CoreConfig.cwd` is nvim's launch directory and the search/MRU root until nvim reports its own (`live_cwd`).
 - `SnapshotReadGuard` outlives `&self`, owning an `Arc` of the lock; hold it for one paint.
-- The blocking queries (`list_buffers` and siblings) return an empty or zero fallback on any RPC error or timeout, like an empty answer. Among them, `window_cursor(win)` reads any window's own view. The rest is fire-and-forget, on the ordered input channel: `split_pane` splits the window an earlier `focus_win` made current, and `set_window_cursor(win, view)` re-applies a view after a resize ([why](../../../notes/wolf-core-decisions.md#a-saved-view-is-applied-twice)).
+- The blocking queries (`list_buffers` and siblings) return an empty or zero fallback on any RPC error or timeout. Among them, `window_cursor(win)` reads any window's own view, and `open_split_left(path)` makes [§5.2](../../../specs/cli-and-file-open.md#52-choosing-the-pane) rule 4's split ([why](../../../notes/wolf-core-decisions.md#opening-files-from-outside-wolf)). The rest is fire-and-forget, on the ordered input channel: `split_pane` splits the window an earlier `focus_win` made current, and `set_window_cursor(win, view)` re-applies a view after a resize ([why](../../../notes/wolf-core-decisions.md#a-saved-view-is-applied-twice)).
 - `restart_nvim` returns `Ok(false)` when no respawn happened (`Alive` or in flight) and reopens nothing: capture `open_files_for_tabpage` first. After `Ok(true)` the snapshot, intents and history start over ([what carries](../../../notes/wolf-core-decisions.md#liveness-and-restart)).
 - `start` ignores `SIGPIPE` process-wide ([why](../../../notes/wolf-core-decisions.md#liveness-and-restart)).
-- `recent_dirs` omits non-directories, statting each on the calling thread, and never prunes, so a returning folder reappears. Open Folder records through `record_recent_dir`.
+- `recent_dirs` omits non-directories, statting each on the calling thread, and never prunes, so a returning folder reappears.
 
 **Decisions**
 
@@ -627,5 +627,5 @@ Purpose: the `wolf` command of [§1](../../../specs/cli-and-file-open.md#1-the-c
 **Decisions**
 
 - A refused invocation, `--wait DIR` included, exits `2` before connecting, so it never reaches the app. A path that is not UTF-8 exits `2` too, because the request is JSON.
-- `launcher()` is the hook that starts Wolf when nothing listens, and returns `None` on both platforms, so nothing listening exits `2` with "Wolf is not running". A launcher makes the command use `connect_or_launch` with `LAUNCH_TIMEOUT`.
+- `launcher()` is the hook that starts Wolf when nothing listens. On macOS it runs `open -b` on Wolf's bundle identifier, unless `WOLF_STATE_DIR` is set and non-empty ([why](../../../notes/wolf-core-decisions.md#opening-files-from-outside-wolf)); elsewhere it is `None`, so nothing listening exits `2` with "Wolf is not running". A launcher makes the command use `connect_or_launch` with `LAUNCH_TIMEOUT`.
 - It waits `REPLY_TIMEOUT` for `Taken`, then without a limit for a wait's end.

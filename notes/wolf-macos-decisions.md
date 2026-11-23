@@ -123,6 +123,28 @@ Every Open Folder, a focus included, records the folder through `record_recent_d
 
 The palette lists every recent directory. The invoking tab's own folder focuses that tab, which is harmless, and a Switch to Window row raises a window as it stands, while an Open Recent row for a folder open elsewhere focuses §4's tab, which can be a background tab.
 
+## Opening files from outside Wolf
+
+[The `wolf` command and opening files](../specs/cli-and-file-open.md) is the rule. Core resolves each request and chooses its pane; the coordinator routes it through [`FileOpenSeam`](../crates/wolf-macos/Sources/WolfKeyMap/README.md#fileopenseamswift) and acts on the choice.
+
+**The listener binds before the restore, and requests wait for its end.** `applicationDidFinishLaunching` binds the open channel before the launch restore, so a `wolf` that launched the app connects as soon as it can. `handleOpenRequests()` keeps each request in `openQueue` until the restore, or a fresh run's empty window, is in place, so a cold launch restores the session first ([§2](../specs/cli-and-file-open.md#when-wolf-is-not-running)). Quitting stops the listener first, so no `wolf` hands a request to an app that is quitting.
+
+**The socket and Finder share one queue.** `application(_:open:)` resolves each URL as a request with no `WOLF_TAB_ID` ([§7](../specs/cli-and-file-open.md#7-finder-and-gnome-files)) and appends it to `openQueue`, so both sources take one path in arrival order. AppKit can deliver the URLs of a launch from Finder before `applicationDidFinishLaunching`, and the queue holds them through the restore.
+
+**A file's project opens through Open Folder in full.** A file with no live named tab goes to `openFolder(_:from:)` on its project directory `P`, then into the tab that lands. When `P` is open, that is [Opening a folder](#opening-a-folder)'s focus by §4's rule, which is exactly [§5.1](../specs/cli-and-file-open.md#51-choosing-the-tab) step 3, and otherwise a fill or a new window. Like any Open Folder, it records `P` in the recent directories.
+
+**A folder tab counts as on its launch directory until Neovim reports one.** `persistedCwd` falls back to `TabCore.launchCwd` through `OpenFolderSeam.liveDirectory`. Without it, two files of one new project opened together, as Finder does for a multi-selection, would open the project twice, because the first file's new tab has not reported its cwd when the second routes.
+
+**A file sent to an empty tab opens there.** When `WOLF_TAB_ID` names an empty tab, whose drawer can run a shell, §5.1 rule 1 still holds. `WolfWindowController.openFile` hides the empty state so the file shows, and the tab stays empty, with no folder.
+
+**A file waits for the view to be ready.** `PaneContainerView.openFile` queues the path until a first pane is bound and no layout rebuild, drawer restore or terminal restore is pending, since each would replace the pane the file lands in. An open placed before the rebuild chooses over the startup window, so it misses a restored pane already on the file. Its `:edit` is queued input, which the blocking rebuild runs ahead of, so it lands in whichever pane the rebuild focuses. A crash-restart reset keeps the queue.
+
+**Rule 4's split binds its own pane.** `open_split_left` answers the new window and emits no `Split` intent ([why](wolf-core-decisions.md#opening-files-from-outside-wolf)), so the view binds it and `PaneTree.splitRootLeft` makes its leaf the root's first child. With the drawer open, Neovim's own layout then differs from the view's, as it does for every grid the view sizes, which is harmless because the view owns the geometry.
+
+**The command ships at `Contents/Resources/bin/wolf`, never `Contents/MacOS/wolf`.** A Mac's file system is case-insensitive by default, so `MacOS/wolf` collides with the app's executable `MacOS/Wolf`. `Resources/` already carries executables, `nvim/bin/nvim` and `rg/rg`, under the ad-hoc signature.
+
+**Install and Uninstall touch only Wolf's link.** [`CommandInstallSeam`](../crates/wolf-macos/Sources/WolfKeyMap/README.md#commandinstallseamswift) changes `/usr/local/bin/wolf` only when nothing is there or it is a symbolic link whose destination ends in `/Contents/Resources/bin/wolf`, some `Wolf.app`'s binary. Anything else is refused with an alert and left alone, because `/usr/local/bin` is Homebrew's on Intel Macs. A permission failure, or a missing `/usr/local/bin`, re-runs the step as an AppleScript `do shell script … with administrator privileges`, and Uninstall asks for the same rights, since `/usr/local/bin` is usually root-owned. Each step reads the link again afterwards, so an alert never reports a change that did not happen.
+
 ## New windows
 
 [§7](../specs/application-state.md#7-new-windows) is the rule. New Window, and an Open Folder new window with no stored frame that intersects a screen, take the active window's normal size and cascade from it, through `AppDelegate.newWindowPlacement(stored:)`. With no window open, a new window keeps the default size and AppKit's placement.
@@ -258,6 +280,8 @@ The Mono face is the one cascaded because it is drawn unscaled, and every Mono g
 - Only what a pane shows persists: the window state carries buffer paths only as panes, so a file the user switched away from in its pane is not reopened at launch.
 - The toolbar's search segment seeds the search toggles from Neovim each time it shows the search panel, replacing restored or user-set toggles, while the sidebar commands do not seed. Seeding once would save a never-seeded panel's all-off toggles as if chosen, which needs a design of its own.
 - A fill discards an unsaved buffer typed into the empty tab, as closing that tab would.
+- A file opened into an empty tab is not restored at launch: the tab has no folder, so it persists as an empty tab.
+- `wolf --wait` is refused, exiting `2` ([why](wolf-core-decisions.md#present-limitations)).
 - A capture runs only at a focus move, a tab switch, a window close and quit, so a crash loses the cursor and scroll movement since the last one, and a crash restart drops every capture with its panes.
 - Per-pane navigation history is not persisted across launches, and is not cursor-position history — Neovim's own jumplist (`<C-o>` / `<C-i>`) is untouched. Navigating back to a file deleted from disk opens an empty `[New]` buffer, exactly as `:e missing.md` would.
 

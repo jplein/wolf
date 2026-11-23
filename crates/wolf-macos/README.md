@@ -39,7 +39,7 @@ Resolve the release `.app` path from `bazel cquery --output=files //crates/wolf-
 ```sh
 bazel test //crates/wolf-macos:WolfKeyMapTests     # the pure WolfKeyMap seams
 bazel test //crates/wolf-macos:WolfMacOSTests      # what WolfMacOS views draw, offscreen
-bazel test //crates/wolf-macos:bundle_layout_test  # asserts the .app resource layout
+bazel test //crates/wolf-macos:bundle_layout_test  # asserts the .app layout and Info.plist types
 ./tools/wolf-macos-app-smoke.sh                    # on demand, in the GUI session
 ```
 
@@ -61,7 +61,7 @@ bazel run  //tools/lint:swift_format.fix -- <file>.swift # format only these
 
 ## Bundle contents
 
-The `.app` is self-contained, so a double-clicked bundle runs with no shell environment. Everything below is downloaded hermetically and sha256-pinned by a `//bazel` module extension, and asserted by `bundle_layout_test`.
+The `.app` is self-contained, so a double-clicked bundle runs with no shell environment. Every third-party tree below is downloaded hermetically and sha256-pinned by a `//bazel` module extension, and `bundle_layout_test` asserts the layout.
 
 | Bundled at `Contents/Resources/` | Source | Consumed by |
 | --- | --- | --- |
@@ -71,8 +71,15 @@ The `.app` is self-contained, so a double-clicked bundle runs with no shell envi
 | `rg/` | [`//bazel/rg`](../../bazel/rg/README.md) | `wolf-core`'s content search, through the `WOLF_RG_BIN` that `TabCore.swift` defaults to it |
 | `terminfo/` | [`//bazel/ghostty-vt`](../../bazel/ghostty-vt/README.md) | `wolf-core`'s terminal sessions, through the `WOLF_TERMINFO_DIR` that `TabCore.swift` defaults to it |
 | `fonts/` | [`//bazel/jetbrains-mono`](../../bazel/jetbrains-mono/README.md), [`//bazel/ia-writer-mono`](../../bazel/ia-writer-mono/README.md), [`//bazel/nerd-fonts-symbols`](../../bazel/nerd-fonts-symbols/README.md) | Swift: `FontRegistration.swift` CoreText-registers every face at launch |
+| `bin/wolf` | [`//crates/wolf-core:wolf`](../wolf-core/README.md), through `:wolf_cli_tree` | The user, once Install `wolf` Command links it ([below](#the-wolf-command-and-finder)) |
 | `Wolf.icon/` | `Wolf.icon.json` plus the masters in [`resources/icons/`](../../resources/icons/README.md) | macOS |
 
 The three font trees land in the one `fonts/` directory because each TreeArtifact uses an inner `fonts/` directory and their file sets are disjoint. iA Writer Mono S is the config-driven default; JetBrains Mono is registered but non-default; Menlo is the fallback when the configured family does not resolve. Symbols Nerd Font Mono is registered for Private Use Area icons and is never a configured family.
 
 The `WOLF_NVIM_BIN`, `WOLF_RG_BIN`, `WOLF_TERMINFO_DIR` and `WOLF_INIT_LUA` development overrides are honored when exported.
+
+## The `wolf` command and Finder
+
+The app listens on the [`wolf` command](../../specs/cli-and-file-open.md)'s channel from launch. Wolf > Install `wolf` Command links `/usr/local/bin/wolf` to the bundled `bin/wolf`, asking for administrator rights when the directory is not writable or missing, and Uninstall `wolf` Command removes that link only. Both leave alone anything at that path that is not Wolf's link ([why](../../notes/wolf-macos-decisions.md#opening-files-from-outside-wolf)).
+
+`Info.plist` declares Markdown and folders as document types at `Alternate` rank, so Finder's Open With lists Wolf without making it the default. The Markdown type is imported and names no icon, so Finder keeps its generic document icon.

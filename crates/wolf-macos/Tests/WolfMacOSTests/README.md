@@ -2,7 +2,7 @@
 
 XCTest coverage of what [`WolfMacOS`](../../Sources/WolfMacOS/README.md) views draw. A test builds a production view in a window that is never shown, renders it offscreen and samples its pixels.
 
-A few read something else. [`PreviewKeyEquivalentTests.swift`](#previewkeyequivalenttestsswift) instead calls AppKit's responder and menu dispatch directly, [`SidebarToolbarTests.swift`](#sidebartoolbartestsswift) sends a toolbar control its action and reads its selection, [`TerminalDrawerResizeTests.swift`](#terminaldrawerresizetestsswift) calls the pane container's mouse handlers with synthesized events, [`SymbolsFallbackTests.swift`](#symbolsfallbacktestsswift) draws single cells through `GlyphPainter` into a bitmap, with no view, and [`NewWindowPlacementTests.swift`](#newwindowplacementtestsswift) reads a window's frame and its cascade calls, with no core:
+A few read something else. [`PreviewKeyEquivalentTests.swift`](#previewkeyequivalenttestsswift) instead calls AppKit's responder and menu dispatch directly, [`SidebarToolbarTests.swift`](#sidebartoolbartestsswift) sends a toolbar control its action and reads its selection, [`TerminalDrawerResizeTests.swift`](#terminaldrawerresizetestsswift) calls the pane container's mouse handlers with synthesized events, [`SymbolsFallbackTests.swift`](#symbolsfallbacktestsswift) draws single cells through `GlyphPainter` into a bitmap, with no view, [`NewWindowPlacementTests.swift`](#newwindowplacementtestsswift) reads a window's frame and its cascade calls, with no core, and [`InstallCommandMenuTests.swift`](#installcommandmenutestsswift) reads the application menu's items:
 
 ```sh
 bazel test //crates/wolf-macos:WolfMacOSTests
@@ -21,6 +21,8 @@ The macOS worker has no GUI session and no screen, so XCUITest, which needs a UI
 **Do not drop the target's `CFProcessPath` env.** rules_swift places the test binary at `WolfMacOSTests.xctest/Contents/MacOS/`, where AppKit treats it as a bundled app and aborts, with no message, when it cannot check in with LaunchServices, which Seatbelt denies. A flat process path needs no check-in.
 
 The target stages Neovim, `//bazel/nvim:nvim_tree` and `//runtime/nvim:init.lua` wired as `WOLF_TEST_NVIM_DIR` and `WOLF_TEST_INIT_LUA`, the vendored Lighthouse, `//bazel/lighthouse:lighthouse_tree` as `WOLF_TEST_LIGHTHOUSE_DIR`, and the three font trees the app bundles: `//bazel/ia-writer-mono:ia_writer_mono_tree`, `//bazel/jetbrains-mono:jetbrains_mono_tree` and `//bazel/nerd-fonts-symbols:nerd_fonts_symbols_tree` as `WOLF_TEST_IA_WRITER_MONO_DIR`, `WOLF_TEST_JETBRAINS_MONO_DIR` and `WOLF_TEST_NERD_FONTS_SYMBOLS_DIR`. It carries `tags = ["no-sandbox"]`, because a test that starts a core spawns a child Neovim, which the macOS build sandbox does not allow. [`LiveCore.swift`](#livecoreswift) fences the state and config directories, and registers the fonts, before any core or config read.
+
+The target also stages the `wolf` command, `//crates/wolf-core:wolf`, as `WOLF_TEST_WOLF_BIN`, which [`OpenRequestFlowTests.swift`](#openrequestflowtestsswift) runs.
 
 Captures are taken in Aqua at the host's backing scale, and the accent resolves through the window's appearance, so a test compares against `controlAccentColor` resolved at run time, never a literal. Only the worker's path, at backing scale 1 with a blue accent, gates; a desktop Mac with Retina, dark mode or another accent is untested.
 
@@ -117,6 +119,12 @@ Purpose: The vendored Lighthouse's expected colours, for the tests that render u
 
 **Gotchas** — no wake callback is installed, so each test drives `onWake()` itself while it spins the main run loop, which runs the deferred automatic restart. A recording `TabCoreView` stands in for `WolfWindowController`, which cannot be built offscreen, so the real view's reset and terminal restore reach no test here.
 
+#### `TabIdTests.swift`
+
+**Covers** — `TabCore.wolfTabId` over real cores started through `TabCore.start`: two tabs get distinct, lowercase version-4 IDs, and a session each starts prints its own tab's `WOLF_TAB_ID`. After a SIGKILL and the automatic restart, the ID is unchanged and a new session prints it.
+
+**Gotchas** — the restart reopens the tab's files as queued input, which a blocking `open_terminal` would overtake, its session then replaced. So the restart test opens a file of its own, queued behind the restore, and starts its session only once that file shows. No wake callback is installed, so the restart test drives `onWake()` itself, as [`TabCoreTests.swift`](#tabcoretestsswift) does.
+
 #### `TerminalClosePaneTests.swift`
 
 **Covers** — Close Pane through `PaneContainerView.canClosePane` and `closeActivePane()`: a focused terminal split closing and leaving the tree with its session hung up; the focused drawer closing with its session kept, which the next toggle shows again; the gate refusing a lone terminal pane and the last editor pane beside the drawer; and the close acting on the view's active pane while Neovim's current window lags it.
@@ -155,6 +163,10 @@ Purpose: The vendored Lighthouse's expected colours, for the tests that render u
 - WebKit's web-process step is modelled, since no page loads: the page leaves the chord unhandled and its binding is `noop:`. If the sink receives `noop:`, the test resends the event to `NSApp.mainMenu`, as WebKit's resend through `NSApp.sendEvent` would.
 - Every item with a key equivalent is retargeted to a recorder that enables everything, so `validateMenuItem` and `AppDelegate`'s actions reach no test. A `control:` leg first fires each chord with the container first responder, so a later miss is the chain's.
 - Each delivery prints a `KEYROUTE` line: responder, chord, whether the window claimed it, whether the chain passed `noop:`, and the item fired. Whether the window claims it is printed, not asserted, because without a web process the value is WebKit's.
+
+#### `InstallCommandMenuTests.swift`
+
+**Covers** — `AppMenu.install(target:)` over a bare `AppDelegate`: the application menu carries Install and Uninstall `wolf` Command after About, side by side between separators, each targeting the delegate with its action. No item is fired; what the actions do is [`CommandInstallSeam`](../WolfKeyMapTests/README.md#commandinstallseamtestsswift)'s and a person check's.
 
 #### `OtherPaneFlowTests.swift`
 
@@ -222,6 +234,19 @@ A split, a close and the shell exiting each unzoom, and so does Toggle Terminal,
 **Covers** — Open Folder's read of a project state over a live core: a directory's tab, a vertical split of two files, submitted and flushed, then a submit without it, loads back through `WindowStateCodec.loadProject(wolf_ffi_app_state_project_state(_:))` with its window's frame, and its `rebuild` through `requestLayoutRebuild` shows both files in order. A directory with no project state loads `nil`.
 
 **Gotchas** — the second submit is what makes the read the stored project state rather than the window state. It writes `LiveCore`'s `WOLF_STATE_DIR`, as [`SessionRestoreTests.swift`](#sessionrestoretestsswift) does. The AppKit steps of Open Folder, its focus, fill and new window, are manual-smoke.
+
+#### `OpenRequestFlowTests.swift`
+
+**Covers** — [opening from outside Wolf](../../../../specs/cli-and-file-open.md) end to end. The real `wolf` sends each request over the real socket; the test drains it, routes it through `FileOpenSeam.route` with a live [`TerminalViewFixture`](#terminalviewfixtureswift) as tab 7 beside a frontmost decoy, and hands a file sent to tab 7 to `PaneContainerView.openFile(_:)`, as `WolfWindowController.openFile` does.
+
+A directory is Open Folder from tab 7, a file with no tab ID goes to its open project, and a stale ID falls back to resolution. In tab 7: a pane already on the file is focused; §5.2's four rules, a terminal always keeping its session; a zoomed tab unzooms; a missing file opens as a new buffer, writing nothing. Before the first bind, an open waits for a pending rebuild, and two opens both land.
+
+**Gotchas**
+
+- The test enters a canonical base under `TEST_TMPDIR` and names the state dir relative to it, since no absolute socket path under Bazel's `TMPDIR` fits 103 bytes.
+- The rule-3 preview is the left pane, because rule 3 takes only a leftmost one; `PreviewViewFixture` previews on the right, so the test turns that pane into the terminal and previews again on the left.
+- The rebuild case restores `vertical[f.md, b.md]` with pane 1 focused, so pane 0 already shows the file. Were rule 1 to pick the focused pane, the rebuild would run ahead of an early open's queued `:edit`, both landing there, and an early open would pass.
+- `AppDelegate`'s queue and the controller's raise are person checks.
 
 #### `NewWindowPlacementTests.swift`
 

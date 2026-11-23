@@ -45,6 +45,15 @@ Note that the nearby `swift_format_srcs` glob feeds lint and format only, not te
 
 - `bytePrefix` counts UTF-8 bytes, not characters. The multi-byte rows land on clean boundaries deliberately; a fixture that splits a scalar decodes lossily.
 
+#### `CommandInstallSeamTests.swift`
+
+**Covers** — `CommandInstallSeam` in a fresh directory under `TEST_TMPDIR` standing in for `/usr/local/bin`. Install creates the link, re-points a link to another `Wolf.app`'s binary, and reports this bundle's own link as already installed; it refuses a foreign link and a regular file and leaves both. Uninstall removes Wolf's link and nothing else, its destination included, and leaves a foreign link and a file. In a `0555` directory, install and uninstall each hand one script to the privileged runner, whose bundled path holds a space, `'` and `"`; a failed script reports `failed`; and a missing directory is made by the script before the link.
+
+**Gotchas**
+
+- The runner is a recorder that decodes the AppleScript string literal and runs the command under `/bin/sh` as the test's user, after unlocking the directory, so a real shell checks the quoting.
+- The locked-directory cases fail as a premise when run as root, who can write in a `0555` directory.
+
 #### `CommandSeamTests.swift`
 
 **Covers**
@@ -119,6 +128,12 @@ Note that the nearby `swift_format_srcs` glob feeds lint and format only, not te
 
 **Gotchas** — only `gridRect.w` and `gridRect.h` clamp to a non-negative floor; the `x` / `y` origins are fixed offsets and stay unclamped, and one case asserts that explicitly for a pane shorter than its own statusbar, so a "clamp everything" simplification fails here. New cases should reuse the file's `eps` / `approx` / `assertRectEqual` helpers.
 
+#### `FileOpenSeamTests.swift`
+
+**Covers** — `FileOpenSeam.route`: an activate carrying the frontmost window's active tab, with a window's most recent tab standing in when none is selected; a directory with a live `WOLF_TAB_ID` using that tab as current, and with a stale one the frontmost active tab; a file with a live ID going to that tab whatever its project, and with a stale one to its project. Both stale forms are covered, an unmapped ID and one mapped to a tab in no window. A file in an open subdirectory of a repository made under `TEST_TMPDIR` gets that subdirectory as its project. `choosePane` over a terminal-only layout, a focused editor pane, a zoomed pane and a zoomed drawer, a preview beside a terminal, and an editor already on the file.
+
+**Gotchas** — every live window list is passed out of stacking order and tab ids never equal a tab index, so only the stacking puts the answer right. Routes and placements are compared through `describe`, so no conformance is assumed. The lookups run through wolf-ffi's builder scratch, never the store, so the file needs no `StateDirFence`.
+
 #### `FontSizeSeamTests.swift`
 
 **Covers** — `FontSizeSeam`: the `clamped` / `increased` / `decreased` point-size arithmetic behind the View menu font commands, plus the bound and step constants, with each clamp boundary asserted from just inside and from exactly at the bound.
@@ -165,7 +180,7 @@ It also covers `terminalRestore(splits:drawerOpen:live:)`: live splits once, asc
 
 #### `OpenFolderSeamTests.swift`
 
-**Covers** — `OpenFolderSeam.step`: a tab on the directory focused by id, in a background tab of a back window and with no current tab; of two windows whose selected tab is on it, the frontmost by stacking; of two background tabs on it, the more recent. With none on it, an empty current tab fills, and a current tab with a directory, or no current tab, opens a new window. `canonicalDirectory` resolving a symlink, keeping `/private/tmp`, and returning a missing path as given. `fillFrame` applying an on-screen stored frame to a lone tab only.
+**Covers** — `OpenFolderSeam.step`: a tab on the directory focused by id, in a background tab of a back window and with no current tab; of two windows whose selected tab is on it, the frontmost by stacking; of two background tabs on it, the more recent. With none on it, an empty current tab fills, and a current tab with a directory, or no current tab, opens a new window. `canonicalDirectory` resolving a symlink, keeping `/private/tmp`, and returning a missing path as given. `fillFrame` applying an on-screen stored frame to a lone tab only. `liveDirectory` answering the launch directory for a folder tab with no reported cwd, the reported cwd once there is one, and `""` without a folder.
 
 **Gotchas** — the live windows are passed out of stacking order, and tab ids never equal a tab index, so only the stacking puts the answer right and an index answer names no tab. The lookup runs through wolf-ffi's builder scratch, never the store, so the file needs no `StateDirFence`.
 
@@ -218,11 +233,11 @@ It also covers `terminalRestore(splits:drawerOpen:live:)`: live splits once, asc
 
 **Covers**
 
-`PaneTree` topology and geometry: construction, split (a same-orientation split inserts a flat sibling after the target; a perpendicular one nests), remove with collapse and same-orientation merge, `neighbor` in all four directions, stable DFS ordering of `leaves()` and `paneRects()`, and the `Orientation(ffi:)` / `FocusDir(ffi:)` discriminant table shared with `wolf-ffi`. Weight bookkeeping and the divider surface belong in `PaneTreeWeightsTests.swift`, not here.
+`PaneTree` topology and geometry: construction, split (a same-orientation split inserts a flat sibling after the target; a perpendicular one nests), remove with collapse and same-orientation merge, `neighbor` in all four directions, stable DFS ordering of `leaves()` and `paneRects()`, the `Orientation(ffi:)` / `FocusDir(ffi:)` discriminant table shared with `wolf-ffi`, and `splitRootLeft`, which puts the new pane first: beside a lone leaf, around a horizontal root, and flat in a vertical root at equal weights. Weight bookkeeping and the divider surface belong in `PaneTreeWeightsTests.swift`, not here.
 
 **Gotchas**
 
-- The suite is a 1:1 port of the tests in `crates/wolf-gnome/src/layout.rs` — same pane ids, same 100x40 bounds, same helper names. Keep new cases in that vocabulary so the two suites stay diffable.
+- The suite, `splitRootLeft`'s macOS-only cases aside, is a 1:1 port of the tests in `crates/wolf-gnome/src/layout.rs` — same pane ids, same 100x40 bounds, same helper names. Keep new cases in that vocabulary so the two suites stay diffable.
 - A split re-equalizes the row, so unequal weights cannot be produced by splitting. A case needing an unequal precondition builds it with a `setPairFraction` drag, as `testRemoveProportionallyRenormalizesRow` does.
 
 #### `PaneTreeWeightsTests.swift`
@@ -243,7 +258,7 @@ It also pins the two policies that pull in opposite directions: a same-orientati
 
 #### `PaneZoomTests.swift`
 
-**Covers** — every `PaneZoom` rule, one decision per test: a toggle zooming the active pane, the drawer included, and unzooming when zoomed; a lone pane staying unzoomed; a split and a drawer open unzooming; only the zoomed pane's close unzooming; the frozen dividers and drawer edge; Toggle Terminal unzooming unless the drawer is zoomed, with the drawer closed, open and hidden, or zoomed; the other-pane target; a focus move to another pane unzooming, and one with no target keeping the zoom; a restore zooming only a restored pane with something to hide; and `visibleRects` over two pane areas, unzoomed, and with a zoomed id that is gone.
+**Covers** — every `PaneZoom` rule, one decision per test: a toggle zooming the active pane, the drawer included, and unzooming when zoomed; a lone pane staying unzoomed; a split, a drawer open and a file opened from outside Wolf unzooming; only the zoomed pane's close unzooming; the frozen dividers and drawer edge; Toggle Terminal unzooming unless the drawer is zoomed, with the drawer closed, open and hidden, or zoomed; the other-pane target; a focus move to another pane unzooming, and one with no target keeping the zoom; a restore zooming only a restored pane with something to hide; and `visibleRects` over two pane areas, unzoomed, and with a zoomed id that is gone.
 
 The focus cases compose `focusOrigin`, `DrawerFocusSeam.focusTarget` and `.focusMove` as the container does, over a plus-shaped tree above a drawer: a target in each direction, the down-into-drawer and drawer-up bridges, and moves with no target from an edge pane and from the drawer.
 

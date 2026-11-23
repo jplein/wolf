@@ -15,30 +15,32 @@ Each compiles into this module and has its own README with the entries for its f
 
 #### `AppDelegate.swift`
 
-Purpose: The application coordinator: launch, the live `WolfWindowController`s, their restore and persistence, tab focus, and the dynamic menus.
+Purpose: The application coordinator: launch, the live `WolfWindowController`s, their restore and persistence, tab focus and dynamic menus.
 
 **Public API**
 
 - `makeNewWindow(originatingCwd:)` — an empty-state tab in a window [sized and cascaded](../../../../notes/wolf-macos-decisions.md#new-windows) from the active one.
-- `makeNewTab(from:)` — a tab in `key`'s group, at `key`'s folder or home.
-- `refreshTabFocus()` — sends each [`TabFocusSeam`](../WolfKeyMap/README.md#tabfocusseamswift) edge to its tab's core, and focuses the main window's tab in the [stacking order](../WolfKeyMap/Persistence/README.md#stackingorderswift). A main-tab change first captures the tab left ([capture](../../../../notes/wolf-macos-decisions.md#the-per-tab-extras)).
-- `windowMinimizedChanged(_:minimized:)` — marks or unmarks the controller's whole tab group there.
-- `scheduleStateSnapshot()` / `snapshotNow()` — throttled versus immediate whole-tree commit to the window state ([write model](../../../../notes/wolf-macos-decisions.md#state-is-a-tree-and-the-front-end-owns-every-write)).
-- `closeCommit(for:)` — a closing view's commit, through [`SessionSeam.CloseBurst`](../WolfKeyMap/Persistence/README.md#sessionseamswift), after capturing its tab group.
+- `makeNewTab(from:)` — a tab in `key`'s group, on its folder or home.
+- `refreshTabFocus()` — sends each [`TabFocusSeam`](../WolfKeyMap/README.md#tabfocusseamswift) edge to its core and focuses the main window's tab in the `StackingOrder`, capturing the tab it leaves ([capture](../../../../notes/wolf-macos-decisions.md#the-per-tab-extras)).
+- `windowMinimizedChanged(_:minimized:)` — marks or unmarks the controller's tab group.
+- `scheduleStateSnapshot()` / `snapshotNow()` — throttled and immediate whole-tree commits ([write model](../../../../notes/wolf-macos-decisions.md#state-is-a-tree-and-the-front-end-owns-every-write)).
+- `closeCommit(for:)` — a closing view's commit through [`SessionSeam.CloseBurst`](../WolfKeyMap/Persistence/README.md#sessionseamswift), after capturing its group.
 - `otherWindows(excluding:)`, `raiseWindow(tabId:)` — Switch to Window's rows and raise.
-- `openFolder(_:from:)` — runs [Open Folder](../../../../notes/wolf-macos-decisions.md#opening-a-folder).
+- `openFolder(_:from:)` — [Open Folder](../../../../notes/wolf-macos-decisions.md#opening-a-folder), answering the landed view.
+- `handleOpenRequests()` — handles the queued socket and Finder requests once launched ([why](../../../../notes/wolf-macos-decisions.md#opening-files-from-outside-wolf)).
 - `appAppearance(for:)` — a mode's forced `NSApp.appearance`; `nil` under `auto`.
 
 **Decisions**
 
-- Launch order is fonts, config, metrics: measuring needs the config's font settings, and the bundled families must reach CoreText first.
-- `appearanceObservation` must stay stored: a deallocated `NSKeyValueObservation` invalidates itself, ending auto-mode appearance tracking.
+- Launch order is fonts, config, metrics: CoreText needs the bundled families, and measuring reads the config.
+- `appearanceObservation` must stay stored: a deallocated observation invalidates itself, ending auto-mode tracking.
 - Tab focus and the stacking order follow main ([why](../../../../notes/wolf-macos-decisions.md#one-neovim-per-tab)). Its loss rides `didResignActive`, where `NSApp.isActive` reads `false`.
-- The About panel's credits are Linux's attribution preamble, then the `wolf_ffi_*_license_notices()` verbatim, in `labelColor`: uncoloured, they render black in dark mode.
+- A directory request raises its landed view: a fill does not activate the app.
+- The About panel's credits are in `labelColor`: uncoloured, they render black in dark mode.
 
 **Gotchas**
 
-- Owning-controller lookups use `effectiveKeyWindow`, not `NSApp.keyWindow`: while a picker panel is key, no controller owns the key window, so it resolves to that panel's parent.
+- Owning-controller lookups use `effectiveKeyWindow`, which resolves a key picker panel to its parent: no controller owns the panel.
 
 #### `AppMenu.swift`
 
@@ -58,7 +60,7 @@ Purpose: Builds and installs `NSApp.mainMenu` (App, File, Edit, View, History, W
 **Gotchas**
 
 - About Wolf targets the coordinator's `showAboutPanel(_:)` rather than going nil-targeted to `NSApplication`, whose stock action shows no credits.
-- The front-end-only items (History, Project, Search) target the coordinator directly instead of carrying a tag, so `CommandKind.toggleSidebar`, `.sidebarShowProject` and `.searchInProject` never reach `CommandDispatcher` from a menu item. They still reach it from the nvim-drained path and from the command palette, whose static rows dispatch through it.
+- The front-end-only items (History, Project, Search, Install and Uninstall `wolf` Command) target the coordinator directly instead of carrying a tag, so `CommandKind.toggleSidebar`, `.sidebarShowProject` and `.searchInProject` never reach `CommandDispatcher` from a menu item. They still reach it from the nvim-drained path and from the command palette, whose static rows dispatch through it.
 
 #### `BufferPickerView.swift`
 
@@ -104,8 +106,6 @@ Purpose: The native command-line overlay (`ext_cmdline`). It paints one row — 
 **Public API**
 
 - `update(_:defaultFg:defaultBg:) -> Bool` — projects an `FfiCmdline` in and returns whether the command line is active, so the container can lay the overlay out or hide it.
-- `applyMetrics(_:)` — re-measure after a per-window font-size change.
-- `preferredHeight` — one text row.
 - `overlayFont(metrics:)` — a free function, not a member: an `NSFont` matching the grid's `CellMetrics`, shared with the completion-popup and toast overlays.
 
 **Decisions**
@@ -118,7 +118,7 @@ Purpose: Converts the bridge's packed `FfiColor` (`0x00RRGGBB` plus a `set` flag
 
 **Decisions**
 
-- Colors are built in an explicit sRGB color space. The convenience `CGColor(red:green:blue:alpha:)` initializer builds `kCGColorSpaceGenericRGB` instead, whose different gamma renders the same packed value visibly lighter (`#1b1b1b` displays as roughly `#242424`), so the grid background would not match the sRGB titlebar.
+- Colors are built in an explicit sRGB color space. The convenience `CGColor(red:green:blue:alpha:)` initializer builds `kCGColorSpaceGenericRGB` instead, whose different gamma renders the same packed value visibly lighter, so the grid background would not match the sRGB titlebar.
 
 #### `CommandDispatcher.swift`
 
@@ -159,8 +159,6 @@ Purpose: The `ext_popupmenu` completion overlay — an `NSView` that lists the c
 
 - `update(_:) -> Bool` — projects the popup state and returns whether it is visible; the container lays the overlay out only when it is.
 - `leadingTextInset` — the inset from the popup's left edge to where row text is drawn. `PaneContainerView` subtracts it from the cmdline byte anchor so the item text column lines up with the completed word in the command line rather than with the popup border.
-- `preferredWidth` / `preferredHeight` / `rowHeight` / `visibleRowCount` — sizing inputs for the container's layout pass.
-- `applyMetrics(_:)` — re-measure after a per-window font-size change.
 
 **Decisions**
 
@@ -177,12 +175,11 @@ Purpose: Pure cursor-rectangle geometry. `CursorShape` mirrors `wolf_core::Curso
 
 **Public API**
 
-- `rect(shape:cellX:cellY:cellW:cellH:cellPercentage:)` — `.block` fills the cell and ignores `cellPercentage`; `.vertical` is a left bar of full height; `.horizontal` is a bottom bar of full width. A `cellPercentage` of 0 means Neovim specified none, in which case `defaultCellFraction` applies; bar thickness is floored at `minBarPx` and capped at the cell.
+- `rect(shape:cellX:cellY:cellW:cellH:cellPercentage:)` — a `cellPercentage` of 0 means Neovim specified none, and `defaultCellFraction` applies.
 
 **Decisions**
 
 - Only geometry lives here. The reverse-video fill and glyph colors are resolved in Rust (`FfiFrame.cursor_fill()` / `cursor_glyph()`); do not recompute them in Swift.
-- The `minBarPx` floor exists so a small `cellPercentage` still renders a visible bar instead of a hairline.
 
 #### `EditorSplitViewController.swift`
 
@@ -263,7 +260,7 @@ Purpose: Process-global glue around the pure `WolfKeyMap.FrameStats` seam: the o
 
 **Decisions**
 
-- `enabled` is a `static let`, evaluated once via `swift_once`; `start()` touches it at launch so that one `ProcessInfo` read cannot land inside a measured frame. Disabled, each call site costs a token load and a branch.
+- `enabled` is a `static let`, evaluated once via `swift_once`; `start()` touches it at launch so that one `ProcessInfo` read cannot land inside a measured frame.
 - `emit()` checks `recordedAnything` before summarizing, because `summarize()` allocates and sorts — an idle app must not pay that once per interval to discover it has nothing to say.
 - Writes use the throwing `write(contentsOf:)` and discard the error. The non-throwing `write(_:)` raises an uncatchable `NSException` on `EPIPE`, which would kill the app as soon as its output were piped into a short-lived reader such as `head`.
 
@@ -319,7 +316,7 @@ Purpose: A small transient banner reading "Neovim was restarted", pinned top-cen
 
 - `hitTest(_:)` returns `nil` for every point. The banner has no interactive controls, so a click landing in its rect during the seconds it is visible belongs to the editor pane beneath it.
 - `flash()` carries a monotonic generation token so a newer flash supersedes an older pending hide, coalescing rapid restarts into one banner rather than a premature or double hide.
-- Layer chrome colors are re-resolved against the view's current `effectiveAppearance` on `viewDidChangeEffectiveAppearance()`, because layer `CGColor`s do not follow a runtime dark/light switch.
+- Layer chrome colors are re-resolved on each appearance change, as in [`EmptyStateView.swift`](#emptystateviewswift).
 
 **Gotchas**
 
@@ -338,8 +335,20 @@ Purpose: The crash/stall overlay — a full-bleed opaque cover over a broken edi
 **Decisions**
 
 - The restart button is present in every mode: a fallback while a `dead` core auto-restarts, and otherwise the primary action, which waits on the user.
-- The opaque layer background is re-resolved against the view's current `effectiveAppearance` on `viewDidChangeEffectiveAppearance()`, because layer `CGColor`s do not follow a runtime dark/light switch.
+- The opaque layer background is re-resolved on each appearance change, as in [`EmptyStateView.swift`](#emptystateviewswift).
 - Deliberately never first responder, so keystrokes still reach the editor grid.
+
+#### `OpenWakeBridge.swift`
+
+Purpose: Registers the open channel's wake at launch, so each request the listener takes reaches `AppDelegate.handleOpenRequests()` on the main thread.
+
+**Public API**
+
+- `install()` — call once per process, at launch.
+
+**Decisions**
+
+- The thunk resolves the app delegate, not a `WindowRegistry` token: the listener is process-wide, so its token is always `0`.
 
 #### `PaneContainerView.swift`
 
@@ -347,23 +356,24 @@ Purpose: The editor area: one flipped first-responder `NSView` painting every pa
 
 **Public API**
 
-- `resetAfterRestart()` — drops every pane and hosted view after a crash-restart, since a respawned Neovim reuses window handles.
-- `paneLayout`, `leafContents()`, `restoreFailed`, `paneViews`, `activePaneId`, `drawerPane`, `drawerShare` — `SessionSeam`'s inputs; leaves by window, terminals included. `captureViewports()` fills `paneViews`, as leaving a pane does ([capture](../../../../notes/wolf-macos-decisions.md#the-per-tab-extras)).
+- `resetAfterRestart()` — drops every pane and hosted view after a crash-restart, whose Neovim reuses window handles.
+- `paneLayout`, `leafContents()`, `restoreFailed`, `paneViews`, `activePaneId`, `drawerPane`, `drawerShare` — `SessionSeam`'s inputs, terminals included; `captureViewports()` fills `paneViews` ([capture](../../../../notes/wolf-macos-decisions.md#the-per-tab-extras)).
 - `capturedTerminals()`, `requestTerminalRestore(_:)` — a restart's capture and restore.
 - `activeTerminal`, `activeTerminalSelection` — `nil` off a terminal pane.
-- `activeWin` — the pane this view shows as active, `0` before one binds.
+- `activeWin` — the active pane's window, `0` before one binds.
 - `activePreviewSourcePath` — `nil` in edit mode.
 - `otherPaneTarget(prefer:)` — `0` splits, `nil` is a no-op.
 - `canClosePane`, `closeActivePane()`, `splitActivePane(_:)` — Close Pane's gate and action, and the splits' ([why](../../../../notes/wolf-macos-decisions.md#terminal-panes)).
 - `toggleZoom()`, `toggleTerminal()`, `isZoomed`, `zoomedPaneId`, `visiblePaneFrames` — Zoom Pane, Toggle Terminal unzooming first, the saved zoom, frames by window ([why](../../../../notes/wolf-macos-decisions.md#zoom-pane)).
-- `requestLayoutRebuild(_:tab:focused:drawer:)` — the launch restore, at the first pane's bind, with the tab's focus and drawer ([order](../../../../notes/wolf-macos-decisions.md#the-per-tab-extras)).
+- `requestLayoutRebuild(_:tab:focused:drawer:)` — the launch restore at the first pane's bind, with focus and drawer ([order](../../../../notes/wolf-macos-decisions.md#the-per-tab-extras)).
+- `openFile(_:)` — places a file by [§5.2](../../../../specs/cli-and-file-open.md#52-choosing-the-pane), waiting while a restore is pending ([why](../../../../notes/wolf-macos-decisions.md#opening-files-from-outside-wolf)).
 
 **Decisions**
 
 - One `geometry(_:fullWidth:)` call sets web-view frame, occlusion and statusbar span: no frame paints preview alignment without its web view.
 - Grids are skipped only under an opaque, loaded preview web view; the flag survives reloads: WebKit shows the outgoing document.
 - Scroll follows `scrollingDeltaY`'s natural-scroll-aware sign; `isDirectionInvertedFromDevice` double-corrects.
-- The terminal drawer is a pane outside `tree`, so leaves, neighbours and splits exclude it ([why](../../../../notes/wolf-macos-decisions.md#terminal-panes)).
+- The drawer is a pane outside `tree`, excluded from leaves, neighbours and splits ([why](../../../../notes/wolf-macos-decisions.md#terminal-panes)).
 - Only a terminal pane gets `NSTextInputClient` ([why](../../../../notes/wolf-macos-decisions.md#terminal-panes)), its input going to its session; `doCommand(by:)` [passes the rest on](../../../../notes/wolf-macos-decisions.md#key-equivalents-over-a-preview).
 
 #### `PickerChrome.swift`
@@ -400,14 +410,9 @@ Purpose: Drives one picker's `PickerPanel` — presents it as a child window of 
 
 **Decisions**
 
-- The panel is added with `addChildWindow(_:ordered:.above)` so the window server composites it in front of the parent's content and moves it with the parent.
 - `windowDidResignKey` is the single dismissal funnel for click-outside, Cmd-Tab, Mission Control, and another window activating. Adding separate paths for these duplicates it.
 - `dismissPanel()` deliberately omits `makeKeyAndOrderFront` and `NSApp.activate`: a user who Cmd-Tabbed away should not be yanked back. It only hands first responder to the pane container for when the parent is next key.
 - `refitPanel()` measures height by pinning a temporary width constraint and reading `fittingSize`, because AppKit has no equivalent of UIKit's `systemLayoutSizeFitting(_:withHorizontalFittingPriority:verticalFittingPriority:)`.
-
-**Gotchas**
-
-- The positioning arithmetic is pure and lives in `PickerPanelSeam`; this class only maps its top-left content rect into a bottom-left screen frame.
 
 #### `PickerRow.swift`
 
@@ -425,7 +430,6 @@ Purpose: A reusable `NSTableCellView` rendering a `PickerRow` as a leading icon 
 **Public API**
 
 - `init(iconLeadingInset:labelLeadingInset:)` — the caller derives both insets from the search-bar layout so the icon lines up with the magnifier and the text with the typed text.
-- `configure(with:)` — applies a row's icon and title.
 - `rowHeight(iconSize:titleFont:verticalPadding:)` — the fixed list row height: the taller of icon and title line, plus padding that leaves room for descenders.
 
 **Decisions**
@@ -445,18 +449,15 @@ Purpose: The floating file picker: a hand-built search bar over an `NSTableView`
 **Decisions**
 
 - The search bar is hand-built (rounded container, magnifier, borderless `NSTextField`) rather than an `NSSearchField`, whose cell caps its text rect at the standard control height and clips the large font used here.
-- The panel background and the search bar are `PickerChrome` backdrops; the border alone stays a `CGColor`, which ignores appearance changes, so `viewDidChangeEffectiveAppearance()` re-resolves it inside `performAsCurrentDrawingAppearance`.
 - Traversal wakes route through `PickerRefreshCoalescer`; keystrokes and `open()` refresh immediately. A large tree emits hundreds of batch wakes and each direct refresh re-ranks the whole list.
-- `refresh()` keeps the selection index when the query is unchanged, so a streaming batch does not yank the user's selection back to the top.
-- `close()` clears `isOpen` before dismissing, because `orderOut` re-enters through `windowDidResignKey → close()`.
+- `refresh()` keeps the selection index when the query is unchanged, so a streaming batch does not yank the user's selection back to the top. **Gotchas**
 
-**Gotchas**
-
+- Close re-entrancy and the chrome's appearance handling behave as in [`BufferPickerView.swift`](#bufferpickerviewswift).
 - While open, the panel is key and the search field holds first responder, so `PaneContainerView.keyDown` never fires and keys do not reach Neovim.
 
 #### `PickerWakeBridge.swift`
 
-Purpose: Installs the process-global file-search wake callback so wolf-core's traversal batches reach the picker of the tab whose core fired.
+Purpose: Installs the process-global file-search wake callback so wolf-core's traversal batches reach the picker of the tab whose core fired. Same thunk shape as [`TreeWakeBridge`](#treewakebridgeswift).
 
 **Public API**
 
@@ -464,12 +465,7 @@ Purpose: Installs the process-global file-search wake callback so wolf-core's tr
 
 **Decisions**
 
-- The callback closure captures nothing, so it converts to a `@convention(c)` function pointer. Routing is by the core's token looked up in `WindowRegistry`, not by a captured reference, which is what lets a single global callback serve every tab's core.
-- The wake requests a coalesced `scheduleRefresh()` rather than `refresh()`, so a large traversal's burst of batch wakes collapses to one re-rank per frame.
-
-**Gotchas**
-
-- Core fires this on a tokio worker thread; the thunk hops to the main thread before touching AppKit. A wake arriving after the picker has closed is a harmless no-op.
+- The wake requests a coalesced `scheduleRefresh()` rather than `refresh()`, so a large traversal's burst of batch wakes collapses to one re-rank per frame. A wake after the picker has closed is a no-op.
 
 #### `SearchView.swift`
 
@@ -491,7 +487,7 @@ Purpose: The sidebar content-search panel — a query field and three toggles ab
 
 #### `SearchWakeBridge.swift`
 
-Purpose: Installs the process-global content-search wake so each streamed ripgrep batch reaches the `SearchView` of the tab whose core fired.
+Purpose: Installs the process-global content-search wake so each streamed ripgrep batch reaches the `SearchView` of the tab whose core fired. Same thunk shape as [`TreeWakeBridge`](#treewakebridgeswift).
 
 **Public API**
 
@@ -499,12 +495,7 @@ Purpose: Installs the process-global content-search wake so each streamed ripgre
 
 **Decisions**
 
-- The callback closure captures nothing, so it converts to a `@convention(c)` function pointer; the core's token is resolved through `WindowRegistry` instead.
 - The wake asks for a coalesced refresh, which an idle panel no-ops on its own version gate.
-
-**Gotchas**
-
-- Fired from a tokio worker thread; the thunk hops to the main thread before touching AppKit.
 
 #### `SidebarContainerView.swift`
 
@@ -543,23 +534,28 @@ Purpose: Watches one window's geometry, sidebar collapse state, and tab-group me
 
 #### `TabCore.swift`
 
-Purpose: One tab's captive Neovim: its `WolfCoreHandle`, its wake token and its crash restart, serving the tab's view through the `TabCoreView` protocol. Main-thread-only.
+Purpose: One tab's captive Neovim, wake token and crash restart, serving its view through `TabCoreView`. Main-thread-only.
 
 **Public API**
 
 - `start(launchCwd:coordinator:)` — the sole caller of `wolf_ffi_start`, `nil` on failure, registering the core in `WindowRegistry`. Defaults `WOLF_NVIM_BIN`, `WOLF_RG_BIN` and `WOLF_TERMINFO_DIR` to the bundle's (`overwrite=0`), so an export wins.
-- `view` — the tab it serves, weak. `WolfWindowController` conforms to `TabCoreView`, and a live test stands a recording view in, since a controller cannot be built offscreen.
-- `onWake()`, `onPickerWake()`, `onTreeWake()`, `onSearchWake()` — the wake bridges' targets.
+- `wolfTabId` — the tab's [`WOLF_TAB_ID`](../../../../specs/cli-and-file-open.md#3-tab-ids), set in `start` before any session and kept by a crash restart.
+- `view` — the tab it serves, weak; a live test stands a recording `TabCoreView` in.
+- `onWake()` and its siblings — the wake bridges' targets.
 - `setUiFocus(gained:)` — a gain fires `FocusGained`, whose `:checktime` reloads a file another tab saved.
 - `restartNeovim()` — the "Restart Neovim" button's entry, resetting the attempt count.
-- `shutdown()` — the tab's teardown calls it; it also unregisters the token.
+- `shutdown()` — the teardown's, unregistering the token.
 
 **Decisions**
 
 - `onWake` acts on [`LivenessSeam`](../WolfKeyMap/README.md#livenessseamswift)'s decision, committing on `persist`, and drains commands last, since a drained close can shut the core down.
-- An automatic restart waits `autoRestartDelay` on `asyncAfter`: `handle.restart()` blocks the main thread, and only a pending timer guarantees the overlay paints first.
+- An automatic restart waits `autoRestartDelay`: `handle.restart()` blocks the main thread, so only a pending timer lets the overlay paint first.
 - Attempts count when scheduled and reset on `Alive`, a successful respawn or the button, so a press against a failing respawn can cost two respawns ([why](../../../../notes/crates/wolf-gnome/src/shell.rs.md#one-press-two-respawns)).
 - The respawn captures files, cwd and terminals before `handle.restart()` replaces the mirror, then runs [`restoreSteps(for:launchCwd:)`](../WolfKeyMap/README.md#livenessseamswift). On `false` it applies only a fresh decision's overlay: scheduling there would bypass the cap.
+
+**Gotchas**
+
+- The respawn reopens files as queued input, which a blocking call such as `open_terminal` overtakes; so terminals restore through `queue_bind_terminal`.
 
 #### `TabGroupObserver.swift`
 
@@ -652,23 +648,24 @@ Purpose: The app's entry point, called by [`WolfMain`](../WolfMain/README.md): `
 
 #### `WolfWindowController.swift`
 
-Purpose: One view: a tab's whole UI stack, owning its [`TabCore`](#tabcoreswift) as that core's `TabCoreView`. A tab is its own OS window; several may share a native tab group.
+Purpose: One tab's whole UI stack, owning its [`TabCore`](#tabcoreswift) as that core's `TabCoreView`. Each tab is its own OS window, maybe tab-grouped.
 
 **Public API**
 
-- `build()` — shows the stack at its `WindowPlacement`, becoming its core's view. `.cascaded` is [§7's](../../../../notes/wolf-macos-decisions.md#new-windows), by the extension `NSWindow.cascade(fromTopLeft:size:)`.
+- `build()` — shows the stack at its `WindowPlacement`, `.cascaded` being [§7's](../../../../notes/wolf-macos-decisions.md#new-windows) through `NSWindow.cascade(fromTopLeft:size:)`, and becomes its core's view.
 - `hasFolder` — false in the empty state, whose sidebar never scans `home`.
-- `persistedCwd` — the tab's live cwd, `""` in the empty state, unlike `currentCwd`.
+- `persistedCwd` — the live cwd, else the launch directory ([why](../../../../notes/wolf-macos-decisions.md#opening-files-from-outside-wolf)); `""` in the empty state.
+- `openFile(_:)` — places a file from outside Wolf and raises the tab ([empty tab](../../../../notes/wolf-macos-decisions.md#opening-files-from-outside-wolf)).
 - `persistedTab()` — this view's [`SessionSeam`](../WolfKeyMap/Persistence/README.md#sessionseamswift) contribution, seeded from the restored tab.
-- `normalFrame` — [`StatePersistence`](#statepersistenceswift)'s, `nil` before one is recorded.
-- `canCopy` — Copy's gate; a terminal pane's Copy and Paste use its session.
+- `normalFrame` — [`StatePersistence`](#statepersistenceswift)'s, `nil` until recorded.
+- `canCopy` — Copy's gate; a terminal pane copies and pastes through its session.
 - `drainAndDispatchCommands()` — apart from `onRenderWake()`, so the core drains in every state ([why](../WolfKeyMap/README.md#livenessseamswift)).
 - `captureViewports()` — a no-op once torn down.
 
 **Decisions**
 
-- `tabCore` is held strong, shut down in `teardown()`, and holds this view weakly.
-- `teardown()` commits its close before setting `isTornDown`, which the burst's read skips, or a last close commits nothing. It is idempotent and defers `removeController` one turn, holding `self` strongly: in `windowWillClose` the coordinator holds the last reference, so a synchronous drop frees the `NSWindow` mid-close.
-- `window.historyNav = self` is explicit: this is no `NSWindowController`, so no `target: nil` toolbar action reaches it.
-- The file tree starts last in `build()`, after the sidebar's collapse state seeds its refresh gate, so a collapsed sidebar defers outline work.
+- `tabCore` is held strong and holds this view weakly.
+- `teardown()` commits its close before setting `isTornDown`, which the burst's read skips, or a last close commits nothing. It is idempotent and defers `removeController` a turn, holding `self`: the coordinator holds the last reference in `windowWillClose`, and dropping it there frees the `NSWindow` mid-close.
+- `window.historyNav = self` is explicit: as no `NSWindowController`, it gets no `target: nil` toolbar action.
+- The file tree starts last in `build()`, after the collapse state seeds its refresh gate, so a collapsed sidebar defers outline work.
 - Both key edges sync terminal focus; tab focus follows `windowDidBecomeMain` ([why](../../../../notes/wolf-macos-decisions.md#one-neovim-per-tab)).
