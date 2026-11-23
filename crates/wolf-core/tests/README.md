@@ -12,7 +12,7 @@ bazel test //crates/wolf-core:file_search   # one target, on the macOS Bazel hos
 Cargo discovers every `tests/*.rs`. **Bazel does not.** A new file needs a matching `rust_test` target in [`../BUILD.bazel`](../BUILD.bazel) or it runs under `cargo test` alone, which makes it a silent macOS-only gap. Mirror an existing sibling of the same kind:
 
 - **Real-nvim** — lists `tests/common/mod.rs` in `srcs` and `//crates/wolf-test-support:wolf_test_support` in `deps`, stages `//bazel/nvim:nvim_tree` and `//runtime/nvim:init.lua` as `data`, wires the `WOLF_*` env vars via `$(rootpath)`, and carries `tags = ["no-sandbox"]`, because spawning a child process does not work under the macOS build sandbox. Results are still cached.
-- **Headless** — needs none of that: no `data`, no env, no tag.
+- **Headless** — needs none of that: no `data` and no env. It carries `no-sandbox` only when it spawns a process or binds a socket, which the macOS build sandbox refuses too.
 
 Each entry below says which kind it is. Under Cargo, a real-nvim test needs `WOLF_NVIM_BIN`, which the flake devShell exports.
 
@@ -225,6 +225,23 @@ Real Neovim (`//crates/wolf-core:empty_state_cwd`: staged nvim runfiles, `WOLF_N
 **Gotchas**
 
 - `WOLF_STATE_DIR` is set to a fresh tempdir before the core starts, because the always-on recent-dirs store reads `state_dir()` eagerly. That is a process-global mutation, so a new case must keep the ordering and the cleanup.
+
+#### `file_open_pane.rs`
+
+Headless (`//crates/wolf-core:file_open_pane`).
+
+**Covers** — `choose_pane`'s rules of [§5.2](../../../specs/cli-and-file-open.md#52-choosing-the-pane), table-tested over hand-built `TabContent` with every expected `PaneChoice` written out: an editor pane already showing the file focused, the active one among several, a preview never counting; the active editor pane taking the file, a drawer focus or an out-of-range index skipping that rule; the largest leftmost editor, ties to the topmost, and an editor off the left edge never leftmost; a leftmost preview converted; terminals alone, or no root, splitting left; every zoom undone first; malformed weights counting as equal shares.
+
+#### `file_open_project.rs`
+
+Headless, with real files and the real `git` binary (`//crates/wolf-core:file_open_project`: `no-sandbox`, for `git`).
+
+**Covers** — `OpenTarget::of`: directory versus file, symlinks followed, `..` resolved, a missing path kept as written below its nearest existing directory. `project_directory` over repositories `git` builds: a plain repository; the nearest open directory inside the root; an open directory above a plain root; a submodule resolving to its open superproject; a linked worktree never resolving to its main checkout, nor past it; a file outside any repository, existing or not; and a path reached through a symlink.
+
+**Gotchas**
+
+- The file asserts its premises before relying on them, panicking rather than skipping: no ancestor of its temp root holds a `.git`, and `git rev-parse --git-common-dir` gives a worktree its main checkout's `.git` and a submodule a common dir of its own, which is what `project_directory` must agree with.
+- `git` runs with no system or global configuration, set per `Command`, never process-wide.
 
 #### `file_search.rs`
 
@@ -440,6 +457,16 @@ Real Neovim (`WOLF_NVIM_BIN`, `no-sandbox` target with staged nvim runfiles).
 - The queued-typing case holds a `SnapshotReadGuard` across the restart, parking the pump so the keys straddle the swap; unstalled, the test cannot fail. Its deferred kill leaves no command line open.
 - The reset case kills nvim from outside, after the snapshot shows an open command line: the notifications queued at a death are dropped ([why](../../../notes/wolf-core-decisions.md#threading-and-locking)).
 - The intents case drains nothing between `:vsplit` and the restart, so the dead split's `Split` stays queued.
+
+#### `open_channel.rs`
+
+Headless, over real Unix-domain sockets (`//crates/wolf-core:open_channel`: `no-sandbox`, for the sockets).
+
+**Covers** — the 103-byte socket path limit on both sides, a refused path creating no directory; a request taken, queued and waking, and requests drained in arrival order; a wait, a malformed line, a relative path and an oversized line refused and not queued; a stalled client not holding up another, and a silent one let go; a stale socket replaced, a live listener never stolen, the socket's mode `0600`, and a drop removing only its own socket; `connect_or_launch` retrying after a launch, giving up at its timeout, never launching a running app, and returning a launch failure at once.
+
+**Gotchas**
+
+- Bazel's test `TMPDIR` inside the macOS gate is about 120 bytes, so no absolute socket path under it fits. The binary enters a kept, canonical temp dir once, before any test names a socket, and every state dir is relative to it. A new case takes its dir from `fresh_state` or `dir_of_len`, never from `TMPDIR`.
 
 #### `palette_rank.rs`
 
@@ -721,6 +748,12 @@ Long paths (`long_dir`): files past `SWAP_NAME_MAX` get no swap, the startup `Un
 
 The stale-`Untitled.md` case's cwd (`home_cwd`) sits under `$HOME` on purpose: Neovim stores the owner path as `~<user>/…`, so a `/tmp` fixture passes without the guard's normalization. It panics, never skips, when `HOME` is unset or so deep that `Untitled 2.md` passes `SWAP_NAME_MAX`.
 
+#### `tab_id.rs`
+
+Headless (`//crates/wolf-core:tab_id`).
+
+**Covers** — `TabId::random` giving distinct version-4 IDs with the variant bits set; `parse` round-tripping, taking either case and any version, and refusing each malformed form a lenient parser would take; serde using the display string and refusing a malformed one.
+
 #### `tabpage_cwd.rs`
 
 Spawns a real Neovim (staged runfiles, wired `WOLF_NVIM_BIN`, `no-sandbox`). One test.
@@ -807,6 +840,17 @@ Real Neovim and real `/bin/sh` sessions in ptys (`//crates/wolf-core:terminal_se
 - Compare paths after `canonicalize` or with `pwd -P`: macOS temp dirs sit behind the `/var` link.
 - A plain `:hi` fires no `ColorScheme`, so the colour case runs `:doautocmd ColorScheme` to make `wolf_theme` emit again.
 
+#### `terminal_tab_id.rs`
+
+Real Neovim and real `/bin/sh` sessions in ptys (`//crates/wolf-core:terminal_tab_id`, as `terminal_input`).
+
+**Covers** — `WolfCore::set_tab_id` reaching as `WOLF_TAB_ID` the shell of a pane session, of the drawer, and of a session started after a Neovim restart; a core with no ID removing an inherited value.
+
+**Gotchas**
+
+- The inherited decoy `WOLF_TAB_ID` is set once per binary, before any core starts, so no `setenv` races a neighbouring test's `getenv`. A shell that shows it proves core neither set nor removed the variable.
+- The drawer's shell echoes what it is typed, so the typed line spells the end marker in two quoted halves, and only the output holds it whole.
+
 #### `terminal_terminfo.rs`
 
 Real Neovim and real `/bin/sh` sessions in ptys (`//crates/wolf-core:terminal_terminfo`, as `terminal_input`, plus `//bazel/ghostty-vt:ghostty_terminfo` as `data`).
@@ -845,3 +889,14 @@ Spawns a real Neovim (staged runfiles, wired `WOLF_NVIM_BIN`, `no-sandbox`), sta
 **Covers** — `Snapshot.theme` fed by the `wolf_theme` notification: the startup emit-once reporting all-`None`, runtime `:hi WolfCursor` / `:hi WolfTitlebar` values, a linked group resolving to its target's effective attributes, and `:hi clear` falling back to all-`None`.
 
 **Gotchas** — A plain `:hi` does not fire `ColorScheme`, so every mutation must be followed by an explicit `:doautocmd ColorScheme`; this is required by design, not a test convenience.
+
+#### `wolf_command.rs`
+
+The real `wolf` binary, against a real `OpenListener` or a raw `UnixListener` that records what it is sent and scripts its replies (`//crates/wolf-core:wolf_command`: `:wolf` as `data`, named by `WOLF_TEST_WOLF_BIN`, `no-sandbox`, `wolf_test_support`).
+
+**Covers** — the invocation table and exit statuses of [§1](../../../specs/cli-and-file-open.md#1-the-command): `wolf` alone activating; a relative path resolved against the working directory; `WOLF_TAB_ID` sent when well-formed and dropped otherwise; each refused invocation exiting `2` before connecting; `--` ending the options; nothing listening and an over-long socket path exiting `2`; the wait outcomes mapped to `0`, `1` and `2`; a close or a refusal before `Taken` exiting `2`; and a wait against the real listener exiting `2`.
+
+**Gotchas**
+
+- The binary is Cargo's `CARGO_BIN_EXE_wolf`, else the Bazel runfile, resolved before the test binary enters its base dir, which it does for `open_channel.rs`' socket-path reason. Each `wolf` runs in its case's `work` dir with a relative `WOLF_STATE_DIR` and no inherited `WOLF_TAB_ID`.
+- Exit `2` alone cannot show a refusal came before connecting, since a `wolf` that gets no answer exits `2` too, so the raw listener asserts that nobody connected.

@@ -279,6 +279,19 @@ The output `.xcodeproj` is uncommitted and `.gitignore`d, and exists for LLDB an
 
 The `.app` is self-contained, so a double-clicked bundle runs with no shell environment: it carries its own pinned Neovim and `init.lua`, ripgrep, the vendored Neovim plugins and colorscheme, the compiled treesitter parsers, the `xterm-ghostty` terminfo entry its terminal panes use, both editor font families, the Symbols Nerd Font Mono icon face, and the app icon. [`crates/wolf-macos/README.md`](crates/wolf-macos/README.md) has the inventory, with a link to the `//bazel` package behind each entry, and `bundle_layout_test` asserts it. Exported `WOLF_NVIM_BIN`, `WOLF_RG_BIN`, `WOLF_TERMINFO_DIR` and `WOLF_INIT_LUA` values override their bundled counterparts, so a development override still wins.
 
+## The `wolf` command
+
+The [`wolf` command](specs/cli-and-file-open.md) is a binary of `wolf-core`, built on each platform as:
+
+```sh
+cargo build -p wolf-core --bin wolf    # Linux: target/debug/wolf
+bazel build //crates/wolf-core:wolf    # macOS: bazel-bin/crates/wolf-core/wolf
+```
+
+Run the built binary by its path from the directory a relative `PATH` should resolve against. `bazel run` would start it in its runfiles tree, where a relative `PATH` resolves instead.
+
+The command reaches Wolf through a socket in `state_dir()`, which `WOLF_STATE_DIR` overrides. Neither front-end listens on it, so the command exits `2` saying Wolf is not running ([limitations](notes/wolf-core-decisions.md#present-limitations)).
+
 ## Running the tests
 
 This section is the macOS Bazel path. On Linux the whole suite is `cargo test`, under [Building and testing](#building-and-testing) above. On either platform `./gates.sh` runs the suite together with every other gate; see [The verification gate](#the-verification-gate).

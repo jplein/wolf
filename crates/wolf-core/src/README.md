@@ -561,19 +561,71 @@ Purpose: The lazily-started loopback HTTP server behind `WolfCore::open_in_brows
 
 #### `terminal.rs`
 
-Purpose: the terminal sessions core owns, each a pty, a shell, a `wolf_vt::Terminal` and a published `TerminalFrame`, shown in Neovim placeholder windows, and the registry behind `WolfCore`'s session methods. The pty, the router and the session are in [`terminal/`](terminal/README.md); [Terminal panes](../../../specs/terminal-panes.md) owns the contract.
+Purpose: the terminal sessions core owns, each a pty, a shell, a `wolf_vt::Terminal` and a published `TerminalFrame`, shown in Neovim placeholder windows, and the registry behind `WolfCore`'s session methods. Its submodules are in [`terminal/`](terminal/README.md); [Terminal panes](../../../specs/terminal-panes.md) owns the contract.
 
 **Public API**
 
 - `open_terminal` and `bind_terminal` block through `block_on_rpc` and return once the binding is in `win_buffers`. The other session methods never wait on Neovim.
-- `TerminalId` counts from 1 per core and is never reused, so a stale id names no session rather than another one.
+- `TerminalId` counts from 1 per core and is never reused, so a stale id names no session.
 - `terminfo_dir_from_env()` reads `WOLF_TERMINFO_DIR` for `CoreConfig.terminfo_dir`, which reaches a shell verbatim as `TERMINFO` and must be absolute ([why](../../../notes/wolf-core-decisions.md#terminal-sessions)).
 - `live_terminals` lists running sessions only, while an exited session's frame stays readable until its pane closes ([why](../../../notes/wolf-core-decisions.md#terminal-sessions)).
 - Mouse and scroll positions are pixels from the content area's top-left, turned into cells at the last `resize_terminal`'s cell size.
 - `WolfCore::pane_status` of a terminal pane reports the session's shell name, or `NO_NAME` once the session is gone, with empty paths.
 - The drawer, restart and restore methods, `toggle_terminal`, `drawer_terminal`, `queue_bind_terminal` and `terminal_cwd`, are specified in [Terminal panes](../../../specs/terminal-panes.md#the-drawer).
+- `set_tab_id` reaches only the sessions started after it ([§3](../../../specs/cli-and-file-open.md#3-tab-ids)).
 
 **Decisions**
 
 - The registry reaches Neovim through `nvim.rs` free functions over the pump's current handle, never a captured one: a restart replaces the handle while the sessions live on.
-- A router chord or a split command acts on the window showing the session: the active window when it does, else one on the current tabpage, else any, and with none it is dropped.
+- A router chord or a split command acts on the window showing the session: the active one when it does, else one on the current tabpage, else any; with none it is dropped.
+
+### Opening files from outside Wolf
+
+#### `tab_id.rs`
+
+Purpose: `TabId`, the tab ID of [§3](../../../specs/cli-and-file-open.md#3-tab-ids), and `WOLF_TAB_ID_ENV`, the variable that carries it to a tab's terminal sessions and that the `wolf` command reads.
+
+**Public API**
+
+- `TabId::random()` panics when the operating system's entropy source fails. `parse` accepts exactly the `8-4-4-4-12` form, hex in either case and any version. `Display` and serde both use the lowercase form.
+
+**Decisions**
+
+- The random bytes come from `libc::getentropy`, not the `uuid` crate, which would add a dependency for 16 bytes and two masks.
+
+#### `file_open.rs`
+
+Purpose: the rules that place a path opened from outside Wolf. `OpenTarget::of` decides directory versus file ([§1](../../../specs/cli-and-file-open.md#1-the-command)), `project_directory` finds the project directory of [§5.1](../../../specs/cli-and-file-open.md#51-choosing-the-tab) step 2, and `choose_pane` applies [§5.2](../../../specs/cli-and-file-open.md#52-choosing-the-pane) to a captured `app_state::TabContent`. Step 3 is [`project_tab`](#app_staters)'s rule, which the front-end applies to the directory `project_directory` returns.
+
+**Public API**
+
+- `OpenTarget::of` expects an absolute path. A `File` keeps the path below its nearest existing directory as written, its last component never resolved, and canonicalizes the rest. Neovim names a buffer by its resolved directory (`/tmp` is `/private/tmp` on macOS), so this is the form pane paths hold, and the form `project_directory` and `choose_pane` expect, since they compare paths lexically.
+- `project_directory`'s `open_dirs` are canonical tab directories; an empty entry is ignored. It runs no process.
+- `choose_pane`'s indices count the root's panes depth-first, as `PaneRef::Pane` does. Weights that do not fit their children count as equal shares.
+
+**Decisions**
+
+- Rule 2 of §5.1 considers only the nearest open directory above the repository root `R`. When `R` is a linked worktree of that directory's repository, `P` is `R`, and no farther open directory is tried.
+- A linked worktree is recognised by reading `.git`'s `gitdir:` line and the `commondir` file it leads to, not by running `git` ([why](../../../notes/wolf-core-decisions.md#opening-files-from-outside-wolf)).
+
+#### `open_channel.rs`
+
+Purpose: the channel of [§2](../../../specs/cli-and-file-open.md#2-the-channel), a Unix-domain socket named `OPEN_SOCKET_NAME` in the state directory. `OpenClient` is the command's side and `OpenListener` the app's. Its decisions are in [wolf-core-decisions.md](../../../notes/wolf-core-decisions.md#opening-files-from-outside-wolf).
+
+**Public API**
+
+- `open_socket_path` refuses a path over `OPEN_SOCKET_PATH_MAX` bytes, measured as given. `connect`, `connect_or_launch` and `bind` check it before touching the filesystem.
+- `connect_or_launch` calls `launch` once, and only when nothing listens, then retries until `timeout`. A failing `launch` is returned at once.
+- `OpenListener::bind` returns `InUse` while a live listener holds the socket. A request it takes is queued before `wake` fires and before the client reads `Taken`. `drain_requests` returns them in arrival order, as `drain_commands` does.
+- The listener refuses, and never queues, a malformed request, a relative path, a line over `OPEN_REQUEST_MAX`, one not sent within `OPEN_REQUEST_TIMEOUT`, and every wait.
+- `OpenRequest.path` is unresolved; `target()` decides it on the app's side.
+
+#### `bin/wolf.rs`
+
+Purpose: the `wolf` command of [§1](../../../specs/cli-and-file-open.md#1-the-command), which sends one `OpenRequest` and exits with the status its replies give. It makes `PATH` absolute against the working directory without resolving it, and sends `WOLF_TAB_ID` only when `TabId::parse` accepts it. Stdout stays empty. Why it lives in this crate is in [wolf-core-decisions.md](../../../notes/wolf-core-decisions.md#opening-files-from-outside-wolf).
+
+**Decisions**
+
+- A refused invocation, `--wait DIR` included, exits `2` before connecting, so it never reaches the app. A path that is not UTF-8 exits `2` too, because the request is JSON.
+- `launcher()` is the hook that starts Wolf when nothing listens, and returns `None` on both platforms, so nothing listening exits `2` with "Wolf is not running". A launcher makes the command use `connect_or_launch` with `LAUNCH_TIMEOUT`.
+- It waits `REPLY_TIMEOUT` for `Taken`, then without a limit for a wait's end.

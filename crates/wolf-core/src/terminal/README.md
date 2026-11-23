@@ -6,14 +6,14 @@ The submodules of [`terminal.rs`](../README.md#terminalrs), which holds the publ
 
 #### `pty.rs`
 
-Purpose: every `libc` call a session makes. It opens the pty pair, spawns the program as the leader of a new session whose controlling terminal is the pty, with its terminal type, sets the window size, signals and reaps the process group, resolves the default command, and reads the shell's working directory.
+Purpose: every `libc` call a session makes. It opens the pty pair, spawns the program as the leader of a new session whose controlling terminal is the pty, sets the window size, signals and reaps the process group, resolves the default command, and reads the shell's working directory.
 
 **Decisions**
 
 - Both pty ends are close-on-exec. A copy inherited by another child of the app, such as Neovim or a later session's shell, would keep the pty open after a hang-up closes core's copies.
 - The `pre_exec` hook calls only `setsid` and `ioctl(TIOCSCTTY)`, because it runs in the forked child, where only async-signal-safe calls are sound.
 - The shell leads its own session, so its process group is its pid, and a signal to `-pid` reaches every job it started.
-- [Terminal sessions](../../../../specs/terminal-panes.md#terminal-sessions) owns which type a shell gets. The entry counts in either layout: `x/xterm-ghostty`, which nixpkgs' `tic` writes, or `78/xterm-ghostty`, which macOS's `tic` writes and its libncurses reads.
+- [Terminal sessions](../../../../specs/terminal-panes.md#terminal-sessions) owns a shell's terminal type and `WOLF_TAB_ID`. The entry counts in either layout: `x/xterm-ghostty`, which nixpkgs' `tic` writes, or `78/xterm-ghostty`, which macOS's `tic` writes and its libncurses reads.
 - With the entry, `TERMINFO` replaces one the app inherited, such as a Ghostty shell's, so the shell finds Wolf's entry.
 - `decode_pwd` takes a `file://` URI, dropping the host and percent-decoding the path, or a bare absolute path. Anything else names no directory.
 

@@ -29,6 +29,8 @@ Every dependency here was chosen partly because it is GUI-free:
 | Math preview | `pulldown-latex` | Adds only `bumpalo` |
 | Terminal emulation | `wolf-vt` | The workspace binding over libghostty-vt, linked statically; [Building libghostty-vt](../specs/terminal-panes.md#building-libghostty-vt) owns the pin |
 | Ptys and processes | `libc` | `openpty`, `setsid`, `TIOCSCTTY`, `TIOCSWINSZ`, signals, `getpwuid_r` and `proc_pidinfo`, hand-rolled in place of a pty crate |
+| Random tab IDs | `libc` | `getentropy`, in place of the `uuid` crate |
+| The `wolf` command's channel | none | std Unix-domain sockets and `serde_json` |
 | Content search | none | Shells out to a pinned `rg` subprocess located via `WOLF_RG_BIN` |
 | Browser preview | none | Hand-rolled HTTP/1.1 on the existing tokio runtime, `net` feature |
 
@@ -182,6 +184,22 @@ The rebuild document carries `zoomed` on every leaf, and `wolf_rebuild_layout` e
 
 A state table at a newer version is frozen per `db::Table` handle. Its flag is set when `ensure_table` finds it, outlives every reopen and heal of that handle, and is checked by the store before each read and write. That makes the spec's "for the rest of the process" hold because each front-end opens one store per process, macOS through wolf-ffi's process-wide `SHARED_APP_STATE`. A second store would find the table newer again and leave it alone, but its unchanged-tree baseline is its own, so it would rewrite a tree the first had written.
 
+## Opening files from outside Wolf
+
+[The `wolf` command and opening files](../specs/cli-and-file-open.md) owns the contract. These are the decisions behind core's half of it.
+
+- The `wolf` command is `src/bin/wolf.rs` in this crate, not a crate of its own. The client and the listener share one protocol module, so the two sides cannot drift, and the command links no GUI toolkit because core has none.
+- One `OpenListener` serves an app process, on std threads rather than a core's tokio runtime, because every core belongs to a tab that can close.
+- Each connection is served on a thread of its own, with the read timeout `OPEN_REQUEST_TIMEOUT` and the line cap `OPEN_REQUEST_MAX`, so a client that stalls or floods holds up no other and holds no thread for long.
+- A request is queued and the wake fired before `Taken` is sent, so a command that exited `0` has its request in the queue.
+- The socket is mode `0600`, because any process that can connect can make Wolf open a path.
+- An existing socket file is probed before it is unlinked. A refused connect means a stale socket a crashed app left; a live listener's is `InUse` and left alone, and a file that is not a socket is never removed.
+- `Drop` unlinks the socket only when its `(dev, ino)` is still the one it bound, read through the absolute path recorded at bind, so a listener never removes a successor's socket, whatever the working directory has become.
+- The accept loop polls the listener beside one end of a socket pair that `Drop` closes, so a drop stops it at once rather than at the next connection.
+- The 103-byte limit measures the socket path as given, so a relative state directory passes. The tests rely on it, because Bazel's test `TMPDIR` on macOS leaves no room for an absolute socket path.
+- The wire is one JSON object per line, and unknown keys are ignored, so either side can gain a field. A path that is not UTF-8 has no JSON string, so the command refuses it.
+- A linked worktree is recognised by reading `.git` and `commondir`, not by running `git`: a GUI app's `PATH` is minimal, and on macOS `/usr/bin/git` is an Xcode shim that can prompt.
+
 ## Present limitations
 
 - A browser-preview server spawned before a `restart_nvim` keeps the RPC handle it captured at spawn time, so its live render goes blank after a restart until the command is run again.
@@ -190,6 +208,8 @@ A state table at a newer version is frozen per `db::Table` handle. Its flag is s
 - The Tier-1 open-file mirror reports the instance-global buflisted file set per tabpage rather than a genuinely per-tabpage set, which over-reopens on restore. The active path is genuinely per-tabpage.
 - The file-search watcher does not cover a root it cannot watch, a session started with `WOLF_FS_WATCH=0` whose root no watched session shares, or any root when the watcher cannot start. A recursive inotify watch adds one watch per directory, ignored and skipped trees included, so a root as large as `$HOME` can exhaust `max_user_watches`. An FSEvents stream that fails to start is silent, because notify 8.2.0 ignores `FSEventStreamStart`'s result. An external change under such a root waits for an nvim trigger, and GNOME forwards no OS focus, so `FocusGained` never fires there.
 - An edit to `.git/info/exclude`, to the global excludes file, or to a `.gitignore` above the session root changes what the walk lists without forcing a rescan. The watcher's filter can also go on judging events by the rules it read before such an edit until the root stops being watched.
+- The open listener refuses every wait, so `wolf --wait` exits `2`.
+- Neither front-end binds an `OpenListener` or calls `set_tab_id`, and the command's `launcher` hook starts nothing. `wolf` therefore exits `2` saying Wolf is not running, and every terminal session starts with `WOLF_TAB_ID` removed.
 
 ## Deferred
 
