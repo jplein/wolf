@@ -7,6 +7,9 @@
 //! - An edit pane whose file is missing restores as an empty pane in the same position, and a
 //!   zoom on it is dropped, so the rebuild does not end on it.
 //! - A saved cursor and top line restore, and a cursor beyond the end of its file is clamped.
+//! - A saved view applies again through `WolfCore::set_window_cursor` once a front-end has
+//!   resized the window's grid, to the window named and not the current one, with the same
+//!   clamp on its line.
 //!
 //! They also pin `WolfCore::window_cursor`, the read §4's cursor capture makes: it answers each
 //! window's own cursor and top line, not the current window's, and `None` for no window.
@@ -19,6 +22,10 @@
 //! - A far cursor with no saved top line scrolls to a different top line than the one
 //!   [`a_saved_cursor_and_top_line_restore`] saves, so the top line it reads back is the saved
 //!   one and not Neovim's own scroll. That test measures this first, on a fresh core.
+//! - Resizing a window's grid to fewer rows re-scrolls it, under Neovim's default
+//!   `splitkeep=cursor`, off the top line the rebuild applied, so a view applied again is told
+//!   apart from one left alone. [`a_saved_view_applies_again_after_a_grid_resize`] measures this
+//!   before it applies the view again.
 //!
 //! Viewport lines are read from `win_viewport`, whose `topline` and `curline` are 0-based.
 
@@ -42,6 +49,14 @@ const FAR_LINE: u32 = 120;
 /// The saved top line of [`a_saved_cursor_and_top_line_restore`], 1-based: [`FAR_LINE`] sits on
 /// the view's second row, where Neovim's own scroll to a far line would centre it.
 const SAVED_TOP_LINE: u32 = FAR_LINE - 1;
+
+/// The saved top line of [`a_saved_view_applies_again_after_a_grid_resize`], 1-based:
+/// [`FAR_LINE`] sits on the view's eleventh row, which a grid of [`RESIZED_ROWS`] still shows.
+const RESIZE_TOP_LINE: u32 = FAR_LINE - 10;
+
+/// The rows [`a_saved_view_applies_again_after_a_grid_resize`] resizes leaf a's grid to: fewer
+/// than a vertical split of [`common::DEFAULT_ROWS`] gives it, and enough for its saved view.
+const RESIZED_ROWS: u16 = 12;
 
 /// A file of `lines` numbered lines in `dir`, named `name`, and its path.
 fn numbered_file(dir: &Path, name: &str, lines: usize) -> String {
@@ -339,6 +354,127 @@ fn window_cursor_reads_each_windows_own_cursor_and_top_line() {
         None,
         "window 0 must read as None: Neovim takes 0 for the current window, so Some means the \
          read went to Neovim and answered leaf b"
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+#[test]
+fn a_saved_view_applies_again_after_a_grid_resize() {
+    let dir = tempfile::tempdir().expect("failed to create the fixture tempdir");
+    let long = numbered_file(dir.path(), "long.md", 200);
+    let short = numbered_file(dir.path(), "short.md", 3);
+    let view = WindowCursor {
+        cursor: Cursor {
+            line: FAR_LINE,
+            col: 3,
+        },
+        top_line: RESIZE_TOP_LINE,
+    };
+    let saved = tab_of(Node::Layout(Layout {
+        orientation: PaneOrientation::Vertical,
+        weights: vec![0.5, 0.5],
+        children: vec![
+            edit(&long, Some(view.cursor), Some(view.top_line)),
+            edit(&short, None, None),
+        ],
+    }));
+    // The viewport's (topline, curline) of the saved view, 0-based.
+    let saved_viewport = (u64::from(RESIZE_TOP_LINE) - 1, u64::from(FAR_LINE) - 1);
+
+    let (core, waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
+    let (_, handles, active) = restore(&core, &saved);
+    assert_eq!(
+        handles.len(),
+        2,
+        "a two-pane tab must rebuild into two windows; got {handles:?}"
+    );
+    let (a, b) = (handles[0], handles[1]);
+    assert_eq!(
+        active,
+        Some(b),
+        "premise: the rebuild must end on leaf b, so that a view applied to the current window \
+         instead of leaf a leaves leaf a where Neovim scrolled it; handles {handles:?}"
+    );
+    poll_viewport(
+        &core,
+        &waiter,
+        a,
+        &format!(
+            "premise: the rebuild to apply leaf a's saved view (topline, curline) = \
+             {saved_viewport:?}"
+        ),
+        |viewport| *viewport == saved_viewport,
+    );
+    poll_win_filename(&core, &waiter, b, "short.md", "leaf b's file");
+
+    // Step 2: a front-end sizes leaf a's grid after the rebuild, and Neovim re-scrolls it.
+    let grid = common::grid_of_win(&core, a).expect("premise: leaf a has a grid in the snapshot");
+    let cols = core
+        .read_snapshot()
+        .grid(grid)
+        .map(|g| g.cols)
+        .expect("premise: leaf a's grid is in the snapshot");
+    core.resize_grid(
+        grid,
+        u16::try_from(cols).expect("a grid's columns fit a u16"),
+        RESIZED_ROWS,
+    );
+    poll_until(
+        &waiter,
+        &format!("leaf a's grid to reach {RESIZED_ROWS} rows after resize_grid"),
+        || core.read_snapshot().grid(grid).map(|g| g.rows),
+        |rows: &Option<usize>| *rows == Some(usize::from(RESIZED_ROWS)),
+    );
+    let rescrolled = poll_viewport(
+        &core,
+        &waiter,
+        a,
+        &format!(
+            "premise: Neovim to re-scroll leaf a off topline {} once its grid is {RESIZED_ROWS} \
+             rows. A topline that stays means a resize leaves the saved view in place, and this \
+             test cannot tell a view applied again from one left alone",
+            saved_viewport.0
+        ),
+        |&(topline, _)| topline != saved_viewport.0,
+    );
+
+    // Step 3: the saved view applies again to leaf a, which is not the current window.
+    core.set_window_cursor(a, view);
+    poll_viewport(
+        &core,
+        &waiter,
+        a,
+        &format!(
+            "set_window_cursor to bring leaf a back to (topline, curline) = {saved_viewport:?}. \
+             {rescrolled:?} is where the resize left it: the call sent nothing, or it applied the \
+             view to the current window, leaf b. The right curline with that topline means the \
+             top line is not restored"
+        ),
+        |viewport| *viewport == saved_viewport,
+    );
+    assert_eq!(
+        viewport_of(&core, b),
+        Some((0, 0)),
+        "leaf b, the current window, must keep its cursor on line 1 when leaf a's view is \
+         applied; another line means set_window_cursor also moved the current window"
+    );
+
+    // Step 4: a line beyond the end of the file is clamped, as the rebuild clamps it.
+    core.set_window_cursor(
+        b,
+        WindowCursor {
+            cursor: Cursor { line: 100, col: 0 },
+            top_line: 1,
+        },
+    );
+    poll_viewport(
+        &core,
+        &waiter,
+        b,
+        "set_window_cursor to put leaf b's cursor saved on line 100 of a 3-line file on its last \
+         line (curline 2); curline 0 means the line was passed unclamped and Neovim rejected it",
+        |&(_, curline)| curline == 2,
     );
 
     core.shutdown().expect("shutdown should be Ok");

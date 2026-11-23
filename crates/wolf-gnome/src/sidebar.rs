@@ -9,7 +9,8 @@
 //! relayed into each page's refresh gate, so the page nobody can see rebuilds nothing
 //! and catches up once when it returns. The same relay sets the toggle group.
 //!
-//! Switching to Search focuses the panel's field. The page is not persisted.
+//! Switching to Search focuses the panel's field. The selected tab records the page with the
+//! panel's fields, and selecting a tab shows the page it recorded.
 
 use std::cell::Cell;
 use std::rc::Rc;

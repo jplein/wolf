@@ -623,13 +623,13 @@ exit 0
 /// The GTK terminal drawer opens on `<Control>grave` on a core terminal session,
 /// paints its shell, keeps the focus bridge working in both directions, hides and
 /// re-opens on the same chord, keeps its binding through a pane-area rebuild, is
-/// never split by a split chord — and never reaches the saved window state.
+/// never split by a split chord — and never becomes a leaf of a saved tab's root.
 ///
 /// ## What it is the only evidence for
 ///
 /// No other automated test falsifies the intent arm, the pane binding, the structural
 /// append, both halves of the focus bridge in a running window, the drawer's only
-/// UNBIND path or the drawer's exclusion from the saved window state.
+/// UNBIND path or the drawer's exclusion from a saved tab's root.
 ///
 /// ## The legs, and what each one's falsifier is
 ///

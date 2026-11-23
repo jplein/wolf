@@ -17,7 +17,9 @@
 //! - **The selected tab's saved layout is not pending.** It is consumed on a later
 //!   wake with a blocking RPC that would interleave with typed keys. A background
 //!   tab's rebuild runs on its own Neovim, so it can delay a typed key but never
-//!   lands between two of them in the Neovim they reach.
+//!   lands between two of them in the Neovim they reach. Nor is a shown pane's
+//!   restored view, which is queued once the grids settle and must land ahead of
+//!   any typed key.
 //! - **Every launch window has painted a frame.** The ordinal of its first
 //!   frame-clock `after-paint` is its map order: all windows share one Wayland
 //!   connection, so the compositor processes their first commits in that order.
@@ -54,7 +56,9 @@ pub struct PaneReadiness {
     pub bound: usize,
     /// Bound panes whose requested grid size Neovim has applied ([`grid_settled`]).
     pub sized: usize,
-    /// Whether a saved layout still awaits realization.
+    /// Whether a saved layout still awaits realization, a drawer the restore reopened
+    /// still awaits its bind, which applies its saved zoom and focus, or a shown pane's
+    /// restored view still awaits its settled grid, which applies it again.
     pub layout_pending: bool,
 }
 

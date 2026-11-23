@@ -13,7 +13,7 @@ use super::*;
 
 /// Typed into the palette to reach the Zoom Pane row: a subsequence of its title and of no
 /// other, which [`assert_zoom_query_is_unique`] checks before launch.
-const ZOOM_QUERY: &str = "zoom";
+pub(crate) const ZOOM_QUERY: &str = "zoom";
 
 /// The registry id of the command [`ZOOM_QUERY`] must select.
 const ZOOM_PANE_ID: &str = "zoom_pane";
@@ -290,7 +290,7 @@ fn read_focus(path: &Path, smoke: &str) -> Focus {
 
 /// Checks [`ZOOM_QUERY`] selects exactly the Zoom Pane title as a case-insensitive
 /// subsequence, so which row Enter runs rests on no ranking.
-fn assert_zoom_query_is_unique(smoke: &str) {
+pub(crate) fn assert_zoom_query_is_unique(smoke: &str) {
     let is_subsequence = |query: &str, title: &str| {
         let mut chars = title.chars().map(|c| c.to_ascii_lowercase());
         query.chars().all(|q| chars.any(|c| c == q))
@@ -630,9 +630,9 @@ fn assert_layout(
 /// on unzoom has the span the drag was read against, and a fraction read back from a
 /// position and scaled by the same span gives the same pixel.
 ///
-/// N's D equals P's because the drawer's share is the window's and survives the drawer
-/// closing, which `drawer_divider.rs` measures. N re-records D's id, since the reopened
-/// drawer is a new window, and S reads that id.
+/// N's D equals P's because the tab's drawer share survives the drawer closing, which
+/// `drawer_divider.rs` measures. N re-records D's id, since the reopened drawer is a new
+/// window, and S reads that id.
 ///
 /// C is a precondition only. Closing the zoomed pane moves Neovim's current window off it,
 /// and `update_active_pane` reads that as a focus move, which unzooms. Deleting the
@@ -913,7 +913,7 @@ fn zoom_pane_hides_restores_and_unzooms_under_cage() {
         n.a == p.a && n.b == p.b && n.c == p.c && n.d == p.d,
         "{SMOKE}: after zooming B and opening the drawer, (A, B, C, D) is ({:?}, {:?}, {:?}, \
          {:?}); want P's ({:?}, {:?}, {:?}, {:?}). B at L's {lsize:?} means the drawer opened \
-         behind the zoomed pane; D at its pre-drag {:?} means the window's drawer share was \
+         behind the zoomed pane; D at its pre-drag {:?} means the tab's drawer share was \
          reset.",
         n.a,
         n.b,

@@ -149,7 +149,7 @@ use std::time::{Duration, SystemTime};
 
 use cairo::{Context, Format, ImageSurface};
 use wolf_core::app_state::{
-    Layout, Node, Pane, PaneOrientation, PaneRef, ProjectState, Window, WindowState,
+    Cursor, Layout, Node, Pane, PaneOrientation, PaneRef, ProjectState, Window, WindowState,
 };
 use wolf_core::config::CONFIG_FILE_NAME;
 use wolf_core::{preferences_dir, state_dir, AppStateStore, CommandMru, RecentDirs};
@@ -159,6 +159,7 @@ mod compose;
 mod config;
 mod drawer_divider;
 mod editor;
+mod extras;
 mod fixture_guards;
 mod frame_stats;
 mod header_bar;
@@ -4558,26 +4559,47 @@ fn assert_probe_cell_and_pane_origin(
     (origin_x, origin_y)
 }
 
-/// The fields of a persisted pane the smokes read. A zoom is not among them: it is the
-/// tab's `zoomed`, a pane index, not a pane's own field.
+/// The fields of a persisted pane the smokes read. A zoom and a focus are not among them:
+/// they are the tab's `zoomed` and `focused`, pane indices, not a pane's own fields.
 struct LeafFields<'a> {
     /// The buffer path, or the source path of a preview, or a terminal's directory.
     path: &'a str,
     preview: bool,
     terminal: bool,
+    /// An edit pane's saved cursor; `None` for any other kind.
+    cursor: Option<Cursor>,
+    /// An edit pane's saved first visible line; `None` for any other kind.
+    top_line: Option<u32>,
+    /// A preview pane's saved scroll fraction; `None` for any other kind.
+    scroll: Option<f64>,
 }
 
-/// A persisted pane's [`LeafFields`] — `None` for a layout.
+/// A persisted pane's [`LeafFields`].
 ///
-/// The one place the smokes destructure `Node::Pane`, so a kind or field added to it
-/// touches this function and no smoke.
+/// The one place the smokes destructure a `Pane`, so a kind or field added to it touches
+/// this function and no smoke.
+fn pane_fields(pane: &Pane) -> LeafFields<'_> {
+    let (cursor, top_line, scroll) = match pane {
+        Pane::Edit {
+            cursor, top_line, ..
+        } => (*cursor, *top_line, None),
+        Pane::Preview { scroll, .. } => (None, None, *scroll),
+        Pane::Terminal { .. } => (None, None, None),
+    };
+    LeafFields {
+        path: pane.path(),
+        preview: matches!(pane, Pane::Preview { .. }),
+        terminal: matches!(pane, Pane::Terminal { .. }),
+        cursor,
+        top_line,
+        scroll,
+    }
+}
+
+/// A persisted node's [`LeafFields`] — `None` for a layout.
 fn leaf_fields(node: &Node) -> Option<LeafFields<'_>> {
     match node {
-        Node::Pane(pane) => Some(LeafFields {
-            path: pane.path(),
-            preview: matches!(pane, Pane::Preview { .. }),
-            terminal: matches!(pane, Pane::Terminal { .. }),
-        }),
+        Node::Pane(pane) => Some(pane_fields(pane)),
         Node::Layout(_) => None,
     }
 }

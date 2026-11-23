@@ -13,18 +13,20 @@
 //!   screen geometry, so there is no "intersects some screen" check.
 //!   [`window_entry`] writes `x`/`y` as `None` unconditionally and
 //!   [`restored_window_size`] returns SIZE only.
-//! - **A per-window directory or sidebar preference.** Each tab carries its own:
-//!   [`restore_plans`] plans every tab at its own saved directory with its own saved
-//!   preference, and [`tab_entry`] writes both per tab.
-//! - **The per-tab extras.** The cursor, `top_line`, preview `scroll`, `focused`, the
-//!   sidebar's mode, query and toggles, and the drawer are written as absent.
+//! - **A per-window directory, sidebar or drawer share.** Each tab carries its own:
+//!   [`restore_plans`] plans every tab at its own saved directory, sidebar and share,
+//!   and [`tab_entry`] writes them per tab.
 
 use std::path::{Path, PathBuf};
 
-use wolf_core::app_state::{Frame, Node, PaneRef, Sidebar, Tab, TabContent, Window, WindowState};
+use wolf_core::app_state::{Frame, Sidebar, SidebarMode, Tab, TabContent, Window, WindowState};
 use wolf_core::Liveness;
 
 use crate::coordinator::WindowId;
+use crate::drawer::DrawerShare;
+use crate::pane_layout::LiveLayout;
+use crate::search_panel::{SearchFields, SearchToggles};
+use crate::sidebar::SidebarPage;
 use crate::stacking::{StackingOrder, TabRecency};
 use crate::tabs_ui::TabId;
 use crate::workspace::{self, LaunchDecision};
@@ -68,6 +70,13 @@ pub struct TabPlan {
     /// The tab as saved, or `None` for a fresh tab: its seed ([`seeded_tab`]), and
     /// its rebuild when the tab is not empty.
     pub saved: Option<Tab>,
+    /// The sidebar page the tab shows when selected, from [`restored_sidebar`].
+    pub sidebar_page: SidebarPage,
+    /// The search panel's field and toggles the tab records, from [`restored_sidebar`].
+    pub search: SearchFields,
+    /// The tab's drawer share: the saved one through [`DrawerShare::restored`], else a
+    /// new one.
+    pub drawer_share: DrawerShare,
 }
 
 /// Everything the launch path needs to decide about one window before any widget
@@ -190,11 +199,19 @@ fn plan_for_window(
                 LaunchDecision::Folder { cwd } => (cwd, false),
                 LaunchDecision::EmptyState { nvim_cwd } => (nvim_cwd, true),
             };
+            let (sidebar_page, search) = restored_sidebar(&tab.content.sidebar);
+            let drawer_share = tab
+                .content
+                .drawer
+                .map_or_else(DrawerShare::new, |d| DrawerShare::restored(d.share));
             TabPlan {
                 cwd,
                 empty,
                 sidebar_visible: tab.content.sidebar.visible,
                 saved: Some(tab.clone()),
+                sidebar_page,
+                search,
+                drawer_share,
             }
         })
         .collect();
@@ -224,6 +241,9 @@ fn fresh_plan(decision: LaunchDecision) -> RestorePlan {
             empty,
             sidebar_visible: true,
             saved: None,
+            sidebar_page: SidebarPage::Files,
+            search: SearchFields::default(),
+            drawer_share: DrawerShare::new(),
         }],
         active_tab: 0,
         window_size: None,
@@ -323,40 +343,35 @@ pub fn may_snapshot(liveness: Liveness, bound_panes: usize, reported_windows: us
 /// Assembles ONE tab's persisted entry.
 ///
 /// The one place a [`Tab`] is built on the write side. An empty tab, whose
-/// `directory` is `""`, writes no root and no zoom, since §2 allows a null root only
-/// there; every other tab writes its root, a lone empty edit pane included.
-/// `zoomed` is the zoomed pane's depth-first index. Everything but the sidebar's
-/// `visible` is written as absent.
+/// `directory` is `""`, writes its whole `sidebar` and no root, zoom, focus or drawer,
+/// since §2 allows a null root only there and nothing else names a pane. Every other
+/// tab writes its root, a lone empty edit pane included, `live`'s zoom and focus, and
+/// its drawer, open or closed, always with its share.
 #[must_use]
-pub fn tab_entry(
-    directory: String,
-    sidebar_visible: bool,
-    root: Node,
-    zoomed: Option<usize>,
-) -> Tab {
-    let (root, zoomed) = if directory.is_empty() {
-        (None, None)
-    } else {
-        (Some(root), zoomed.map(PaneRef::Pane))
-    };
-    Tab {
-        directory,
-        content: TabContent {
-            root,
+pub fn tab_entry(directory: String, sidebar: Sidebar, live: LiveLayout) -> Tab {
+    let content = if directory.is_empty() {
+        TabContent {
+            root: None,
             focused: None,
-            zoomed,
-            sidebar: Sidebar {
-                visible: sidebar_visible,
-                ..Sidebar::default()
-            },
+            zoomed: None,
+            sidebar,
             drawer: None,
-        },
-    }
+        }
+    } else {
+        TabContent {
+            root: Some(live.root),
+            focused: live.focused,
+            zoomed: live.zoomed,
+            sidebar,
+            drawer: Some(live.drawer),
+        }
+    };
+    Tab { directory, content }
 }
 
 /// What a restored tab contributes until its own first gather succeeds, or `None`
-/// for a tab with no saved tab: `saved` as it was saved, with the LIVE sidebar
-/// preference.
+/// for a tab with no saved tab: `saved` as it was saved, with the LIVE `sidebar` in
+/// place of its saved one.
 ///
 /// A restored tab whose layout never binds a pane has no cache, so this is all it
 /// ever contributes. Seeding it is what stops a commit made before the tab has a
@@ -366,10 +381,71 @@ pub fn tab_entry(
 /// rewrote it, so a launch that finds a file missing does not write the loss back.
 /// A fresh tab has no seed and contributes nothing until its gate opens.
 #[must_use]
-pub fn seeded_tab(saved: Option<&Tab>, sidebar_visible: bool) -> Option<Tab> {
+pub fn seeded_tab(saved: Option<&Tab>, sidebar: Sidebar) -> Option<Tab> {
     let mut tab = saved?.clone();
-    tab.content.sidebar.visible = sidebar_visible;
+    tab.content.sidebar = sidebar;
     Some(tab)
+}
+
+/// A tab's saved sidebar: `visible`, the `page` as its mode, and the panel's toggles,
+/// with the query only when it is not `""`.
+#[must_use]
+pub fn sidebar_entry(visible: bool, page: SidebarPage, search: &SearchFields) -> Sidebar {
+    let mode = match page {
+        SidebarPage::Files => SidebarMode::Tree,
+        SidebarPage::Search => SidebarMode::Search,
+    };
+    Sidebar {
+        visible,
+        mode: Some(mode),
+        query: Some(search.query.clone()).filter(|q| !q.is_empty()),
+        case_sensitive: Some(search.toggles.case_sensitive),
+        use_regex: Some(search.toggles.use_regex),
+        all_files: Some(search.toggles.all_files),
+    }
+}
+
+/// The page and panel fields a saved sidebar restores: the Search page for a saved
+/// search mode and Files otherwise, a missing query as `""`, and a missing toggle at
+/// [`SearchToggles::INITIAL`]'s value.
+#[must_use]
+pub fn restored_sidebar(sidebar: &Sidebar) -> (SidebarPage, SearchFields) {
+    let page = match sidebar.mode {
+        Some(SidebarMode::Search) => SidebarPage::Search,
+        Some(SidebarMode::Tree) | None => SidebarPage::Files,
+    };
+    let initial = SearchToggles::INITIAL;
+    let fields = SearchFields {
+        query: sidebar.query.clone().unwrap_or_default(),
+        toggles: SearchToggles {
+            case_sensitive: sidebar.case_sensitive.unwrap_or(initial.case_sensitive),
+            use_regex: sidebar.use_regex.unwrap_or(initial.use_regex),
+            all_files: sidebar.all_files.unwrap_or(initial.all_files),
+        },
+    };
+    (page, fields)
+}
+
+/// Whether a launch runs the selected tab's restored search: only on the Search page,
+/// in a tab with a project, and for a query that is not blank. An empty tab's search
+/// would be rooted at its Neovim's home directory, which
+/// [`crate::search_panel::show_decision`] refuses.
+#[must_use]
+pub fn restore_runs_search(page: SidebarPage, empty: bool, query: &str) -> bool {
+    page == SidebarPage::Search && !empty && !query.trim().is_empty()
+}
+
+/// Whether a viewport capture may issue its BLOCKING `WolfCore::window_cursor`: only
+/// against an [`Liveness::Alive`] Neovim, so a capture never stalls the main thread
+/// for the RPC timeout on a wedged or dead one.
+///
+/// TOTAL, with no `_` arm, as [`may_snapshot`] is.
+#[must_use]
+pub fn may_capture_cursor(liveness: Option<Liveness>) -> bool {
+    match liveness {
+        Some(Liveness::Alive) => true,
+        Some(Liveness::NotResponding | Liveness::Dead) | None => false,
+    }
 }
 
 /// A window's live tabs in PAGE order — the order they sit in the tab bar — from
@@ -582,7 +658,7 @@ fn usable_dimension(value: f64) -> Option<i32> {
 mod tests {
     use super::*;
 
-    use wolf_core::app_state::Pane;
+    use wolf_core::app_state::{Node, Pane};
 
     // --- Paths (absolute and distinct, so every `==` is unambiguous) ------------
     /// The process working directory in the terminal-launch rows.
@@ -631,7 +707,16 @@ mod tests {
             cursor: None,
             top_line: None,
         });
-        tab_entry(SAVED.to_string(), true, root, None)
+        let live = LiveLayout {
+            root,
+            zoomed: None,
+            focused: None,
+            drawer: wolf_core::app_state::Drawer {
+                open: false,
+                share: DrawerShare::new().get(),
+            },
+        };
+        tab_entry(SAVED.to_string(), Sidebar::default(), live)
     }
 
     // --- sidebar_is_shown: the user preference versus the empty state ---

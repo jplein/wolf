@@ -311,6 +311,16 @@ pub enum InputEvent {
         /// The buffer handle to switch that window to.
         bufnr: i64,
     },
+    /// Apply a saved cursor and top line to window `win` (delegated to the init.lua
+    /// `wolf_set_window_cursor` helper, which clamps them as the layout rebuild does and does
+    /// nothing for an invalid window). Sent by [`crate::WolfCore::set_window_cursor`], so it
+    /// lands behind every resize and key queued before it.
+    SetWindowCursor {
+        /// The target Neovim window handle.
+        win: i64,
+        /// The cursor and top line to apply.
+        view: crate::WindowCursor,
+    },
     /// Set the global `background` option (delegated to `:set background=…`).
     ///
     /// Both front-ends push the resolved appearance at launch and, in
@@ -409,6 +419,7 @@ impl InputEvent {
             | InputEvent::SplitPane { .. }
             | InputEvent::NewBuffer
             | InputEvent::SwitchBuffer { .. }
+            | InputEvent::SetWindowCursor { .. }
             | InputEvent::SetBackground { .. }
             | InputEvent::ToggleTerminal { .. }
             | InputEvent::BindTerminal { .. }
@@ -442,6 +453,7 @@ impl InputEvent {
             | InputEvent::SplitPane { .. }
             | InputEvent::NewBuffer
             | InputEvent::SwitchBuffer { .. }
+            | InputEvent::SetWindowCursor { .. }
             | InputEvent::SetBackground { .. }
             | InputEvent::ToggleTerminal { .. }
             | InputEvent::BindTerminal { .. }
@@ -607,6 +619,7 @@ pub(crate) async fn apply(nvim: &mut impl Rpc, event: &InputEvent) -> Result<(),
         InputEvent::NewBuffer => new_untitled(nvim).await,
         InputEvent::Paste { text } => nvim_paste(nvim, text).await,
         InputEvent::SwitchBuffer { win, bufnr } => switch_buffer(nvim, *win, *bufnr).await,
+        InputEvent::SetWindowCursor { win, view } => set_window_cursor(nvim, *win, *view).await,
         InputEvent::SetBackground { dark } => {
             let cmd = if *dark {
                 "set background=dark"
@@ -765,6 +778,31 @@ async fn switch_buffer(nvim: &mut impl Rpc, win: i64, bufnr: i64) -> Result<(), 
             vec![
                 Value::from("wolf_switch_buffer(...)"),
                 Value::Array(vec![Value::from(win), Value::from(bufnr)]),
+            ],
+        )
+        .await?;
+    Ok(())
+}
+
+/// Applies `view` to window `win` via the init.lua `wolf_set_window_cursor` helper, invoked
+/// over `nvim_exec_lua`, which runs it inside `nvim_win_call(win, …)` so it never touches the
+/// current window.
+async fn set_window_cursor(
+    nvim: &mut impl Rpc,
+    win: i64,
+    view: crate::WindowCursor,
+) -> Result<(), Box<CallError>> {
+    let _ = nvim
+        .request(
+            "nvim_exec_lua",
+            vec![
+                Value::from("wolf_set_window_cursor(...)"),
+                Value::Array(vec![
+                    Value::from(win),
+                    Value::from(view.cursor.line),
+                    Value::from(view.cursor.col),
+                    Value::from(view.top_line),
+                ]),
             ],
         )
         .await?;

@@ -793,16 +793,6 @@ pub(crate) const DIVIDER_W2_NAME: &str = "dv_widths_two.txt";
 /// The two-launch DIVIDER-WEIGHT RELAUNCH scenario, run as one `sh -c` string
 /// inside ONE `cage`.
 ///
-/// ## Why it duplicates the pointer plumbing instead of reusing it
-///
-/// [`POINTER_PREAMBLE`] launches the app itself, and a two-run scenario cannot use
-/// it: the helper must outlive run 1 while the app must not. So the FIFO, the
-/// helper launch, `exec 3>`, `hdead`, `hwait_ready`, `hsend`, `hstep`, `wait_file`
-/// and the trapped cleanup are duplicated here, exactly as
-/// [`RESTORE_SOLO_SCENARIO`] duplicates [`RESTORE_LAYOUT_SCENARIO`]'s poll-and-reap
-/// machinery. The cleanup kills the HELPER first, so the app's shutdown is never
-/// racing a pointer event.
-///
 /// Between the two runs it freezes run 1's state database into `$DIV_STATE_COPY`,
 /// following the [`RESTORE_SOLO_SCENARIO`] precedent: run 2 re-submits on every
 /// render wake, so the live database would carry RUN 2's window state by the time the
@@ -827,6 +817,7 @@ pub(crate) const DIVIDER_W2_NAME: &str = "dv_widths_two.txt";
 /// | `18` | run 1 wrote no `wolf.sqlite` at all |
 /// | `19` | run 2's app died before it was ready for input |
 /// | `21` | the bisection seeds did not straddle the divider |
+/// | `22` | run 1's park did not leave `dvleft.md` focused with its cursor at column 1 |
 const DIVIDER_RELAUNCH_SCENARIO: &str = r#"
 set -eu
 
@@ -1085,6 +1076,34 @@ sleep "$SETTLE"
 
 read_widths "$DIV_W1"
 
+# Park the cursor for run 2's capture. The probe clicks leave dvleft.md's cursor on
+# its heading's last letter, where a restored block cursor would cover a letter of
+# DIVIDER_OCR_LEFT. A click in the WIDE pane then `0` leaves focus there and the
+# cursor on the `#`, which run 2 restores, so run 2 types nothing before its capture.
+#
+# Not `<C-w>h`: that is a FocusDir intent the shell applies on a later render wake,
+# so a key typed straight after it can reach the other pane. The click's focus_win
+# and the `0` travel the same ordered input channel, and the readback proves where
+# the `0` landed.
+rm -f "$PROBE_FILE"
+hstep motion "$D_LO" "$PROBE_Y"
+hstep press "$BTN_LEFT"
+hstep release "$BTN_LEFT"
+sleep "$POINTER_STEP"
+wtype -- 0
+wtype -- ":call writefile([fnamemodify(bufname('%'), ':t') . ':' . col('.')], '$PROBE_FILE')"
+wtype -k Return
+wait_file "$PROBE_FILE" || exit 14
+parked=$(cat "$PROBE_FILE")
+if [ "$parked" != "$DIVIDER_FILE_LEFT:1" ]; then
+    echo "wolf-gnome divider relaunch smoke: run 1's park read back '$parked', not" >&2
+    echo "  '$DIVIDER_FILE_LEFT:1'. Another buffer name means the click at $D_LO focused" >&2
+    echo "  the wrong pane; the right name with another column means the '0' never" >&2
+    echo "  reached that pane's cursor. Either way run 2's capture is not the calibrated" >&2
+    echo "  one, so the smoke stops here rather than read the OCR." >&2
+    exit 22
+fi
+
 # Quit the whole application. `Coordinator::on_window_closing` is the FIRST statement
 # in the close-request handler and blocks on `AppStateStore::flush`, so wolf.sqlite
 # holds the window state before the process goes.
@@ -1134,31 +1153,11 @@ wait_ready "$app_pid" 19 "wolf-gnome divider relaunch smoke"
 
 read_widths "$DIV_W2"
 
-# Move focus to the WIDE left pane, AFTER the widths above are read and before the
-# screenshot.
-#
-# The narrow right pane is what the OCR assertion reads, and `--psm 11` scales a
-# sparse region from everything in it, so that pane is given as little non-text ink
-# as possible: this moves the active-pane treatment -- the strip's bold,
-# full-strength filename, drawn at the top of the pane directly above the heading --
-# and Neovim's block cursor into the WIDE pane. `notes/wolf-gnome/window-structure.md`
-# records why nothing else is drawn at a pane's edge, and what one would cost this
-# reading.
-#
-# `<C-w>h` is a pure FocusDir intent (the shell's `PaneTree::neighbor` ->
-# nvim_set_current_win; the FOCUS_SCENARIO precedent). It resizes nothing, so the
-# widths just read stay true whatever it does, and if focus is already on the left
-# pane it is a no-op -- the same end state either way.
-#
-# This MOVES that treatment onto the left pane rather than removing it from the
-# capture, so if the OCR assertion fails on DIVIDER_OCR_LEFT instead, this line is
-# the first suspect and the next lever is known: give dvleft.md the body dvright.md
-# already carries. The left pane is twice as wide and holds a bare heading over a
-# `~` column while reading correctly, and several sibling smokes OCR a heading
-# inside a focused pane, so that treatment alone is not expected to bite there --
-# but that is inference, and only this pane has been ablated.
-wtype -M ctrl -k w -m ctrl
-wtype -k h
+# The restore brings back run 1's parked focus and cursor, so the active-pane
+# emphasis and the block cursor are in the WIDE pane, on the `#`, and nothing is
+# typed before the capture: the narrow pane the OCR reads carries no non-text ink.
+# `notes/wolf-gnome/window-structure.md` records why nothing else is drawn at a
+# pane's edge, and what one would cost this reading.
 sleep "$SETTLE"
 
 grim "$OUT_PNG"
@@ -3433,9 +3432,7 @@ fn three_windows_restore_in_their_stacking_order_under_cage() {
 /// default was recomputed" at all.
 ///
 /// Two app launches run inside ONE `cage` instance, with `wolf-pointer-inject` alive
-/// across both; see [`DIVIDER_RELAUNCH_SCENARIO`] for the exit-code table and for
-/// why it duplicates the pointer plumbing rather than reusing
-/// [`POINTER_PREAMBLE`].
+/// across both; see [`DIVIDER_RELAUNCH_SCENARIO`] for the exit-code table.
 ///
 /// ## What it asserts
 ///
@@ -3653,6 +3650,10 @@ fn dragged_divider_weights_survive_relaunch_under_cage() {
          Exit 21: the bisection seeds ({seed_lo}, {seed_hi}) did not straddle the divider; the \
          scenario's stderr names the four candidate causes in order, and \
          `click_positions_the_cursor_under_cage` fails on its own if the pane origin moved.\n\
+         Exit 22: run 1's park, a click at the LO seed then `0`, did not read back \
+         `{DIVIDER_FILE_LEFT}:1`. The scenario's stderr names what it read: another buffer means \
+         the click focused the wrong pane, another column means the `0` missed the cursor. Run 2's \
+         capture would then not be the calibrated one, so nothing about weights is read.\n\
          Screenshot expected at {}.\n\
          wolf-pointer-inject stderr was:\n{helper_err}",
         smoke_state.display(),
@@ -3879,9 +3880,11 @@ fn dragged_divider_weights_survive_relaunch_under_cage() {
              it is still answered rather than re-derive it: the `~` end-of-buffer column \
              (DIVIDER_BODY_LINE_COUNT's body lines fill the pane past winheight, so no marker is \
              drawn). Do NOT lower DIVIDER_RELAUNCH_DRAG_PX for it: it moves the column nowhere, \
-             and it narrows the weight gap assertion 1 rests on. DIVIDER_RELAUNCH_SCENARIO's \
-             closing `<C-w>h` keeps the active-pane statusbar emphasis and Neovim's block cursor \
-             in the WIDE pane, so neither is ink in the sparse region this pane is scaled from.\n\
+             and it narrows the weight gap assertion 1 rests on. DIVIDER_RELAUNCH_SCENARIO's run 1 \
+             parks focus in the WIDE pane and its cursor on the left heading's `#` (exit 22 \
+             guards it), and run 2 restores both, so neither the active-pane statusbar emphasis \
+             nor Neovim's block cursor is drawn in the narrow pane or on a letter of \
+             DIVIDER_OCR_LEFT.\n\
              PNG kept at {} for inspection.\n\
              `--psm 11` output was:\n\
              {ocr_sparse}\n\
@@ -3954,9 +3957,7 @@ fn dragged_divider_weights_survive_relaunch_under_cage() {
 /// So that the reader every OTHER OCR-asserting smoke depends on stays a fixed,
 /// unparameterized command. A mode argument is a value a later change can pass
 /// wrongly from a call site that looks unrelated to OCR, and the symptom would be a
-/// distant smoke failing on a term it renders perfectly. This binary already
-/// duplicates for that class of reason — see [`DIVIDER_RELAUNCH_SCENARIO`] on the
-/// pointer plumbing.
+/// distant smoke failing on a term it renders perfectly.
 ///
 /// Panics with the captured stderr if tesseract fails to run or exits non-zero.
 fn ocr_uniform_block_to_lowercase(png: &Path) -> String {

@@ -167,7 +167,7 @@ struct WindowInner {
     /// The shell, owned here for exactly the window's lifetime: every closure and
     /// tab drain that reaches it holds a `Weak`, and the coordinator drops this
     /// handle when the window closes.
-    _shell: AppShell,
+    shell: AppShell,
     /// The ordinal of this window's first frame-clock `after-paint`, set only while
     /// the readiness probe is pending; see [`crate::ready_seam`].
     first_paint: Cell<Option<u32>>,
@@ -296,9 +296,20 @@ impl WindowHandle {
     ///
     /// Every tab, not the selected one, and it costs no RPC: each tab's leaves are
     /// resolved from its own Neovim's snapshot ([`crate::pane_layout::resolve_leaves`]).
+    /// The selected tab first records the window's sidebar page and search fields
+    /// ([`AppShell::record_selected_sidebar`]), so its saved sidebar is the one on screen.
     pub fn refresh_subtree(&self) {
+        self.inner.shell.record_selected_sidebar();
         for tab in self.inner.tabs.entries() {
             tab.refresh_tab();
+        }
+    }
+
+    /// Captures every tab's pane cursors and preview scrolls, for a window closing and
+    /// for quit ([`crate::tab_view::TabHandle::capture_viewports`]).
+    pub fn capture_viewports(&self) {
+        for tab in self.inner.tabs.entries() {
+            tab.capture_viewports();
         }
     }
 
@@ -419,6 +430,9 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
                 empty: tab.empty,
                 sidebar_shown: tab.sidebar_visible,
                 saved: tab.saved.clone(),
+                sidebar_page: tab.sidebar_page,
+                search: tab.search.clone(),
+                drawer_share: tab.drawer_share,
             })
         })
         .collect();
@@ -567,6 +581,11 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     });
     shell.install_actions(app);
     shell.apply_selected_tab();
+    // The panel is per window, so it takes the selected tab's record; a background tab's gives way
+    // to it once that tab is selected.
+    let fields = selected.search_fields();
+    let run = state_seam::restore_runs_search(selected.sidebar_page(), empty, &fields.query);
+    search.restore(&fields, run);
 
     // Explicit activation, not `action-name`, which renders insensitive while its action is absent.
     // No smoke clicks these: crates/wolf-gnome/tests/README.md#deliberate-test-gaps
@@ -630,7 +649,7 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
             id,
             window: window.clone(),
             tabs: tabs.clone(),
-            _shell: shell,
+            shell,
             first_paint: Cell::new(None),
             show: RefCell::new(None),
             painted: RefCell::new(Some(Vec::new())),

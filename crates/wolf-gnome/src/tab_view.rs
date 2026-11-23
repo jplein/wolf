@@ -12,12 +12,13 @@
 //!
 //! Per tab: the core, its wake channel and drain, its liveness and restart
 //! budget, its drawer session (which lives in the core), the pane view (its
-//! `DrawingArea`s, its cmdline strip, its toast and its completion popup), the
-//! tab's own empty-state page, and its [`crate::persistence::StateHandle`].
+//! `DrawingArea`s, its cmdline strip, its toast and its completion popup, and the
+//! drawer's divider share), the tab's own empty-state page, and its
+//! [`crate::persistence::StateHandle`], which records the tab's sidebar page and search
+//! fields.
 //!
 //! Per window: the header bar, the `win.` action namespace, the three transient
-//! overlays, the crash/stall overlay, the drawer's divider share and **the
-//! file-tree sidebar**. Each of them acts on the SELECTED tab's core, resolved at
+//! overlays, the crash/stall overlay and **the file-tree sidebar**. Each of them acts on the SELECTED tab's core, resolved at
 //! call time through [`TabsHandle::selected_core`] or [`TabsHandle::core_source`].
 //! The sidebar's placement is a measured constraint rather than a preference; see
 //! `notes/wolf-gnome/window-structure.md`.
@@ -46,7 +47,8 @@
 //! `wolf_core::app_state::restored_tab` rewrites it, queued on its pane view
 //! through [`crate::pane_view::PaneHandle::request_layout_rebuild`]. Each layout is
 //! realized on its own tab's first wake with a pane, against that tab's own
-//! Neovim, so a background tab is restored like the selected one.
+//! Neovim, so a background tab is restored like the selected one. A tab restored
+//! empty queues nothing.
 //!
 //! ## Tab recency
 //!
@@ -68,11 +70,12 @@ use wolf_core::{CoreConfig, Liveness, TerminalId, WakeFn, WolfConfig, WolfCore};
 
 use crate::appearance;
 use crate::drawer::DrawerShare;
-use crate::pane_layout;
 use crate::pane_view::{self, PaneHandle};
 use crate::persistence::{self, StateHandle, StateParts};
 use crate::picker::FocusTarget;
+use crate::search_panel::SearchFields;
 use crate::shell;
+use crate::sidebar::SidebarPage;
 use crate::stacking::TabRecency;
 use crate::tabs_ui::{self, TabClose, TabId};
 use crate::CellMetrics;
@@ -138,6 +141,13 @@ pub struct TabParts {
     /// first gather succeeds — which for a tab whose realization bound no pane is
     /// never.
     pub saved: Option<Tab>,
+    /// The sidebar page the tab shows when selected.
+    pub sidebar_page: SidebarPage,
+    /// The search panel's fields the tab records.
+    pub search: SearchFields,
+    /// The tab's drawer share: its saved one, the selected tab's for New Tab, or a new
+    /// one.
+    pub drawer_share: DrawerShare,
 }
 
 /// One tab's restart state, read and written by [`crate::shell`]'s restart path.
@@ -310,6 +320,30 @@ impl TabHandle {
         self.inner.state.is_empty()
     }
 
+    /// Records the window's sidebar page and search panel fields as this tab's; see
+    /// [`crate::persistence::StateHandle::record_sidebar`].
+    pub fn record_sidebar(&self, page: SidebarPage, search: SearchFields) {
+        self.inner.state.record_sidebar(page, search);
+    }
+
+    /// The sidebar page this tab records, which selecting it shows.
+    #[must_use]
+    pub fn sidebar_page(&self) -> SidebarPage {
+        self.inner.state.sidebar_page()
+    }
+
+    /// The search panel fields this tab records.
+    #[must_use]
+    pub fn search_fields(&self) -> SearchFields {
+        self.inner.state.search_fields()
+    }
+
+    /// Captures every pane's cursor and top line, or preview scroll; see
+    /// [`crate::pane_view::PaneHandle::capture_viewports`].
+    pub fn capture_viewports(&self) {
+        self.inner.panes.capture_viewports();
+    }
+
     /// Records the user's sidebar PREFERENCE for this tab.
     pub fn set_sidebar_shown(&self, shown: bool) {
         self.inner.state.set_sidebar_shown(shown);
@@ -379,6 +413,9 @@ impl TabHandle {
 /// A callback the shell registers, cloned out of its `RefCell` before it is called.
 type TabCallback = Rc<dyn Fn(&TabHandle)>;
 
+/// The selection callback, with the tab the selection left, if it is still open.
+type SelectedCallback = Rc<dyn Fn(Option<&TabHandle>)>;
+
 /// The tab layer's shared state. Single GTK main thread, so `Cell` / `RefCell`
 /// suffice.
 struct TabsInner {
@@ -390,9 +427,6 @@ struct TabsInner {
     metrics: Rc<CellMetrics>,
     /// The user configuration, for each new tab's appearance.
     config: WolfConfig,
-    /// The window's terminal-drawer share, shared by every tab's pane view, so the
-    /// drawer's divider keeps one position across tabs and restarts.
-    drawer_share: Rc<Cell<DrawerShare>>,
     /// Every live tab, in INSERTION order — see [`TabsHandle::entries`], which is
     /// where the divergence from page order and its one affected consumer are stated.
     entries: RefCell<Vec<TabHandle>>,
@@ -403,13 +437,15 @@ struct TabsInner {
     closing: Cell<bool>,
     /// The tab whose Neovim was last told it holds the UI focus, or `None`.
     ui_focused: Cell<Option<TabId>>,
+    /// The tab last shown, so a selection change can name the tab it left.
+    shown: Cell<Option<TabId>>,
     /// The tabs, most recently selected first.
     recency: RefCell<TabRecency>,
     /// What to run after a real selection change, set by
     /// [`TabsHandle::connect_selected`]. An `Rc` rather than a `Box` so it can be
     /// cloned out of the `RefCell` before it is called — the callback re-enters this
     /// module through the overlays it closes.
-    on_selected: RefCell<Option<Rc<dyn Fn()>>>,
+    on_selected: RefCell<Option<SelectedCallback>>,
     /// The body of every tab's drain, set by [`TabsHandle::connect_wake`].
     on_wake: RefCell<Option<TabCallback>>,
     /// What runs before a tab's Neovim is shut down, set by
@@ -474,18 +510,11 @@ impl TabsInner {
         // Before any widget, so the tab's panes first paint under the resolved scheme.
         appearance::apply_at_launch(&self.config, &core);
 
-        let panes = pane_view::build(&core, &self.metrics, &self.drawer_share);
-        // Realized at this tab's first wake with a window grid, with no arity guard; a lone
-        // empty edit pane is what the fresh tab already shows.
+        let panes = pane_view::build(&core, &self.metrics, parts.drawer_share);
+        // Realized at this tab's first wake with a window grid, with no arity guard. A lone empty
+        // edit pane rebuilds nothing but still takes the saved focus, zoom and drawer.
         if let Some(saved) = parts.saved.as_ref().filter(|_| !parts.empty) {
-            let restored = wolf_core::app_state::restored_tab(&saved.content);
-            if restored
-                .root
-                .as_ref()
-                .is_some_and(|root| !pane_layout::is_empty_leaf(root))
-            {
-                panes.request_layout_rebuild(restored);
-            }
+            panes.request_layout_rebuild(wolf_core::app_state::restored_tab(&saved.content));
         }
 
         // Stacking per `window::build`: empty state, message toast, completion popup. The transient and
@@ -504,6 +533,8 @@ impl TabsInner {
             empty: parts.empty,
             sidebar_shown: parts.sidebar_shown,
             saved: parts.saved,
+            sidebar_page: parts.sidebar_page,
+            search: parts.search,
         });
 
         let id = TabId(self.next_id.get());
@@ -528,6 +559,10 @@ impl TabsInner {
         entry.set_empty(parts.empty);
 
         self.entries.borrow_mut().push(entry.clone());
+        // Tab 0's `append` selected its page before it was registered, so no notify recorded it.
+        if self.view.selected_page().as_ref() == Some(&page) {
+            self.shown.set(Some(id));
+        }
         spawn_drain(Rc::downgrade(self), entry.downgrade(), wake_rx);
         // AFTER registration. `append` already selects the FIRST page, so this is a
         // no-op for tab 0 and the switch for every later one.
@@ -535,21 +570,34 @@ impl TabsInner {
         Some(entry)
     }
 
-    /// Reacts to a REAL selection change: runs the shell's callback, then parks
-    /// focus on the newly shown tab's strip.
+    /// Reacts to a REAL selection change: runs the shell's callback with the tab the
+    /// selection left, when it is still registered, then parks focus on the newly
+    /// shown tab's strip.
     ///
     /// `connect_selected_page_notify` fires only on an actual change, so nothing
-    /// here needs a same-page guard.
+    /// here needs a same-page guard. A closed tab is deregistered before its page
+    /// goes, so the selection it causes names no tab it left.
     fn on_selected_changed(&self) {
         let Some(entry) = self.selected() else {
             return;
         };
         self.recency.borrow_mut().select(entry.id());
+        let previous = self
+            .shown
+            .replace(Some(entry.id()))
+            .filter(|id| *id != entry.id())
+            .and_then(|id| {
+                self.entries
+                    .borrow()
+                    .iter()
+                    .find(|tab| tab.id() == id)
+                    .cloned()
+            });
         // Cloned out in its own statement: the callback closes overlays, whose
         // focus-return resolves back through this module.
         let callback = self.on_selected.borrow().clone();
         if let Some(callback) = callback {
-            callback();
+            callback(previous.as_ref());
         }
         // AFTER the overlays close, so their own focus-return cannot land on top of
         // this one. The strip belongs to the page GTK has just mapped.
@@ -653,11 +701,11 @@ pub fn build(parts: TabsParts<'_>) -> TabsHandle {
             bar,
             metrics: parts.metrics.clone(),
             config: parts.config.clone(),
-            drawer_share: Rc::new(Cell::new(DrawerShare::new())),
             entries: RefCell::new(Vec::new()),
             next_id: Cell::new(0),
             closing: Cell::new(false),
             ui_focused: Cell::new(None),
+            shown: Cell::new(None),
             recency: RefCell::new(TabRecency::default()),
             on_selected: RefCell::new(None),
             on_wake: RefCell::new(None),
@@ -817,9 +865,11 @@ impl TabsHandle {
         })
     }
 
-    /// Registers what runs after a real selection change — the shell closes its
-    /// transient overlays and wakes the newly selected tab there.
-    pub fn connect_selected(&self, f: impl Fn() + 'static) {
+    /// Registers what runs after a real selection change, with the tab the selection
+    /// left when it is still open — the shell records the window's sidebar into that
+    /// tab and captures its panes, closes its transient overlays and wakes the newly
+    /// selected tab there.
+    pub fn connect_selected(&self, f: impl Fn(Option<&TabHandle>) + 'static) {
         *self.inner.on_selected.borrow_mut() = Some(Rc::new(f));
     }
 

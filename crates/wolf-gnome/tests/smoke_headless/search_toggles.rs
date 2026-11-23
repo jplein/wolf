@@ -5,6 +5,8 @@
 //! field's caret nor its focus ring is in the band. Where the toggles sit is read from the
 //! sidebar band's raw pixels, compared between captures of one run; what a search found and what
 //! the status line says are read through OCR of the same band ([`projsearch_sidebar_band`]).
+//! One smoke clicks nothing: a tab saved on its Search page restores the page, the query and the
+//! toggles, and runs the search.
 //!
 //! ## Click targets
 //!
@@ -20,6 +22,9 @@
 //! panel's file row draws the file's name, so a word there would be read whatever was found.
 //! [`assert_search_toggle_fixtures`] checks that, and what each query matches, before a launch.
 
+use wolf_core::app_state::{Sidebar, SidebarMode, Tab, TabContent};
+
+use super::extras::{canonical_project, plant_window_state, planted_window};
 use super::sidebar::projsearch_sidebar_band;
 use super::*;
 
@@ -1216,5 +1221,256 @@ fn all_files_toggle_widens_a_markdown_only_search_under_cage() {
                         the query with the toggles now shown, or the run did not record them.",
             },
         ],
+    );
+}
+
+/// What the restore smoke types over the restored query, so the save at the quit shows the
+/// field's text is recorded. It matches no fixture and is never run.
+const ST_RESTORE_REPLACEMENT: &str = "zzrestored";
+
+/// How long the restored search gets to stream its rows into the panel after the launch.
+const ST_RESTORE_SEARCH_SETTLE: &str = "2.0";
+
+/// The scenario of [`a_restored_search_sidebar_runs_its_query_under_cage`]: one launch with no
+/// pointer on the seat over a planted Search sidebar, one capture, two frozen saves.
+///
+/// The Escape before the capture hands focus back to the editor whichever widget holds it, so
+/// neither the field's caret nor its focus ring is in the band. The field's text is replaced
+/// with End and Backspaces rather than a select-all, which leaves the result the same whether
+/// or not the entry selects its text on focus.
+///
+/// ## Exit codes
+///
+/// | code | meaning |
+/// | --- | --- |
+/// | `11` | the app died before it was ready for input |
+/// | `12` | the app was still alive after `:qa` |
+/// | `13` | the app exited non-zero |
+/// | `16` | no `wolf.sqlite` to freeze at M or at the quit |
+/// | `40` | the app never reported ready |
+const ST_RESTORE_SCENARIO: &str = r#"
+set -eu
+
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+QUIT_TRIES=75
+
+cleanup() {
+    set +e
+    if [ -n "${app_pid:-}" ]; then
+        kill "$app_pid" 2>/dev/null
+        wait "$app_pid" 2>/dev/null
+    fi
+}
+trap cleanup EXIT INT TERM HUP
+
+"$WOLF_BIN" &
+app_pid=$!
+wait_ready "$app_pid" 11 "wolf-gnome restored search smoke"
+
+# --- The band and M: the restored page, field, toggles and rows ---------------------------
+sleep "$ST_SEARCH_SETTLE"
+wtype -k Escape
+sleep "$SETTLE"
+grim "$ST_SHOT"
+if ! freeze_state "$STATE_SRC" "$STATE_M"; then
+    echo "wolf-gnome restored search smoke: no wolf.sqlite in $STATE_SRC at M." >&2
+    exit 16
+fi
+
+# --- Q: the field's text replaced, never run, then :qa --------------------------------------
+wtype -M ctrl -M shift -k f -m shift -m ctrl
+sleep "$SETTLE"
+wtype -k End
+n=0
+while [ "$n" -lt 32 ]; do
+    wtype -k BackSpace
+    n=$((n + 1))
+done
+wtype -- "$ST_REPLACEMENT"
+sleep "$SETTLE"
+wtype -k Escape
+sleep "$SETTLE"
+wtype -- ":qa"
+wtype -k Return
+
+tries=0
+while kill -0 "$app_pid" 2>/dev/null; do
+    tries=$((tries + 1))
+    if [ "$tries" -ge "$QUIT_TRIES" ]; then
+        echo "wolf-gnome restored search smoke: the app (pid $app_pid) is still alive after :qa." >&2
+        exit 12
+    fi
+    sleep "$WAIT_INTERVAL"
+done
+rc=0
+wait "$app_pid" || rc=$?
+if [ "$rc" -ne 0 ]; then
+    echo "wolf-gnome restored search smoke: the app (pid $app_pid) exited $rc, not 0." >&2
+    exit 13
+fi
+app_pid=
+
+if ! freeze_state "$STATE_SRC" "$STATE_Q"; then
+    echo "wolf-gnome restored search smoke: no wolf.sqlite in $STATE_SRC after the quit." >&2
+    exit 16
+fi
+exit 0
+"#;
+
+/// **A tab saved on its Search page restores the page, the query and the three toggles, and
+/// runs the search; the save then follows the field.**
+///
+/// ## The scenario
+///
+/// One launch through [`cage_command`] over a planted tab on the project whose sidebar is
+/// visible, on Search, with the query [`ST_CASE_QUERY`], case on, regex off and all files on.
+/// The fixtures are the case smoke's two `.txt` files, so only the case and all-files toggles
+/// decide what is found: with all files off neither is searched, and with case off both are.
+/// After the launch the sidebar band is captured and M frozen. Ctrl+Shift+F, the field's text
+/// replaced with [`ST_RESTORE_REPLACEMENT`] and no Enter, Escape and `:qa` follow, and Q is
+/// frozen.
+///
+/// ## Assertions
+///
+/// | ID | assertion | falsifying edit | predicted red |
+/// | --- | --- | --- | --- |
+/// | E19a | the band holds [`ST_OCR_CASE_LOWER`] | `window::build` passes `run: false` | the lower word is missing |
+/// | E19c | the same | `restore` leaves the All toggle unset | the lower word is missing |
+/// | E19d | the same | `apply_selected_tab` shows no page | the lower word is missing |
+/// | E19b | the band lacks [`ST_OCR_CASE_UPPER`] | `restore` leaves the case toggle unset | the upper word is present |
+/// | E19e | M's sidebar is the planted one | `restore` leaves the regex toggle unset | M: regex `Some(true)` |
+/// | E19f | the same | `restore` sets no field text | M: query `None` |
+/// | E19g | Q's sidebar is the planted one with the query [`ST_RESTORE_REPLACEMENT`] | `refresh_subtree` records no sidebar | Q: query [`ST_CASE_QUERY`] |
+///
+/// The regex toggle reaches no OCR, since the query is a literal either way, so M is what says
+/// it was restored.
+#[test]
+fn a_restored_search_sidebar_runs_its_query_under_cage() {
+    const SMOKE: &str = "a_restored_search_sidebar_runs_its_query_under_cage";
+
+    assert_search_toggle_fixtures(SMOKE);
+    let runtime_dir = require_smoke_env();
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+    let cwd = make_temp_cwd();
+    write_relaunch_fixtures(
+        SMOKE,
+        &cwd,
+        &[
+            (ST_CASE_LOWER_FILE, ST_CASE_LOWER_LINE),
+            (ST_CASE_UPPER_FILE, ST_CASE_UPPER_LINE),
+        ],
+    );
+    let (_, project) = canonical_project(SMOKE, &cwd);
+    let planted_sidebar = Sidebar {
+        visible: true,
+        mode: Some(SidebarMode::Search),
+        query: Some(ST_CASE_QUERY.to_owned()),
+        case_sensitive: Some(true),
+        use_regex: Some(false),
+        all_files: Some(true),
+    };
+    let planted = WindowState {
+        windows: vec![planted_window(
+            0,
+            vec![Tab {
+                directory: project,
+                content: TabContent {
+                    root: Some(Node::Pane(Pane::Edit {
+                        path: String::new(),
+                        cursor: None,
+                        top_line: None,
+                    })),
+                    sidebar: planted_sidebar.clone(),
+                    ..TabContent::default()
+                },
+            }],
+        )],
+    };
+    plant_window_state(SMOKE, &cwd, &planted);
+
+    let shot = st_shots(&runtime_dir, "wolf_gnome_st_restore_", 1, SMOKE)
+        .pop()
+        .expect("one capture was asked for");
+    let state_m = frozen_state_dir(&runtime_dir, "wolf_gnome_st_restore_m_state", SMOKE);
+    let state_q = frozen_state_dir(&runtime_dir, "wolf_gnome_st_restore_q_state", SMOKE);
+
+    let status = cage_command(ST_RESTORE_SCENARIO, &cwd, &runtime_dir)
+        .env("WOLF_BIN", bin)
+        .env("ST_SEARCH_SETTLE", ST_RESTORE_SEARCH_SETTLE)
+        .env("ST_SHOT", &shot.png)
+        .env("ST_REPLACEMENT", ST_RESTORE_REPLACEMENT)
+        .env("STATE_SRC", smoke_state_dir(&cwd))
+        .env("STATE_M", &state_m)
+        .env("STATE_Q", &state_q)
+        .status()
+        .expect("failed to spawn `cage` for the headless restored search scenario");
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage scenario exited unsuccessfully ({status}). Exit 11: the app died \
+         before it was ready, as a panic in the sidebar's restore would. Exit 40: it never \
+         reported ready. Exit 12: the app outlived `:qa`, so the keys after the field's Escape \
+         reached no Neovim. Exit 13: it exited non-zero. Exit 16: no wolf.sqlite to freeze."
+    );
+
+    assert_band_reads(
+        SMOKE,
+        std::slice::from_ref(&shot),
+        0,
+        "after the launch restored the Search page",
+        &[
+            Reading {
+                term: ST_OCR_CASE_LOWER,
+                held: true,
+                means: "The restored search did not find the line holding the query in its own \
+                        case. In order: the band shows the Files page, so the tab switch at \
+                        launch did not show the saved page; no search ran at the restore; or it \
+                        ran with All off, which leaves both `.txt` fixtures unsearched, so the \
+                        saved all-files toggle was not restored. If the band shows the field \
+                        empty, the saved query was not restored either.",
+            },
+            Reading {
+                term: ST_OCR_CASE_UPPER,
+                held: false,
+                means: "The upper-case line was found, so the restored search ignored case: the \
+                        saved case toggle was not restored before the search ran.",
+            },
+        ],
+    );
+
+    let saved = frozen_window_state(&state_m, SMOKE, "M, frozen after the launch");
+    let sidebar = saved
+        .windows
+        .first()
+        .and_then(|window| window.tabs.first())
+        .map(|tab| tab.content.sidebar.clone());
+    assert_eq!(
+        sidebar.as_ref(),
+        Some(&planted_sidebar),
+        "{SMOKE}: M saved the tab's sidebar as {sidebar:?}; want the planted one. regex Some(true) \
+         means the saved regex toggle was not restored, which the capture cannot show; query \
+         None means the field was restored empty; mode Tree means the page was not restored. \
+         File: {}",
+        state_m.display()
+    );
+
+    let saved = frozen_window_state(&state_q, SMOKE, "Q, frozen after the quit");
+    let sidebar = saved
+        .windows
+        .first()
+        .and_then(|window| window.tabs.first())
+        .map(|tab| tab.content.sidebar.clone());
+    let want = Sidebar {
+        query: Some(ST_RESTORE_REPLACEMENT.to_owned()),
+        ..planted_sidebar
+    };
+    assert_eq!(
+        sidebar.as_ref(),
+        Some(&want),
+        "{SMOKE}: Q saved the tab's sidebar as {sidebar:?}; want the planted one with the query \
+         {ST_RESTORE_REPLACEMENT:?} the field held at the quit. The query {ST_CASE_QUERY:?} \
+         means the selected tab's sidebar is not recorded from the widgets when its window is \
+         gathered, so the restore's record is saved forever. File: {}",
+        state_q.display()
     );
 }

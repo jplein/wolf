@@ -40,7 +40,7 @@
 
 use std::collections::HashMap;
 
-use wolf_core::app_state::{Layout, Node, Pane, PaneOrientation};
+use wolf_core::app_state::{Cursor, Drawer, Layout, Node, Pane, PaneOrientation, PaneRef};
 
 use crate::layout::{Orientation, PaneId, PaneLayout, PaneTree};
 
@@ -95,6 +95,42 @@ pub enum WinContent {
     Unknown,
 }
 
+/// The last captured view of one tree leaf, which [`encode_with_views`] writes into its
+/// saved pane.
+///
+/// Captured only at `specs/application-state.md` §4's moments, never continuously, so a
+/// saved pane carries the view of its last capture rather than of the save.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PaneView {
+    /// An edit pane's cursor and 1-based first visible line.
+    Edit {
+        /// The cursor, as `nvim_win_get_cursor` reports it.
+        cursor: Cursor,
+        /// The 1-based first visible line.
+        top_line: u32,
+    },
+    /// A preview pane's scroll, the fraction of the page's scrollable height above the
+    /// viewport.
+    Preview {
+        /// From `0` to `1`.
+        scroll: f64,
+    },
+}
+
+/// One tab's live layout, as a gather reads it: everything a saved tab holds but its
+/// directory and sidebar.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LiveLayout {
+    /// The tab's root, as [`encode_with_views`] wrote it.
+    pub root: Node,
+    /// The zoomed pane, as [`pane_ref`] names it.
+    pub zoomed: Option<PaneRef>,
+    /// The focused pane, as [`pane_ref`] names it.
+    pub focused: Option<PaneRef>,
+    /// Whether the drawer is open, and the tab's share.
+    pub drawer: Drawer,
+}
+
 /// One tab's gather answer, as [`crate::pane_view::PaneHandle::layout_snapshot`]
 /// reports it.
 ///
@@ -103,12 +139,7 @@ pub enum WinContent {
 #[derive(Clone, Debug, PartialEq)]
 pub enum LayoutGather {
     /// The tab was read.
-    Ready {
-        /// The tab's root, as [`encode`] wrote it.
-        root: Node,
-        /// The zoomed pane's [`leaf_index`], or `None` when no pane is zoomed.
-        zoomed: Option<usize>,
-    },
+    Ready(LiveLayout),
     /// At least one leaf was unresolvable, so the whole tab's gather is refused and
     /// the caller contributes its last good tab instead.
     Refuse,
@@ -166,12 +197,20 @@ pub fn resolve_leaves(leaves: &[(PaneId, WinContent)]) -> Option<HashMap<PaneId,
         .collect()
 }
 
+/// [`encode_with_views`] with no views: the cursor, top line and scroll are left unset.
+#[must_use]
+pub fn encode(layout: &PaneLayout, contents: &HashMap<PaneId, LeafContent>) -> Node {
+    encode_with_views(layout, contents, &HashMap::new())
+}
+
 /// Maps a live [`PaneLayout`] (leaf IDs) into a persistable [`Node`] (panes
-/// with paths), looking each leaf id up in `contents`.
+/// with paths), looking each leaf id up in `contents` and `views`.
 ///
 /// A leaf maps to [`Pane::Terminal`] when its content is a terminal, else to
-/// [`Pane::Preview`] when it is a preview, else to [`Pane::Edit`]; the cursor,
-/// top line and scroll are left unset.
+/// [`Pane::Preview`] when it is a preview, else to [`Pane::Edit`]. An edit leaf takes
+/// a [`PaneView::Edit`]'s cursor and top line, and a preview leaf a
+/// [`PaneView::Preview`]'s scroll. A view of the other kind applies nothing: the
+/// pane's kind changed since its capture.
 ///
 /// A leaf id MISSING from `contents` becomes an empty edit pane (an unbound or
 /// unnamed pane persists as one) rather than being dropped, because dropping it
@@ -182,24 +221,37 @@ pub fn resolve_leaves(leaves: &[(PaneId, WinContent)]) -> Option<HashMap<PaneId,
 ///
 /// Weights and orientation are copied VERBATIM.
 #[must_use]
-pub fn encode(layout: &PaneLayout, contents: &HashMap<PaneId, LeafContent>) -> Node {
+pub fn encode_with_views(
+    layout: &PaneLayout,
+    contents: &HashMap<PaneId, LeafContent>,
+    views: &HashMap<PaneId, PaneView>,
+) -> Node {
     match layout {
         PaneLayout::Leaf(id) => {
             // `LeafContent::default()` IS the "no such pane" value, which is why a
             // missing id needs no second branch.
             let content = contents.get(id).cloned().unwrap_or_default();
+            let view = views.get(id).copied();
             let pane = if content.terminal {
                 Pane::Terminal { path: content.path }
             } else if content.preview {
+                let scroll = match view {
+                    Some(PaneView::Preview { scroll }) => Some(scroll),
+                    _ => None,
+                };
                 Pane::Preview {
                     path: content.path,
-                    scroll: None,
+                    scroll,
                 }
             } else {
+                let (cursor, top_line) = match view {
+                    Some(PaneView::Edit { cursor, top_line }) => (Some(cursor), Some(top_line)),
+                    _ => (None, None),
+                };
                 Pane::Edit {
                     path: content.path,
-                    cursor: None,
-                    top_line: None,
+                    cursor,
+                    top_line,
                 }
             };
             Node::Pane(pane)
@@ -210,7 +262,10 @@ pub fn encode(layout: &PaneLayout, contents: &HashMap<PaneId, LeafContent>) -> N
             weights,
         } => Node::Layout(Layout {
             orientation: to_core_orientation(*orientation),
-            children: children.iter().map(|c| encode(c, contents)).collect(),
+            children: children
+                .iter()
+                .map(|c| encode_with_views(c, contents, views))
+                .collect(),
             // VERBATIM. Equalizing here would silently re-centre every dragged
             // divider on the next launch while the restore side looked correct.
             weights: weights.clone(),
@@ -234,6 +289,53 @@ pub fn leaf_index(layout: &PaneLayout, id: PaneId) -> Option<usize> {
         }
     }
     walk(layout, id, &mut 0)
+}
+
+/// The views a restored tab's leaves start with: `node`'s depth-first panes zipped with
+/// `leaf_ids`, [`decode`]'s ids.
+///
+/// An edit pane with both a cursor and a top line seeds [`PaneView::Edit`], a preview
+/// with a scroll seeds [`PaneView::Preview`], and anything else seeds nothing. Seeding
+/// is what keeps a restored pane's saved view when no capture runs before the next save.
+#[must_use]
+pub fn saved_views(node: &Node, leaf_ids: &[PaneId]) -> HashMap<PaneId, PaneView> {
+    node.panes()
+        .into_iter()
+        .zip(leaf_ids)
+        .filter_map(|(pane, &id)| {
+            let view = match pane {
+                Pane::Edit {
+                    cursor: Some(cursor),
+                    top_line: Some(top_line),
+                    ..
+                } => PaneView::Edit {
+                    cursor: *cursor,
+                    top_line: *top_line,
+                },
+                Pane::Preview {
+                    scroll: Some(scroll),
+                    ..
+                } => PaneView::Preview { scroll: *scroll },
+                _ => return None,
+            };
+            Some((id, view))
+        })
+        .collect()
+}
+
+/// The saved reference to `pane`: [`PaneRef::Drawer`] when it is the bound `drawer`,
+/// its [`leaf_index`] when it is a leaf of `layout`, and `None` otherwise.
+#[must_use]
+pub fn pane_ref(
+    layout: &PaneLayout,
+    drawer: Option<PaneId>,
+    pane: Option<PaneId>,
+) -> Option<PaneRef> {
+    let pane = pane?;
+    if drawer == Some(pane) {
+        return Some(PaneRef::Drawer);
+    }
+    leaf_index(layout, pane).map(PaneRef::Pane)
 }
 
 /// The "nothing to rebuild" CONTENT predicate: `true` **iff** `node` is

@@ -323,7 +323,8 @@ pub(crate) const STALL_OCR_PRESENT: &str = "responding";
 /// It is safe to shorten the budget for this run because the buffer picker's
 /// snapshot is the ONLY `block_on_rpc` the scenario reaches: with a fresh
 /// per-smoke `WOLF_STATE_DIR` there is no saved layout, so
-/// `pane_view::apply_layout_rebuild` — the crate's only other one — never runs.
+/// `pane_view::apply_layout_rebuild` never runs, and the scenario moves no focus,
+/// switches no tab and closes no window before its stall, so no cursor capture runs.
 const STALL_RPC_TIMEOUT_MS: &str = "800";
 
 /// The `/proc` scan the crash smokes and the STALL smoke use to find — and to

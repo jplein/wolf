@@ -1,7 +1,9 @@
 //! Table-driven tests for the application-state seam of `wolf_gnome::state_seam`: the launch
 //! plans `restore_plans` makes of a saved `wolf_core::app_state::WindowState`
 //! (`specs/application-state.md` §5), and the entries the save side builds of the live windows
-//! and tabs (§2 and §4), and the schedule `present_after` gives a restore's presents.
+//! and tabs (§2 and §4), and the schedule `present_after` gives a restore's presents. The
+//! per-tab extras are here too: the sidebar and drawer share each tab plans and writes, when a
+//! restored search runs, and the liveness gate on the cursor capture's blocking read.
 //!
 //! Pure: no display, no Neovim and no filesystem. `is_dir` answers from a fixed list, so a
 //! directory is "missing" by not being on it, and every expected value is written out by hand.
@@ -12,13 +14,19 @@
 use std::path::{Path, PathBuf};
 
 use wolf_core::app_state::{
-    Frame, Layout, Node, Pane, PaneOrientation, PaneRef, Sidebar, Tab, TabContent, Window,
-    WindowState,
+    Drawer, Frame, Layout, Node, Pane, PaneOrientation, PaneRef, Sidebar, SidebarMode, Tab,
+    TabContent, Window, WindowState,
 };
+use wolf_core::Liveness;
 use wolf_gnome::coordinator::WindowId;
+use wolf_gnome::drawer::DrawerShare;
+use wolf_gnome::pane_layout::LiveLayout;
+use wolf_gnome::search_panel::{SearchFields, SearchToggles};
+use wolf_gnome::sidebar::SidebarPage;
 use wolf_gnome::stacking::{StackingOrder, TabRecency};
 use wolf_gnome::state_seam::{
-    present_after, restore_plans, seeded_tab, tab_entry, window_entry, window_state, RestorePlan,
+    may_capture_cursor, present_after, restore_plans, restore_runs_search, restored_sidebar,
+    seeded_tab, sidebar_entry, tab_entry, window_entry, window_state, RestorePlan,
 };
 use wolf_gnome::tabs_ui::TabId;
 
@@ -353,13 +361,25 @@ fn a_saved_window_with_no_tabs_is_dropped() {
     );
 }
 
+/// A gathered layout of `root` with no zoom, no focus and a closed drawer at a new share.
+fn live_of(root: Node) -> LiveLayout {
+    LiveLayout {
+        root,
+        zoomed: None,
+        focused: None,
+        drawer: Drawer {
+            open: false,
+            share: 1.0 / 3.0,
+        },
+    }
+}
+
 /// A window's live tab at `directory`, as the save side builds it: lone pane `marker`.
 fn live_tab(directory: &str, marker: &str) -> Tab {
     tab_entry(
         directory.to_owned(),
-        true,
-        edit(&format!("{directory}/{marker}.md")),
-        None,
+        Sidebar::default(),
+        live_of(edit(&format!("{directory}/{marker}.md"))),
     )
 }
 
@@ -542,10 +562,32 @@ fn a_window_with_no_contributing_tab_contributes_nothing() {
     );
 }
 
-/// G5a.
+/// A search sidebar with every field written, as `sidebar_entry` writes a Search page.
+fn search_sidebar(visible: bool, query: &str) -> Sidebar {
+    Sidebar {
+        visible,
+        mode: Some(SidebarMode::Search),
+        query: Some(query.to_owned()),
+        case_sensitive: Some(true),
+        use_regex: Some(false),
+        all_files: Some(true),
+    }
+}
+
+/// E1a to E1c, rewriting G5a.
 #[test]
-fn an_empty_tab_writes_no_root_and_no_zoom() {
-    let tab = tab_entry(String::new(), true, edit("/p/a/stray.md"), Some(0));
+fn an_empty_tab_writes_its_sidebar_and_no_root_focus_zoom_or_drawer() {
+    let sidebar = search_sidebar(true, "zq");
+    let live = LiveLayout {
+        root: edit("/p/a/stray.md"),
+        zoomed: Some(PaneRef::Pane(0)),
+        focused: Some(PaneRef::Drawer),
+        drawer: Drawer {
+            open: true,
+            share: 0.4,
+        },
+    };
+    let tab = tab_entry(String::new(), sidebar.clone(), live);
     assert_eq!(tab.directory, "", "an empty tab keeps its empty directory");
     assert_eq!(
         (tab.content.root.as_ref(), tab.content.zoomed),
@@ -553,39 +595,63 @@ fn an_empty_tab_writes_no_root_and_no_zoom() {
         "an empty tab must write root and zoomed as null, as §2 requires (root, zoomed); a root \
          means the save side writes whatever the empty tab's Neovim shows"
     );
+    assert_eq!(
+        tab.content.focused, None,
+        "an empty tab has no panes for `focused` to name, so it must write none; Some(Drawer) \
+         means the gathered focus is written whatever the tab's directory"
+    );
+    assert_eq!(
+        tab.content.drawer, None,
+        "an empty tab must write no drawer; Some means the gathered drawer is written whatever \
+         the tab's directory, so a project-less tab saves a drawer it cannot restore"
+    );
+    assert_eq!(
+        tab.content.sidebar, sidebar,
+        "an empty tab must still write its whole sidebar, mode, query and toggles included. Mode \
+         None with visible kept means only the preference is written for an empty tab"
+    );
 }
 
-/// G5b.
+/// E2a and E2b, rewriting G5b.
 #[test]
-fn a_folder_tab_writes_its_root_and_zoom() {
+fn a_folder_tab_writes_its_root_zoom_focus_drawer_and_sidebar() {
     let root = layout_of(&["/p/a/left.md", "/p/a/right.md"]);
-    let tab = tab_entry(DIR_A.to_owned(), false, root.clone(), Some(1));
+    let sidebar = search_sidebar(false, "zq");
+    let drawer = Drawer {
+        open: false,
+        share: 0.25,
+    };
+    let live = LiveLayout {
+        root: root.clone(),
+        zoomed: Some(PaneRef::Pane(1)),
+        focused: Some(PaneRef::Pane(0)),
+        drawer,
+    };
+    let tab = tab_entry(DIR_A.to_owned(), sidebar.clone(), live);
     assert_eq!(
         tab,
         Tab {
             directory: DIR_A.to_owned(),
             content: TabContent {
                 root: Some(root),
-                focused: None,
+                focused: Some(PaneRef::Pane(0)),
                 zoomed: Some(PaneRef::Pane(1)),
-                sidebar: Sidebar {
-                    visible: false,
-                    ..Sidebar::default()
-                },
-                drawer: None,
+                sidebar,
+                drawer: Some(drawer),
             },
         },
-        "a folder tab must write its directory, its root, its zoom as the pane's index, its \
-         sidebar preference and nothing else. zoomed None means the zoom is dropped; visible \
-         true means the preference is ignored; a focus, drawer or sidebar mode means a field \
-         this front-end does not save is written"
+        "a folder tab must write its directory, its root, its zoom and focus as given, its drawer \
+         closed with its share, and its whole sidebar. focused None means the gathered focus is \
+         dropped; drawer None means a closed drawer's share is not saved, so a relaunch opens it \
+         at a third; zoomed None means the zoom is dropped; a sidebar with mode None means only \
+         the preference is written"
     );
 }
 
 /// G5c.
 #[test]
 fn a_lone_empty_pane_is_a_folder_tab_s_root() {
-    let tab = tab_entry(DIR_A.to_owned(), true, edit(""), None);
+    let tab = tab_entry(DIR_A.to_owned(), Sidebar::default(), live_of(edit("")));
     assert_eq!(
         tab.content.root,
         Some(edit("")),
@@ -595,34 +661,262 @@ fn a_lone_empty_pane_is_a_folder_tab_s_root() {
     );
 }
 
-/// G5d and G5e.
+/// E4a, rewriting G5d and G5e.
 #[test]
 fn a_restored_tab_contributes_its_saved_tab() {
     let saved = saved_tab(DIR_A, "one", true);
+    let live = Sidebar {
+        visible: false,
+        mode: Some(SidebarMode::Search),
+        query: Some("zl".to_owned()),
+        case_sensitive: Some(false),
+        use_regex: Some(true),
+        all_files: Some(false),
+    };
+    assert_ne!(
+        (saved.content.sidebar.visible, saved.content.sidebar.mode),
+        (live.visible, live.mode),
+        "premise: the live sidebar must differ from the saved one in both its visibility and its \
+         mode, or a seed that copies only one of them reads the same"
+    );
     let mut expected = saved.clone();
-    expected.content.sidebar.visible = false;
+    expected.content.sidebar = live.clone();
     assert_eq!(
-        seeded_tab(Some(&saved), false),
+        seeded_tab(Some(&saved), live.clone()),
         Some(expected),
-        "a restored tab must contribute its saved tab, with the live sidebar preference false \
-         over the saved true. None means a restored tab contributes nothing until its gather \
-         opens; visible true means the saved preference wins over the live one"
+        "a restored tab must contribute its saved tab with the live sidebar in place of the \
+         saved one, every field of it. The saved mode with the live visibility means only the \
+         preference is copied; None means a restored tab contributes nothing until its gather \
+         opens"
     );
-
-    let hidden = saved_tab(DIR_A, "one", false);
-    let mut shown = hidden.clone();
-    shown.content.sidebar.visible = true;
     assert_eq!(
-        seeded_tab(Some(&hidden), true),
-        Some(shown),
-        "the live preference true must win over the saved false as well"
-    );
-
-    assert_eq!(
-        seeded_tab(None, true),
+        seeded_tab(None, live),
         None,
         "a tab with no saved tab has no seed"
     );
+}
+
+/// A saved tab at [`DIR_A`] on `marker`, with `sidebar` and `drawer`.
+fn saved_with(marker: &str, sidebar: Sidebar, drawer: Option<Drawer>) -> Tab {
+    let mut tab = saved_tab(DIR_A, marker, sidebar.visible);
+    tab.content.sidebar = sidebar;
+    tab.content.drawer = drawer;
+    tab
+}
+
+/// E5a to E5d.
+#[test]
+fn restore_plans_carry_each_tabs_sidebar_and_drawer_share() {
+    let first = Sidebar {
+        visible: true,
+        mode: Some(SidebarMode::Search),
+        query: Some("zz".to_owned()),
+        case_sensitive: Some(true),
+        use_regex: Some(false),
+        all_files: None,
+    };
+    let window = saved_window(
+        1000.0,
+        0,
+        false,
+        vec![
+            saved_with(
+                "zero",
+                first,
+                Some(Drawer {
+                    open: true,
+                    share: 0.6,
+                }),
+            ),
+            saved_with("one", Sidebar::default(), None),
+            saved_with(
+                "two",
+                Sidebar::default(),
+                Some(Drawer {
+                    open: false,
+                    share: f64::NAN,
+                }),
+            ),
+        ],
+    );
+    let plans = plans_of(vec![window]);
+    let tabs = &plans[0].tabs;
+    assert_eq!(
+        tabs.len(),
+        3,
+        "premise: all three saved tabs must be planned"
+    );
+
+    assert_eq!(
+        tabs[0].sidebar_page,
+        SidebarPage::Search,
+        "tab 0 was saved on its Search page and must plan it; Files means the saved mode is not \
+         read into the plan"
+    );
+    assert_eq!(
+        tabs[0].search,
+        SearchFields {
+            query: "zz".to_owned(),
+            toggles: SearchToggles {
+                case_sensitive: true,
+                use_regex: false,
+                all_files: false,
+            },
+        },
+        "tab 0 must plan its saved query and toggles, with the unsaved all-files toggle at the \
+         panel's initial value. An empty query means the saved fields are not read into the plan; \
+         regex true means the saved regex toggle is ignored"
+    );
+    assert_eq!(
+        tabs[0].drawer_share.get(),
+        0.6,
+        "tab 0 was saved with a drawer share of 0.6 and must plan it; one third means the saved \
+         share is not read into the plan, so every tab's drawer reopens at a new window's share"
+    );
+
+    assert_eq!(
+        (tabs[1].sidebar_page, &tabs[1].search, tabs[1].drawer_share),
+        (
+            SidebarPage::Files,
+            &SearchFields::default(),
+            DrawerShare::new()
+        ),
+        "tab 1 was saved with a default sidebar and no drawer, so it must plan the Files page, \
+         the panel's initial fields and a new share"
+    );
+    assert_eq!(
+        tabs[2].drawer_share,
+        DrawerShare::new(),
+        "tab 2's saved share is NaN, which names no position, so it must plan a new share; \
+         NaN kept means a corrupt saved share reaches the paned"
+    );
+
+    let fresh = restore_plans(None, None, Some(Path::new(HOME)), is_dir);
+    let tab = &fresh[0].tabs[0];
+    assert_eq!(
+        (tab.sidebar_page, &tab.search, tab.drawer_share),
+        (
+            SidebarPage::Files,
+            &SearchFields::default(),
+            DrawerShare::new()
+        ),
+        "a launch with nothing saved must plan the Files page, the panel's initial fields and a \
+         new share. Search means the fresh plan opens the sidebar on the search panel"
+    );
+}
+
+/// E6a to E6d.
+#[test]
+fn sidebar_entry_and_restored_sidebar_round_trip() {
+    let initial = SearchToggles::INITIAL;
+    let files = sidebar_entry(true, SidebarPage::Files, &SearchFields::default());
+    assert_eq!(
+        files,
+        Sidebar {
+            visible: true,
+            mode: Some(SidebarMode::Tree),
+            query: None,
+            case_sensitive: Some(initial.case_sensitive),
+            use_regex: Some(initial.use_regex),
+            all_files: Some(initial.all_files),
+        },
+        "a Files page with an empty field must write mode tree, no query and every toggle. \
+         query Some(\"\") means an empty field is written as a query; mode None means the page \
+         is not written"
+    );
+
+    let fields = SearchFields {
+        query: "TODO".to_owned(),
+        toggles: SearchToggles {
+            case_sensitive: true,
+            use_regex: false,
+            all_files: true,
+        },
+    };
+    let search = sidebar_entry(false, SidebarPage::Search, &fields);
+    assert_eq!(
+        search,
+        Sidebar {
+            visible: false,
+            mode: Some(SidebarMode::Search),
+            query: Some("TODO".to_owned()),
+            case_sensitive: Some(true),
+            use_regex: Some(false),
+            all_files: Some(true),
+        },
+        "a hidden Search page with a query must write every field as given. visible true means \
+         the preference is ignored; a toggle at its initial value means the field's toggles are \
+         not read"
+    );
+
+    assert_eq!(
+        restored_sidebar(&files),
+        (SidebarPage::Files, SearchFields::default()),
+        "the written Files sidebar must read back as the Files page and the initial fields"
+    );
+    assert_eq!(
+        restored_sidebar(&search),
+        (SidebarPage::Search, fields),
+        "the written Search sidebar must read back as the Search page with its query and \
+         toggles. Files means the saved mode is ignored on the way back"
+    );
+    assert_eq!(
+        restored_sidebar(&Sidebar::default()),
+        (SidebarPage::Files, SearchFields::default()),
+        "a sidebar with nothing but its visibility must read as the Files page and the panel's \
+         initial fields, regex on. Regex off means a missing toggle reads as false rather than \
+         as the panel's initial value"
+    );
+}
+
+/// E7a to E7c.
+#[test]
+fn a_restored_search_runs_only_on_a_search_page_with_a_query() {
+    let cases = [
+        (
+            SidebarPage::Search,
+            false,
+            "zz",
+            true,
+            "a Search page with a query",
+        ),
+        (SidebarPage::Files, false, "zz", false, "the Files page"),
+        (SidebarPage::Search, true, "zz", false, "an empty tab"),
+        (SidebarPage::Search, false, "  ", false, "a query of spaces"),
+        (SidebarPage::Search, false, "", false, "no query"),
+    ];
+    for (page, empty, query, want, what) in cases {
+        assert_eq!(
+            restore_runs_search(page, empty, query),
+            want,
+            "{what} ({page:?}, empty {empty}, query {query:?}) must {}run the restored search. \
+             The Files row running means the page is not consulted; the empty row running means \
+             a project-less tab searches its home directory; the spaces row running means the \
+             query is not trimmed",
+            if want { "" } else { "not " }
+        );
+    }
+}
+
+/// E8a and E8b.
+#[test]
+fn a_cursor_is_captured_only_from_a_live_neovim() {
+    let cases = [
+        (Some(Liveness::Alive), true),
+        (Some(Liveness::NotResponding), false),
+        (Some(Liveness::Dead), false),
+        (None, false),
+    ];
+    for (liveness, want) in cases {
+        assert_eq!(
+            may_capture_cursor(liveness),
+            want,
+            "the capture's blocking cursor read must {}run for {liveness:?}. A NotResponding \
+             Neovim answering true means the capture would block the main thread on a stalled \
+             Neovim for the RPC timeout; Alive answering false means no cursor is ever captured",
+            if want { "" } else { "not " }
+        );
+    }
 }
 
 /// G7a. Input and output are in build order, backmost first; `Some(j)` waits for window `j`.

@@ -19,6 +19,7 @@ use super::editor::{
     PICKER_OCR, PUM_OCR_ITEM, PUM_OCR_ITEM2, SAVEAS_READBACK_NAMELESS_NAME, SAVEAS_TYPED_NAME,
     SAVE_FIXTURE_FILE, SAVE_READBACK_BEFORE_NAME,
 };
+use super::extras::{CV_A_FILE, CV_B_FILE, CV_C_FILE, DZ_FILE, PS_FILE, RV_A_FILE, RV_B_FILE};
 use super::header_bar::{HB_READ_NAME, HB_TARGET_FILE};
 use super::panes::{
     CHORD_CLOSE_OCR_GONE, CHORD_CLOSE_OCR_KEEP, CLOSE_OCR_GONE, CLOSE_OCR_KEEP, FOCUS_OCR_LEFT,
@@ -314,6 +315,14 @@ use super::*;
 ///   `FRAME_STATS_REQUIRED_LABELS` present, `FRAME_STATS_ABSENT_LABELS` absent. A
 ///   rendered word cannot put a row in a file the application wrote, so no fixture
 ///   filename can reach either half.
+///
+/// * The extras smokes in `extras.rs` capture nothing but two sidebar-band PNGs, compared as
+///   raw pixels: their observables are readbacks Neovim and the drawer's shell write, and
+///   frozen state databases. Their fixtures are registered in [`RELAUNCH_FIXTURE_NAMES`] for
+///   the generic loop's sake. `each_tab_keeps_its_drawer_share_across_a_relaunch_under_cage`
+///   writes no fixture and reads only `stty size` readbacks and a frozen state.
+///   `a_restored_search_sidebar_runs_its_query_under_cage` asserts on the case smoke's terms
+///   over the case smoke's fixtures, so it is covered through that smoke's rows.
 ///
 /// The other pointer smokes DO OCR and their terms are listed below. For
 /// `click_then_close_keeps_keyboard_input_alive_under_cage` the OCR pair is
@@ -1594,6 +1603,41 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         HB_READ_NAME,
         "HB_READ_NAME",
         "header_start_holds_nav_and_toggles_alone_under_cage",
+    ),
+    (
+        CV_A_FILE,
+        "CV_A_FILE",
+        "pane_cursors_are_captured_and_restored_under_cage",
+    ),
+    (
+        CV_B_FILE,
+        "CV_B_FILE",
+        "pane_cursors_are_captured_and_restored_under_cage",
+    ),
+    (
+        CV_C_FILE,
+        "CV_C_FILE",
+        "pane_cursors_are_captured_and_restored_under_cage",
+    ),
+    (
+        PS_FILE,
+        "PS_FILE",
+        "preview_scroll_survives_a_close_and_relaunch_under_cage",
+    ),
+    (
+        DZ_FILE,
+        "DZ_FILE",
+        "a_zoomed_focused_drawer_restores_under_cage",
+    ),
+    (
+        RV_A_FILE,
+        "RV_A_FILE",
+        "a_restored_top_line_survives_its_grid_resize_under_cage",
+    ),
+    (
+        RV_B_FILE,
+        "RV_B_FILE",
+        "a_restored_top_line_survives_its_grid_resize_under_cage",
     ),
 ];
 

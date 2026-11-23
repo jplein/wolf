@@ -1,8 +1,10 @@
 //! The terminal drawer's divider smokes: a pointer drag on the handle between the editor tree
 //! and the drawer resizes both, reaches the drawer's session, survives the drawer closing and
-//! reopening, stops at both floors, and carries into a second tab of the same window. A
-//! dragged share also survives a window shrink that clamps the editor and a grow back.
+//! reopening, stops at both floors, and carries into a new tab opened from that tab. A dragged
+//! share also survives a window shrink that clamps the editor and a grow back, and each tab of
+//! a window keeps its own share across a relaunch.
 
+use super::extras::{tab_bar_y, two_tab_x, EXTRAS_HELPERS};
 use super::terminal::{drawer_paned_at, drawer_strip_edges, pin_terminal_smoke_shell};
 use super::*;
 
@@ -149,9 +151,9 @@ drag_handle() {
 }
 "#;
 
-/// The drawer's divider is a draggable `gtk::Paned` handle whose position lives in the
-/// window's drawer share: a drag resizes the editor and the drawer and the drawer's session,
-/// the share survives the drawer closing and reopening and reaches a second tab, both floors
+/// The drawer's divider is a draggable `gtk::Paned` handle whose position lives in the tab's
+/// drawer share: a drag resizes the editor and the drawer and the drawer's session, the share
+/// survives the drawer closing and reopening and reaches a new tab opened from it, both floors
 /// hold, and with the drawer closed the editor has the whole pane area back.
 ///
 /// ## The scenario
@@ -179,13 +181,13 @@ drag_handle() {
 /// | C7 | A3: C is L, the editor's `winheight(0)` and one window [11] | in `rebuild_pane_area`, with no drawer bound but a moved share, still append `build_drawer_paned` over an empty `gtk::Box` | C's `winheight(0)` is 3 |
 /// | C8 | A4: R equals D, rows and columns, and G-R's drawer `winheight` equals G-D's | in `clear_drawer`, after `self.drawer.set(state);`, add `self.drawer_share.set(DrawerShare::new());` | R and G-R are back at O and G-O |
 /// | C10 | A6: D rows < M rows < L's `winheight(0)` [5 < 7 < 11] | in `build_drawer_paned`, `set_shrink_start_child(false)` → `(true)` | M reaches L's 11 |
-/// | C9 | A5: T rows > O rows [6 > 1] | in `pane_view::build`, `drawer_share: drawer_share.clone(),` → `drawer_share: Rc::new(Cell::new(DrawerShare::new())),` | T rows equal O's 1 |
+/// | E22a | A5: T rows > O rows [6 > 1] | in `AppShell::new_tab`, pass `DrawerShare::new()` in place of the selected tab's share | T rows equal O's 1 |
 ///
 /// C6a is the snap back on the next wake and C8 the snap back on a rebuild.
 ///
-/// A5 holds only because the share is the window's: the second tab's pane area is
-/// [`TAB_BAR_HEIGHT_EXPECTED`] shorter, so a new share there gives the drawer no more rows
-/// than O. The share the limit drag left clamps to the editor's floor in that tab too.
+/// A5 holds because New Tab gives the new tab the selected tab's share: the second tab's pane
+/// area is [`TAB_BAR_HEIGHT_EXPECTED`] shorter, so a new share there gives the drawer no more
+/// rows than O. The share the limit drag left clamps to the editor's floor in that tab too.
 ///
 /// ## Order
 ///
@@ -316,7 +318,7 @@ fn drawer_divider_drag_resizes_and_is_remembered_under_cage() {
          pressed at ({handle_x}, {handle_y}), where `drawer_strip_edges` puts a new window's \
          handle, and the retained capture {} shows where it is. Equal heights with the press on \
          the handle mean the position snapped back to the default share: the paned's \
-         `notify::position` handler did not write the drag into the window's share, so the \
+         `notify::position` handler did not write the drag into the tab's share, so the \
          next wake re-applied the old one. A taller editor means the share's direction is \
          inverted.",
         gd[0],
@@ -377,7 +379,7 @@ fn drawer_divider_drag_resizes_and_is_remembered_under_cage() {
         gr[1], gd[1],
         "{SMOKE}: the reopened drawer's Neovim window is {} rows, against {} before it was hidden \
          and {} when it first opened. The paned rebuilt on reopening must take its position from \
-         the window's share, not from DRAWER_WEIGHT.",
+         the tab's share, not from DRAWER_WEIGHT.",
         gr[1], gd[1], go[1]
     );
 
@@ -402,7 +404,7 @@ fn drawer_divider_drag_resizes_and_is_remembered_under_cage() {
         l[0]
     );
 
-    // --- A5 (C9): the share is the window's, not the tab's ----------------------
+    // --- A5 (E22a): a new tab takes the selected tab's share -------------------
     leg(&[read_tab.as_path(), read_t.as_path()], "A5");
     let tab = read_ints(&read_tab, 2, SMOKE);
     assert_eq!(
@@ -421,8 +423,8 @@ fn drawer_divider_drag_resizes_and_is_remembered_under_cage() {
         t[0] > o[0],
         "{SMOKE}: the second tab's drawer opened with {} rows, no more than the {} a new \
          window's drawer has. The second tab's pane area is {TAB_BAR_HEIGHT_EXPECTED} px \
-         shorter, so a default share there gives at most O's rows: the tab's pane view got a \
-         share of its own rather than the window's.",
+         shorter, so a default share there gives at most O's rows: New Tab gave the new tab a \
+         new share rather than the selected tab's.",
         t[0],
         o[0]
     );
@@ -867,5 +869,274 @@ fn require_resize_leg(smoke: &str, status: ExitStatus, paths: &[&Path], leg: &st
          100 (`wlr-randr` listed no output or refused the mode; the cage log has its listing), \
          101 (the output never reported the mode as current). An exit 0 with a file missing \
          means it was written somewhere else."
+    );
+}
+
+/// The inclusive band of exit codes [`TAB_SHARES_BODY`] adds to [`POINTER_PREAMBLE`]'s 11-15
+/// and 40.
+const TAB_SHARES_EXITS: std::ops::RangeInclusive<i32> = 140..=149;
+
+/// How far the saved share of a tab whose drawer was never dragged may be from a third.
+const UNDRAGGED_SHARE_EPS: f64 = 0.01;
+
+/// How much larger the dragged tab's saved share must be than the other's. The drag of
+/// [`DRAWER_DRAG_PX`] moves it by about a quarter at the two-tab pane area.
+const MIN_SHARE_GAP: f64 = 0.05;
+
+/// Body of [`each_tab_keeps_its_drawer_share_across_a_relaunch_under_cage`], appended to
+/// [`POINTER_PREAMBLE`], [`EXTRAS_HELPERS`] and [`DRAWER_DIVIDER_HELPERS`], whose `chord_w`
+/// is the same as the first's.
+///
+/// Every readback is the focused drawer shell's `stty size`. A readback typed where no shell
+/// has focus never appears, and its exit code names the leg.
+///
+/// ## Exit codes it adds to [`POINTER_PREAMBLE`]'s 11-15
+///
+/// | code | readback | meaning |
+/// | --- | --- | --- |
+/// | `140` | O1 | no shell answered after Ctrl+` in tab 1 |
+/// | `141` | D1 | no shell answered after the drag: focus left tab 1's drawer |
+/// | `142` | O0 | no shell answered after the click on tab 0 and Ctrl+` |
+/// | `143` | D1' | no shell answered after the click back on tab 1 |
+/// | `144` | — | run 1 was still alive after Ctrl+Shift+Q |
+/// | `145` | — | run 1 exited non-zero |
+/// | `146` | — | no `wolf.sqlite` to freeze after the quit |
+/// | `147` | — | run 2 died before it was ready |
+/// | `148` | R1 | no shell answered in run 2's selected tab: its drawer did not reopen focused |
+/// | `149` | R0 | no shell answered after the click on tab 0 in run 2 |
+const TAB_SHARES_BODY: &str = r#"
+# $1 is the readback file, $2 the exit code. Only a drawer's shell writes it.
+shell_size() {
+    wtype -- "stty size > '$1'"
+    wtype -k Return
+    wait_file "$1" || exit "$2"
+}
+
+# --- Two tabs first, so both drawers open over the two-tab pane area ---------------------
+wtype -M ctrl -M shift -k t -m shift -m ctrl
+sleep "$TABS_BAR_SETTLE"
+
+# --- O1, D1: tab 1's drawer at a new share, then dragged up -------------------------------
+toggle_drawer
+shell_size "$READ_O1" 140
+drag_handle "$HANDLE_Y" "$DRAGGED_Y"
+shell_size "$READ_D1" 141
+
+# --- O0: tab 0's drawer -------------------------------------------------------------------
+click_tab "$TAB0_X" "$TAB_Y"
+toggle_drawer
+shell_size "$READ_O0" 142
+
+# --- D1': back in tab 1, whose drawer still has focus -------------------------------------
+click_tab "$TAB1_X" "$TAB_Y"
+shell_size "$READ_D1B" 143
+
+wtype -M ctrl -M shift -k q -m shift -m ctrl
+reap_app 144 145
+freeze_or_exit "$STATE_Q" 146
+
+# --- RUN 2: tab 1 selected, then tab 0 ----------------------------------------------------
+"$WOLF_BIN" &
+app_pid=$!
+wait_ready "$app_pid" 147 "wolf-gnome tab drawer share smoke, run 2"
+sleep "$RESTORE_SETTLE"
+shell_size "$READ_R1" 148
+click_tab "$TAB0_X" "$TAB_Y"
+shell_size "$READ_R0" 149
+
+hsend quit
+exit 0
+"#;
+
+/// **Each tab of a window keeps its own drawer share: a drag in one tab leaves the other's
+/// drawer where it was, a tab switch shows each tab's own, and a relaunch restores both.**
+///
+/// ## The scenario
+///
+/// Two launches in one cage, the first through [`POINTER_PREAMBLE`]. Ctrl+Shift+T comes first,
+/// so both tabs have the two-tab pane area, and selects tab 1. There Ctrl+` opens the drawer,
+/// read as O1, and the handle is dragged [`DRAWER_DRAG_PX`] up, read as D1. A click on tab 0
+/// and Ctrl+` open its drawer, read as O0, and a click back on tab 1 reads D1' in its drawer.
+/// Ctrl+Shift+Q quits and Q is frozen. Run 2 starts on tab 1 and reads R1 in its restored
+/// drawer, then a click on tab 0 reads R0.
+///
+/// The handle is pressed where [`drawer_strip_edges`]'s derivation puts a new share's at the
+/// two-tab pane area: [`drawer_paned_at`] of an output [`TAB_BAR_HEIGHT_EXPECTED`] shorter,
+/// offset down by the tab bar.
+///
+/// ## Assertions
+///
+/// | ID | assertion | falsifying edit | predicted red |
+/// | --- | --- | --- | --- |
+/// | — | precondition: D1's rows exceed O1's by at least [`MIN_DRAG_ROWS`] | none | n/a |
+/// | E21a | O0 equals O1, rows and columns | every tab's pane view shares one `Rc<Cell<DrawerShare>>` held by `TabsInner` | O0 equals D1 |
+/// | — | D1' equals D1 | none | n/a |
+/// | E21c | Q: both tabs' drawers saved open | the gather writes `open: false` | Q: both closed |
+/// | E21b | Q: tab 0's share within [`UNDRAGGED_SHARE_EPS`] of a third, and tab 1's at least [`MIN_SHARE_GAP`] above it | the gather writes `share: DRAWER_WEIGHT` | Q: tab 1's share is a third |
+/// | E21e | run 2's readbacks appear | the restore calls no `toggle_terminal` | exit 148 |
+/// | E21d | R1 equals D1, and R0 equals O0 | `plan_for_window` sets `DrawerShare::new()` | R1 below D1 |
+#[test]
+fn each_tab_keeps_its_drawer_share_across_a_relaunch_under_cage() {
+    const SMOKE: &str = "each_tab_keeps_its_drawer_share_across_a_relaunch_under_cage";
+
+    let runtime_dir = require_smoke_env();
+    let cwd = make_temp_cwd();
+
+    let read = |name: &str| runtime_dir.join(format!("wolf_gnome_tab_shares_{name}.txt"));
+    let read_o1 = read("o1");
+    let read_d1 = read("d1");
+    let read_o0 = read("o0");
+    let read_d1b = read("d1b");
+    let read_r1 = read("r1");
+    let read_r0 = read("r0");
+    let out_png = runtime_dir.join("wolf_gnome_tab_shares_smoke.png");
+    for path in [
+        &read_o1, &read_d1, &read_o0, &read_d1b, &read_r1, &read_r0, &out_png,
+    ] {
+        clear_evidence(path, SMOKE);
+    }
+    let state_q = frozen_state_dir(&runtime_dir, "wolf_gnome_tab_shares_q_state", SMOKE);
+
+    let output_h = exact_f64(CAGE_OUTPUT_H_EXPECTED, "CAGE_OUTPUT_H_EXPECTED");
+    let paned = drawer_paned_at(output_h - TAB_BAR_HEIGHT_EXPECTED);
+    let position =
+        wolf_gnome::drawer::DrawerShare::new().position(paned.floor, paned.max, paned.span);
+    let handle_x = i64::from(PROBE_X);
+    let handle_y = pixel_target(
+        OVERLAY_ORIGIN_Y_EXPECTED + TAB_BAR_HEIGHT_EXPECTED + f64::from(position),
+        "the two-tab drawer handle's y",
+    );
+    let dragged_y = handle_y - DRAWER_DRAG_PX;
+    let (tab0_x, tab1_x, tab_y) = (two_tab_x(0), two_tab_x(1), tab_bar_y());
+
+    let body = format!("{EXTRAS_HELPERS}\n{DRAWER_DIVIDER_HELPERS}\n{TAB_SHARES_BODY}");
+    let mut cmd = pointer_command(&body, &cwd, &runtime_dir, &out_png);
+    pin_terminal_smoke_shell(&mut cmd)
+        .env("HANDLE_X", handle_x.to_string())
+        .env("HANDLE_Y", handle_y.to_string())
+        .env("DRAGGED_Y", dragged_y.to_string())
+        .env("TAB0_X", tab0_x.to_string())
+        .env("TAB1_X", tab1_x.to_string())
+        .env("TAB_Y", tab_y.to_string())
+        .env("STATE_SRC", smoke_state_dir(&cwd))
+        .env("STATE_Q", &state_q)
+        .env("READ_O1", &read_o1)
+        .env("READ_D1", &read_d1)
+        .env("READ_O0", &read_o0)
+        .env("READ_D1B", &read_d1b)
+        .env("READ_R1", &read_r1)
+        .env("READ_R0", &read_r0);
+    let status = cmd
+        .status()
+        .expect("failed to spawn `cage` for the headless tab drawer share scenario");
+    if !status
+        .code()
+        .is_some_and(|code| TAB_SHARES_EXITS.contains(&code))
+    {
+        assert_pointer_scenario_succeeded(SMOKE, status, &cwd, &out_png);
+    }
+    let extents = read_output_extents(&cwd, SMOKE);
+    for (label, point) in [
+        ("the two-tab handle at a new share", (handle_x, handle_y)),
+        ("the handle after the drag", (handle_x, dragged_y)),
+        ("tab 0's centre", (tab0_x, tab_y)),
+        ("tab 1's centre", (tab1_x, tab_y)),
+    ] {
+        assert_inside_extents(SMOKE, label, point, extents);
+    }
+
+    let leg = |paths: &[&PathBuf], name: &str| {
+        let missing: Vec<String> = paths
+            .iter()
+            .filter(|path| !path.exists())
+            .map(|path| path.display().to_string())
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "{SMOKE}: leg {name}'s evidence {missing:?} does not exist, and the scenario exited \
+             {status}. 140 O1 (Ctrl+` opened no focused drawer in tab 1), 141 D1 (the drag took \
+             focus off the drawer), 142 O0, 143 D1' (tab 1's drawer lost focus over the switch), \
+             144 or 145 the quit, 146 no wolf.sqlite, 147 run 2 died, 148 R1 (run 2's selected \
+             tab reopened no focused drawer), 149 R0."
+        );
+    };
+
+    // --- Precondition: the drag moved tab 1's divider ---------------------------------------
+    leg(&[&read_o1, &read_d1], "D1");
+    let o1 = read_ints(&read_o1, 2, SMOKE);
+    let d1 = read_ints(&read_d1, 2, SMOKE);
+    assert!(
+        d1[0] >= o1[0] + MIN_DRAG_ROWS,
+        "{SMOKE}: tab 1's drawer reports {} rows after the drag and {} before; want at least \
+         {MIN_DRAG_ROWS} more. Read this first as the press missing the handle: it was pressed \
+         at ({handle_x}, {handle_y}), where a new share's handle sits below the tab bar, and the \
+         retained capture {} shows where it is. Nothing below can tell a share kept per tab from \
+         one never dragged.",
+        d1[0],
+        o1[0],
+        out_png.display()
+    );
+
+    // --- E21a: tab 0's drawer opened at its own share ---------------------------------------
+    leg(&[&read_o0], "O0");
+    let o0 = read_ints(&read_o0, 2, SMOKE);
+    assert_eq!(
+        o0, o1,
+        "{SMOKE}: tab 0's drawer opened at {o0:?} (rows, columns), against {o1:?} for tab 1's \
+         before its drag and {d1:?} after it. Equal to D1 means tab 1's drag moved tab 0's \
+         drawer too: the tabs share one drawer share."
+    );
+
+    // --- D1': the switch back shows tab 1's own share ----------------------------------------
+    leg(&[&read_d1b], "D1'");
+    let d1b = read_ints(&read_d1b, 2, SMOKE);
+    assert_eq!(
+        d1b, d1,
+        "{SMOKE}: back in tab 1 its drawer reports {d1b:?}, against {d1:?} before the switch. \
+         O0's {o0:?} means opening tab 0's drawer reset tab 1's share, or the switch applied \
+         another tab's share to it."
+    );
+
+    // --- E21c and E21b: the save holds each tab's drawer ------------------------------------
+    leg(&[&state_q], "Q");
+    let saved = frozen_window_state(&state_q, SMOKE, "Q, frozen after the quit");
+    let drawers: Vec<Option<wolf_core::app_state::Drawer>> = saved
+        .windows
+        .first()
+        .map(|window| window.tabs.iter().map(|tab| tab.content.drawer).collect())
+        .unwrap_or_default();
+    assert!(
+        drawers.len() == 2 && drawers.iter().all(|d| d.is_some_and(|d| d.open)),
+        "{SMOKE}: Q saved the tabs' drawers as {drawers:?}; want two, both open. Closed means \
+         the gather does not write an open drawer as open; None, that it writes no drawer. File: \
+         {}",
+        state_q.display()
+    );
+    let shares: Vec<f64> = drawers.iter().flatten().map(|d| d.share).collect();
+    assert!(
+        (shares[0] - 1.0 / 3.0).abs() <= UNDRAGGED_SHARE_EPS
+            && shares[1] >= shares[0] + MIN_SHARE_GAP,
+        "{SMOKE}: Q saved the shares {shares:?}; want tab 0's within {UNDRAGGED_SHARE_EPS} of a \
+         third and tab 1's at least {MIN_SHARE_GAP} above it. Both a third means the gather \
+         writes no tab's live share; both equal and larger, that one share is every tab's. File: \
+         {}",
+        state_q.display()
+    );
+
+    // --- E21e and E21d: run 2 restores each tab's drawer at its share -------------------------
+    leg(&[&read_r1], "R1");
+    let r1 = read_ints(&read_r1, 2, SMOKE);
+    assert_eq!(
+        r1, d1,
+        "{SMOKE}: run 2's tab 1 drawer reports {r1:?}, against {d1:?} in run 1. O1's {o1:?} \
+         means the saved share was not restored into the tab, so the drawer reopened at a new \
+         share."
+    );
+    leg(&[&read_r0], "R0");
+    let r0 = read_ints(&read_r0, 2, SMOKE);
+    assert_eq!(
+        r0, o0,
+        "{SMOKE}: run 2's tab 0 drawer reports {r0:?}, against {o0:?} in run 1. D1's {d1:?} \
+         means tab 1's restored share reached tab 0."
     );
 }

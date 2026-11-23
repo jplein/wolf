@@ -56,15 +56,17 @@
 //!   each leaf out of the snapshot's WINDOW-KEYED maps — `Snapshot::previews`, then
 //!   `Snapshot::win_buffers` — by the pane's own Neovim window handle
 //!   ([`PaneInner::leaf_contents`]), and encodes the result via
-//!   [`crate::pane_layout::encode`], with the zoomed pane's
-//!   [`crate::pane_layout::leaf_index`]. It is called from [`crate::persistence`] for EVERY tab on every render wake and at
+//!   [`crate::pane_layout::encode_with_views`], with each leaf's last captured view,
+//!   the zoomed and active panes as references, and the drawer. It is called from
+//!   [`crate::persistence`] for EVERY tab on every render wake and at
 //!   `close-request`. [`PaneHandle::snapshot_readiness`] supplies the two counts
 //!   `state_seam::may_snapshot` gates on, so a snapshot taken before the first
 //!   pane binds can never wipe a good save.
 //!
-//!   This reads no per-pane cache and makes no core call beyond one snapshot read of
-//!   the tab's own Neovim, so a BACKGROUND tab is gathered live rather than
-//!   last-known-good. A leaf whose window is in neither map refuses the whole tab's
+//!   The paths and the topology come from one snapshot read of the tab's own Neovim,
+//!   so a BACKGROUND tab is gathered live rather than last-known-good. Cursors, top
+//!   lines and scrolls are the views [`PaneHandle::capture_viewports`] and a focus
+//!   change captured. A leaf whose window is in neither map refuses the whole tab's
 //!   gather ([`crate::pane_layout::LayoutGather::Refuse`]), and the tab then
 //!   contributes its cached tab.
 //! - **Restore.** One route: [`PaneHandle::request_layout_rebuild`] queues the saved
@@ -72,7 +74,9 @@
 //!   ([`PaneInner::consume_pending_layout`]). It ends in
 //!   [`PaneInner::apply_layout_rebuild`] and `WolfCore::rebuild_layout`, a blocking
 //!   RPC against the tab's own Neovim and documented there; each restored tab costs
-//!   at most one.
+//!   at most one. [`PaneInner::restore_extras`] then applies the saved focus, zoom,
+//!   drawer and views, and [`PaneInner::apply_pending_views`] applies each edit pane's
+//!   view again once the tab's shown grids have settled.
 //!
 //! A user's DIVIDER DRAG feeds the save half. [`install_paned_position`] writes the
 //! dragged `gtk::Paned` position back into the tree's weights through
@@ -175,11 +179,11 @@ use gtk::{gio, glib};
 // with `adw::prelude::*` and makes every `WidgetExt` method ambiguous.
 use webkit6::prelude::{PolicyDecisionExt, WebViewExt};
 
-use wolf_core::app_state::{PaneRef, TabContent};
+use wolf_core::app_state::{Node, TabContent};
 use wolf_core::{
     CursorShape, LayoutIntent, MouseAction, MouseButton, MouseEvent, PaneStatus, PreviewInfo, Rgb,
     ScrollEvent, Snapshot, SplitOrientation, TerminalCommand, TerminalId, TerminalMouseEvent,
-    TerminalMouseKind, TerminalScrollEvent, TerminalTarget, ToastChunk, WolfCore,
+    TerminalMouseKind, TerminalScrollEvent, TerminalTarget, ToastChunk, WindowCursor, WolfCore,
 };
 
 use crate::cmdline_ui::{self, PumView, ToastView};
@@ -192,14 +196,15 @@ use crate::layout::{Orientation, PaneId, PaneLayout, PaneTree};
 use crate::liveness_ui::TerminalRestore;
 use crate::mouse::{self, PaneScroll, ScrollAccumulator};
 use crate::other_pane_seam::{self, Side, Target};
-use crate::pane_layout;
-use crate::pane_zoom::{self, ZoomEvent};
+use crate::pane_layout::{self, LiveLayout, PaneView};
+use crate::pane_zoom::{self, RestoreTarget, RestoreTargets, ZoomEvent};
 use crate::preview_coalescer::{PreviewCoalescer, RenderDecision};
 use crate::preview_link::{self, PreviewLink};
 use crate::preview_ui::{self, DocumentUpdate, PreviewFilePress, PreviewLoad};
 use crate::ready_seam;
 use crate::render::{draw_glyph, draw_text_line, FALLBACK_BG, FALLBACK_FG};
 use crate::scrollbar;
+use crate::state_seam;
 use crate::statusbar_layout::{
     self, StatusbarLayout, STATUSBAR_LINE_GAP, STATUSBAR_VERTICAL_PADDING,
 };
@@ -361,6 +366,18 @@ struct PaneWidgets {
     /// render lands click another carrying none, and the second file scrolls to the
     /// first file's anchor.
     pending_fragment: RefCell<Option<String>>,
+    /// The scroll fraction the view's page last reported through
+    /// [`preview_ui::SCROLL_REPORT_JS`], or `None` before its first report. It belongs to
+    /// the view and is cleared with `loaded`.
+    reported_scroll: Cell<Option<f64>>,
+    /// A restored preview's saved scroll, waiting for its page's `LoadEvent::Finished`
+    /// edge ([`PaneInner::on_preview_load_finished`]). While it waits, a capture keeps
+    /// the seeded view rather than the top-of-page scroll the page reports at load.
+    pending_scroll: Cell<Option<f64>>,
+    /// A restored edit pane's saved view, waiting for its tab's shown grids to settle
+    /// ([`PaneInner::apply_pending_views`]). While it waits, a capture keeps the seeded
+    /// view rather than the top line Neovim re-scrolled the window to.
+    pending_view: Cell<Option<WindowCursor>>,
     /// The terminal session this pane's window shows, from `Snapshot::win_buffers`, or `None`
     /// for an editor pane. Filled once per wake by [`PaneInner::refresh_pane_state`].
     ///
@@ -408,6 +425,9 @@ impl PaneWidgets {
             current_load: Cell::new(None),
             head_len: Cell::new(0),
             pending_fragment: RefCell::new(None),
+            reported_scroll: Cell::new(None),
+            pending_scroll: Cell::new(None),
+            pending_view: Cell::new(None),
             terminal: Cell::new(None),
             canvas: RefCell::new(None),
             drag_terminal: Cell::new(None),
@@ -589,7 +609,8 @@ struct PaneInner {
     /// entry, which is what gives it a statusbar, a column cap, a grid resize and a
     /// paint with no drawer branch anywhere on those paths.
     drawer: Cell<DrawerState>,
-    /// The window's drawer share, owned by `tab_view` and shared with every tab.
+    /// This tab's drawer share, seeded by [`build`] and moved by a drag of this tab's
+    /// drawer divider alone.
     ///
     /// Outside [`DrawerState`], so [`Self::clear_drawer`] leaves it. Shared by `Rc` for the reason
     /// [`Self::tree`] is: the drawer divider's closures need it, and there is no cycle.
@@ -601,13 +622,26 @@ struct PaneInner {
     ///
     /// Per tab. A zoom touches neither [`Self::tree`], its weights, [`Self::drawer_share`]
     /// nor [`Self::drawer`], so the layout a snapshot saves is the unzoomed one and an unzoom
-    /// rebuilds it exactly. The saved window state records it as the tab's `zoomed` pane index,
-    /// which a launch rebuild re-zooms. The rules are [`crate::pane_zoom`]'s.
+    /// rebuilds it exactly. The saved window state records it as the tab's `zoomed` pane
+    /// reference, which a launch re-zooms. The rules are [`crate::pane_zoom`]'s.
     zoomed: Cell<Option<PaneId>>,
     /// A saved tab awaiting realization, set ONCE at launch by
     /// [`PaneHandle::request_layout_rebuild`] and consumed by the first wake at
     /// which a window grid exists (see [`PaneInner::consume_pending_layout`]).
     pending_layout: RefCell<Option<TabContent>>,
+    /// The last captured view of each tree leaf, which the gather writes into the saved
+    /// tree ([`pane_layout::encode_with_views`]).
+    ///
+    /// Written only at `specs/application-state.md` §4's capture moments
+    /// ([`Self::capture_view`]) and seeded at restore, never on every wake, so a save
+    /// writes the view of the last capture. A restart clears it and captures nothing.
+    views: RefCell<HashMap<PaneId, PaneView>>,
+    /// A restored drawer's zoom and focus, waiting for the drawer the restore reopened to
+    /// bind ([`Self::apply_drawer_open`]). Readiness waits for it.
+    pending_drawer_restore: Cell<Option<RestoreTargets>>,
+    /// A restored pane zoom deferred past the drawer's bind, which unzooms, and applied
+    /// by [`Self::update_active_pane`] on the wake that focuses that pane.
+    pending_restore_zoom: Cell<Option<PaneId>>,
     /// The trailing-render state machine behind the Markdown preview
     /// ([`PaneInner::request_preview_render`]).
     ///
@@ -637,6 +671,9 @@ struct PaneInner {
     /// ([`Self::run_pending_terminal_restore`]).
     pending_terminal_restore: RefCell<Option<Vec<TerminalRestore>>>,
 }
+
+/// A pane [`PaneInner::readiness`] counts: its id, its grid and the size it last requested.
+type ShownGrid = (PaneId, u64, Option<(u16, u16)>);
 
 impl PaneInner {
     /// Orchestrates a render wake: ensure a first pane exists, apply layout intents,
@@ -668,12 +705,14 @@ impl PaneInner {
         let prev_start = frame_metrics::begin();
         self.refresh_previews();
         frame_metrics::end(Bucket::PanePrev, prev_start);
-        // Before `sync_pane_grids`: a drag in another tab moves the window's share with no
-        // `max-position` notify here, so each wake re-applies it to this tab's drawer divider.
+        // Before `sync_pane_grids`: each wake re-derives this tab's drawer divider from its own
+        // share, which a tab switch shows with no `max-position` notify here.
         self.apply_drawer_frame();
         // After `refresh_pane_state`, which caches the flag the cap depends on; before
         // `update_active_pane`, so the order stays: read core state, then decide, then paint.
         self.sync_pane_grids();
+        // After `sync_pane_grids`, so a grid it has just asked to resize does not count as settled.
+        self.apply_pending_views();
         self.update_active_pane();
         // After `update_active_pane`: the active pane is the one that sizes a session it shows.
         self.sync_terminal_sizes();
@@ -901,6 +940,11 @@ impl PaneInner {
     ///   dropped with a message. Splits made before the restore could run mean the
     ///   saved topology no longer describes this tab, and rebuilding over it would
     ///   discard live windows.
+    ///
+    /// A root that is `None` or [`pane_layout::is_empty_leaf`] rebuilds no Neovim
+    /// windows: the bound pane is its leaf 0, [`Self::restore_extras`] still applies the
+    /// saved focus, zoom and drawer, and the wake goes on (`false`). Any other root goes
+    /// through [`Self::apply_layout_rebuild`].
     fn consume_pending_layout(self: &Rc<Self>) -> bool {
         if self.pending_layout.borrow().is_none() {
             return false;
@@ -920,8 +964,77 @@ impl PaneInner {
             );
             return false;
         }
-        self.apply_layout_rebuild(&saved);
-        true
+        match saved.root.as_ref() {
+            Some(root) if !pane_layout::is_empty_leaf(root) => {
+                self.apply_layout_rebuild(&saved);
+                true
+            }
+            root => {
+                let leaf_ids = self.tree.borrow().leaves();
+                let active = self.restore_extras(&saved, root, &leaf_ids);
+                self.rebuild_pane_area();
+                self.set_active_pane(active);
+                false
+            }
+        }
+    }
+
+    /// Applies a restored tab's extras to its leaves, `leaf_ids` in depth-first order,
+    /// and answers the pane to make active: the saved focus, else the first leaf.
+    ///
+    /// It seeds [`Self::views`], each preview's `pending_scroll` and each edit pane's
+    /// `pending_view` from `root`, and
+    /// maps the saved zoom and focus through [`pane_zoom::restore_targets`]. A saved open
+    /// drawer is reopened with `WolfCore::toggle_terminal`, which starts a fresh shell in
+    /// the tab's Neovim's directory, followed by a `focus_win` of a focused leaf, both on
+    /// the ordered input channel; the zoom and focus then wait in
+    /// [`Self::pending_drawer_restore`] for the drawer's bind. Otherwise a pane zoom
+    /// applies at once, and the caller rebuilds the pane area.
+    fn restore_extras(
+        &self,
+        content: &TabContent,
+        root: Option<&Node>,
+        leaf_ids: &[PaneId],
+    ) -> Option<PaneId> {
+        let seeded = root.map_or_else(HashMap::new, |root| {
+            pane_layout::saved_views(root, leaf_ids)
+        });
+        {
+            let panes = self.panes.borrow();
+            for (id, view) in &seeded {
+                let Some(p) = panes.get(id) else {
+                    continue;
+                };
+                match *view {
+                    PaneView::Preview { scroll } => p.pending_scroll.set(Some(scroll)),
+                    PaneView::Edit { cursor, top_line } => {
+                        p.pending_view.set(Some(WindowCursor { cursor, top_line }));
+                    }
+                }
+            }
+        }
+        *self.views.borrow_mut() = seeded;
+
+        let drawer_open = content.drawer.is_some_and(|d| d.open);
+        let targets =
+            pane_zoom::restore_targets(content.zoomed, content.focused, drawer_open, leaf_ids);
+        let focus = match targets.focus {
+            Some(RestoreTarget::Pane(id)) => Some(id),
+            Some(RestoreTarget::Drawer) | None => None,
+        };
+        if drawer_open {
+            let focus_win = focus.and_then(|id| self.panes.borrow().get(&id).map(|p| p.win));
+            if let Some(core) = self.core.borrow().as_ref() {
+                core.toggle_terminal();
+                if let Some(win) = focus_win {
+                    core.focus_win(win);
+                }
+            }
+            self.pending_drawer_restore.set(Some(targets));
+        } else if let Some(RestoreTarget::Pane(id)) = targets.zoom {
+            self.apply_zoom_event(ZoomEvent::Restore(id));
+        }
+        focus.or_else(|| leaf_ids.first().copied())
     }
 
     /// Realizes a saved pane tree: ask nvim to rebuild the windows, then rebind
@@ -944,11 +1057,11 @@ impl PaneInner {
     ///    wedged nvim at launch marks the core `NotResponding`, and the crash
     ///    overlay presents it.
     /// 4. A handle count that does not match the decoded leaf count aborts,
-    ///    leaving the single already-bound pane intact, and the tab unzoomed.
+    ///    leaving the single already-bound pane intact, with no extras applied.
     ///
-    /// The pane `content.zoomed` names is re-zoomed through [`ZoomEvent::Restore`] and made the
-    /// active pane. The rebuild left Neovim's current window on that leaf, so no later wake reads
-    /// a focus move off it.
+    /// [`Self::restore_extras`] then applies the saved focus, zoom, drawer and views. The
+    /// rebuild left Neovim's current window on the zoomed leaf, else the focused one, since
+    /// `tab_rebuild_spec` marks it, so no later wake reads a focus move off it.
     fn apply_layout_rebuild(self: &Rc<Self>, content: &TabContent) {
         let Some(root) = content.root.as_ref() else {
             return;
@@ -998,19 +1111,13 @@ impl PaneInner {
         // drawer is never a restored leaf. Without it `DrawerState` could name a pane nothing holds.
         self.clear_drawer();
         self.zoomed.set(None);
-        // Before the rebuild, so the first build already shows the zoomed host alone.
-        let saved_zoom = match content.zoomed {
-            Some(PaneRef::Pane(i)) => leaf_ids.get(i).copied(),
-            _ => None,
-        };
-        if let Some(id) = saved_zoom {
-            self.apply_zoom_event(ZoomEvent::Restore(id));
-        }
+        // Before the rebuild, so the first build already shows a zoomed host alone.
+        let active = self.restore_extras(content, Some(root), &leaf_ids);
 
         // The guarded path: it samples focus before teardown, and its remove loop unparents the old
         // single pane's area, `pane_area`'s only child and no longer in `panes`.
         self.rebuild_pane_area();
-        self.set_active_pane(self.zoomed.get().or_else(|| leaf_ids.first().copied()));
+        self.set_active_pane(active);
         self.resolve_pending_grids();
         // Without this every restored pane paints `[No Name]` for one frame: this
         // path early-returns from the wake, so the normal refresh never runs.
@@ -1242,20 +1349,92 @@ impl PaneInner {
     /// and a terminal leaf restores as a split pane, never as the drawer. Putting the
     /// drawer in the tree is what would break this, not editing this function.
     ///
-    /// `zoomed` is the zoomed pane's depth-first index. A zoomed drawer has none, so the tab
-    /// persists unzoomed.
+    /// The root carries each leaf's last captured view ([`Self::views`]). `zoomed` and
+    /// `focused` are [`pane_layout::pane_ref`]'s references to the zoomed and the active
+    /// pane, so a zoomed or focused drawer is saved as the drawer. The drawer entry is
+    /// whether a drawer is bound, with this tab's share.
     fn layout_snapshot(&self) -> pane_layout::LayoutGather {
         let Some(contents) = self.leaf_contents() else {
             return pane_layout::LayoutGather::Refuse;
         };
         let layout = self.tree.borrow().layout();
-        let zoomed = self
-            .zoomed
-            .get()
-            .and_then(|id| pane_layout::leaf_index(&layout, id));
-        pane_layout::LayoutGather::Ready {
-            root: pane_layout::encode(&layout, &contents),
-            zoomed,
+        let drawer = self.drawer.get().id();
+        let root = pane_layout::encode_with_views(&layout, &contents, &self.views.borrow());
+        pane_layout::LayoutGather::Ready(LiveLayout {
+            root,
+            zoomed: pane_layout::pane_ref(&layout, drawer, self.zoomed.get()),
+            focused: pane_layout::pane_ref(&layout, drawer, self.active_pane.get()),
+            drawer: wolf_core::app_state::Drawer {
+                open: drawer.is_some(),
+                share: self.drawer_share.get().get(),
+            },
+        })
+    }
+
+    /// Captures tree leaf `pane`'s view into [`Self::views`], at one of
+    /// `specs/application-state.md` §4's moments.
+    ///
+    /// Skips a pane that is not bound, the drawer, and a terminal pane. A preview takes
+    /// its last reported scroll, unless its saved scroll still waits to apply or nothing
+    /// was reported. An edit pane takes `WolfCore::window_cursor`, a BLOCKING RPC issued
+    /// only while [`state_seam::may_capture_cursor`] holds; a `None` keeps the last view.
+    /// An edit pane whose restored view still waits to apply ([`Self::apply_pending_views`])
+    /// keeps its seed, since until then Neovim shows a re-scrolled top line.
+    fn capture_view(&self, pane: PaneId) {
+        if self.drawer.get().is_drawer(pane) || !self.tree.borrow().leaves().contains(&pane) {
+            return;
+        }
+        let bound = self.panes.borrow().get(&pane).map(|p| {
+            (
+                p.win,
+                p.preview.borrow().is_some(),
+                p.terminal.get().is_some(),
+                p.reported_scroll.get(),
+                p.pending_scroll.get().is_some(),
+                p.pending_view.get().is_some(),
+            )
+        });
+        let Some((win, preview, terminal, reported, waiting, view_waiting)) = bound else {
+            return;
+        };
+        if terminal {
+            return;
+        }
+        if preview {
+            if let (Some(scroll), false) = (reported, waiting) {
+                self.views
+                    .borrow_mut()
+                    .insert(pane, PaneView::Preview { scroll });
+            }
+            return;
+        }
+        if view_waiting {
+            return;
+        }
+        let read = {
+            let core_ref = self.core.borrow();
+            core_ref.as_ref().and_then(|core| {
+                state_seam::may_capture_cursor(Some(core.liveness()))
+                    .then(|| core.window_cursor(win))
+                    .flatten()
+            })
+        };
+        if let Some(read) = read {
+            self.views.borrow_mut().insert(
+                pane,
+                PaneView::Edit {
+                    cursor: read.cursor,
+                    top_line: read.top_line,
+                },
+            );
+        }
+    }
+
+    /// Captures every bound tree leaf's view ([`Self::capture_view`]).
+    fn capture_viewports(&self) {
+        let leaves = self.tree.borrow().leaves();
+        for pane in leaves {
+            self.capture_view(pane);
         }
     }
 
@@ -1287,44 +1466,98 @@ impl PaneInner {
 
     /// This tab's input readiness for the test-only readiness file (see
     /// [`crate::ready_seam`]): the bound panes, how many of them Neovim has sized
-    /// to what this pane view requested, and whether a saved layout is pending.
-    ///
-    /// Each borrow is its own statement, and the core borrow is taken only after
-    /// the pane-map borrow is released.
+    /// to what this pane view requested, and whether a saved layout, a restored
+    /// drawer's bind, or a shown pane's restored view is pending.
     ///
     /// While zoomed only the shown pane counts: a hidden pane is never allocated, so it never
     /// requests a grid, and a launch that restores a zoom would otherwise never be ready.
     fn readiness(&self) -> ready_seam::PaneReadiness {
-        let layout_pending = self.pending_layout.borrow().is_some();
-        let pairs: Vec<(u64, Option<(u16, u16)>)> = {
+        let shown = self.shown_grids();
+        let view_pending = {
             let panes = self.panes.borrow();
-            let bound_ids: Vec<PaneId> = panes.keys().copied().collect();
-            let alone = pane_zoom::shown_alone(self.zoomed.get(), &bound_ids);
-            panes
-                .iter()
-                .filter(|(id, _)| alone.is_none_or(|a| a == **id))
-                .filter_map(|(_, p)| p.grid.get().map(|grid| (grid, p.requested_grid.get())))
-                .collect()
-        };
-        let sized = {
-            let core_ref = self.core.borrow();
-            core_ref.as_ref().map_or(0, |core| {
-                let snap = core.read_snapshot();
-                pairs
-                    .iter()
-                    .filter(|(grid, requested)| {
-                        ready_seam::grid_settled(
-                            *requested,
-                            snap.grid(*grid).map(|g| (g.cols, g.rows)),
-                        )
-                    })
-                    .count()
+            shown.iter().any(|(id, _, _)| {
+                panes
+                    .get(id)
+                    .is_some_and(|p| p.pending_view.get().is_some())
             })
         };
+        let layout_pending = self.pending_layout.borrow().is_some()
+            || self.pending_drawer_restore.get().is_some()
+            || view_pending;
         ready_seam::PaneReadiness {
-            bound: pairs.len(),
-            sized,
+            bound: shown.len(),
+            sized: self.settled_count(&shown),
             layout_pending,
+        }
+    }
+
+    /// The panes [`Self::readiness`] counts, each with its grid and requested size: every
+    /// pane with a grid, or only the one a zoom shows alone.
+    fn shown_grids(&self) -> Vec<ShownGrid> {
+        let panes = self.panes.borrow();
+        let bound_ids: Vec<PaneId> = panes.keys().copied().collect();
+        let alone = pane_zoom::shown_alone(self.zoomed.get(), &bound_ids);
+        panes
+            .iter()
+            .filter(|(id, _)| alone.is_none_or(|a| a == **id))
+            .filter_map(|(id, p)| p.grid.get().map(|grid| (*id, grid, p.requested_grid.get())))
+            .collect()
+    }
+
+    /// How many of `shown` ([`Self::shown_grids`]) Neovim has sized to the requested size.
+    ///
+    /// Called with the pane-map borrow released; it takes only the core borrow.
+    fn settled_count(&self, shown: &[ShownGrid]) -> usize {
+        let core_ref = self.core.borrow();
+        core_ref.as_ref().map_or(0, |core| {
+            let snap = core.read_snapshot();
+            shown
+                .iter()
+                .filter(|(_, grid, requested)| {
+                    ready_seam::grid_settled(*requested, snap.grid(*grid).map(|g| (g.cols, g.rows)))
+                })
+                .count()
+        })
+    }
+
+    /// Applies each shown pane's restored view again through `WolfCore::set_window_cursor`,
+    /// once, when this tab has settled: no saved layout or drawer restore is pending, and
+    /// every pane [`Self::readiness`] counts, at least one, is sized as it requested.
+    ///
+    /// The rebuild applies the saved views at Neovim's own window size. Sizing each grid
+    /// afterwards re-scrolls a window under `splitkeep=cursor`, so the saved top line holds
+    /// only once the view is applied again after the last resize. A pane a zoom hides keeps
+    /// its view until it is shown and settled. A later resize re-scrolls by Neovim's rule.
+    fn apply_pending_views(&self) {
+        let any_waiting = self
+            .panes
+            .borrow()
+            .values()
+            .any(|p| p.pending_view.get().is_some());
+        if !any_waiting
+            || self.pending_layout.borrow().is_some()
+            || self.pending_drawer_restore.get().is_some()
+        {
+            return;
+        }
+        let shown = self.shown_grids();
+        if shown.is_empty() || self.settled_count(&shown) != shown.len() {
+            return;
+        }
+        let views: Vec<(i64, WindowCursor)> = {
+            let panes = self.panes.borrow();
+            shown
+                .iter()
+                .filter_map(|(id, _, _)| {
+                    let p = panes.get(id)?;
+                    Some((p.win, p.pending_view.take()?))
+                })
+                .collect()
+        };
+        if let Some(core) = self.core.borrow().as_ref() {
+            for (win, view) in views {
+                core.set_window_cursor(win, view);
+            }
         }
     }
 
@@ -1382,6 +1615,8 @@ impl PaneInner {
     /// The grid may be unresolved at this point and is left pending if so, the same
     /// as [`Self::apply_split`]. Nothing races it: the drawer's grid is created
     /// before the intent is emitted, so `grid_for_win` answers on this very wake.
+    ///
+    /// A drawer a restore reopened takes its [`Self::pending_drawer_restore`] here.
     fn apply_drawer_open(self: &Rc<Self>, win: i64) {
         let mut state = self.drawer.get();
         if state.is_open() || self.pane_for_win(win).is_some() {
@@ -1404,8 +1639,22 @@ impl PaneInner {
         self.panes
             .borrow_mut()
             .insert(id, PaneWidgets::new(win, grid, area));
+        // A restored drawer's zoom applies now, since Neovim is on it; a pane zoom waits for its
+        // pane's focus, and a pane focus moves the active pane off the drawer.
+        let restore = self.pending_drawer_restore.take();
+        if restore.is_some_and(|t| t.zoom == Some(RestoreTarget::Drawer)) {
+            self.apply_zoom_event(ZoomEvent::Restore(id));
+        }
         self.rebuild_pane_area();
         self.set_active_pane(Some(id));
+        if let Some(targets) = restore {
+            if let Some(RestoreTarget::Pane(leaf)) = targets.zoom {
+                self.pending_restore_zoom.set(Some(leaf));
+            }
+            if let Some(RestoreTarget::Pane(leaf)) = targets.focus {
+                self.set_active_pane(Some(leaf));
+            }
+        }
     }
 
     /// Applies a split intent: split the `from` pane (fallback: active pane), then
@@ -1534,6 +1783,7 @@ impl PaneInner {
         if closed.is_empty() {
             return;
         }
+        self.views.borrow_mut().retain(|id, _| !closed.contains(id));
 
         let closed_drawer = self.drawer.get().id().filter(|d| closed.contains(d));
         {
@@ -1652,7 +1902,8 @@ impl PaneInner {
     /// cursor's grid).
     ///
     /// Neovim's own move to another pane (`<C-w>w`, `:wincmd`) is a focus move, which unzooms
-    /// and rebuilds the pane area. A window that resolves to no pane keeps the zoom.
+    /// and rebuilds the pane area. A window that resolves to no pane keeps the zoom. The wake
+    /// that first resolves to [`Self::pending_restore_zoom`]'s pane re-zooms it first.
     fn update_active_pane(&self) {
         let target = {
             let core_ref = self.core.borrow();
@@ -1671,7 +1922,16 @@ impl PaneInner {
                     .map(|(id, _)| *id)
             })
         };
-        if self.apply_zoom_event(ZoomEvent::FocusMove { target }) {
+        let mut rezoomed = false;
+        if let Some(leaf) = self
+            .pending_restore_zoom
+            .get()
+            .filter(|l| target == Some(*l))
+        {
+            self.pending_restore_zoom.set(None);
+            rezoomed = self.apply_zoom_event(ZoomEvent::Restore(leaf));
+        }
+        if self.apply_zoom_event(ZoomEvent::FocusMove { target }) || rezoomed {
             self.rebuild_pane_area();
         }
         if let Some(id) = target {
@@ -1711,7 +1971,7 @@ impl PaneInner {
     /// through a method, so the copy-out/copy-back lives here once rather than three
     /// times.
     ///
-    /// The window's [`Self::drawer_share`] is deliberately untouched, so a drawer that
+    /// The tab's [`Self::drawer_share`] is deliberately untouched, so a drawer that
     /// closes, or a restart, keeps the size the user dragged it to.
     fn clear_drawer(&self) {
         let mut state = self.drawer.get();
@@ -1719,13 +1979,12 @@ impl PaneInner {
         self.drawer.set(state);
     }
 
-    /// Re-applies the window's [`DrawerShare`] to this tab's drawer divider, if one is
-    /// built. A no-op when no drawer is bound, which is the overwhelmingly common case.
+    /// Re-applies this tab's [`DrawerShare`] to its drawer divider, if one is built. A
+    /// no-op when no drawer is bound, which is the overwhelmingly common case.
     ///
-    /// The divider's own `max-position` handler covers an allocation change in this tab,
-    /// but the share is the window's: a drag in another tab moves it without changing
-    /// this tab's allocation, so no notify here would carry the change. Re-applying on
-    /// every wake is what keeps the tabs at one share.
+    /// The divider's own `max-position` handler covers an allocation change while the
+    /// tab is shown, but a background tab's divider is not allocated, and its first wake
+    /// after a switch re-derives the divider from the share it kept.
     fn apply_drawer_frame(&self) {
         // Its own statement: the borrow must be gone before `set_position` re-enters the handlers.
         let divider = self.drawer_divider.borrow().clone();
@@ -1759,7 +2018,15 @@ impl PaneInner {
     /// place. [`DrawerState::record_active`] applies the rule: only a live tree LEAF
     /// that is not the drawer is remembered, which is what makes `<C-w>k` from the
     /// drawer able to leave it.
+    ///
+    /// The same funnel is §4's focus-change capture: the previous active pane, when it
+    /// differs from `pane` and is still bound, is captured ([`Self::capture_view`]).
+    /// [`Self::reset_after_restart`] sets `active_pane` directly, so a restart captures
+    /// nothing from a dead Neovim's windows.
     fn set_active_pane(&self, pane: Option<PaneId>) {
+        if let Some(previous) = self.active_pane.get().filter(|p| Some(*p) != pane) {
+            self.capture_view(previous);
+        }
         self.active_pane.set(pane);
         if let Some(pane) = pane {
             let is_leaf = self.tree.borrow().leaves().contains(&pane);
@@ -2061,12 +2328,14 @@ impl PaneInner {
     /// paints overlay children after the main child and all its descendants, so a
     /// picker is over a preview by construction.
     ///
-    /// The two signal handlers are connected HERE, on the one path that creates a
-    /// view, so a view can never exist without them: `decide-policy` routes a clicked
-    /// link through [`Self::on_preview_link`], and `load-changed` applies a waiting
-    /// cross-file fragment through [`Self::on_preview_load_finished`]. Both capture a
-    /// [`Weak`] rather than the `Rc`, since the view outlives nothing but is owned by
-    /// a `PaneWidgets` this `PaneInner` owns.
+    /// The signal handlers are connected HERE, on the one path that creates a view, so
+    /// a view can never exist without them: `decide-policy` routes a clicked link
+    /// through [`Self::on_preview_link`], `load-changed` applies a waiting cross-file
+    /// fragment or saved scroll through [`Self::on_preview_load_finished`], and the
+    /// view's own `webkit6::UserContentManager` runs [`preview_ui::SCROLL_REPORT_JS`]
+    /// and hands each report to [`Self::on_scroll_report`]. Each captures a [`Weak`]
+    /// rather than the `Rc`, since the view outlives nothing but is owned by a
+    /// `PaneWidgets` this `PaneInner` owns.
     ///
     /// [`Weak`]: std::rc::Weak
     fn sync_preview_view(self: &Rc<Self>, pane_id: PaneId) {
@@ -2080,7 +2349,31 @@ impl PaneInner {
             return;
         }
         if wants {
-            let view = webkit6::WebView::new();
+            let content = webkit6::UserContentManager::new();
+            content.add_script(&webkit6::UserScript::new(
+                preview_ui::SCROLL_REPORT_JS,
+                webkit6::UserContentInjectedFrames::TopFrame,
+                webkit6::UserScriptInjectionTime::Start,
+                &[],
+                &[],
+            ));
+            if !content.register_script_message_handler(preview_ui::SCROLL_REPORT_HANDLER, None) {
+                eprintln!("wolf-gnome: the preview scroll report handler could not be registered");
+            }
+            {
+                let weak = Rc::downgrade(self);
+                content.connect_script_message_received(
+                    Some(preview_ui::SCROLL_REPORT_HANDLER),
+                    move |_content, value| {
+                        if let Some(inner) = weak.upgrade() {
+                            inner.on_scroll_report(pane_id, value.to_double());
+                        }
+                    },
+                );
+            }
+            let view = webkit6::WebView::builder()
+                .user_content_manager(&content)
+                .build();
             // No focus may enter the view, matching its host: a focusable widget under `pane_area` that a
             // rebuild destroys is the wedge `focus_inside_pane_area` guards against.
             view.set_focusable(false);
@@ -2142,11 +2435,13 @@ impl PaneInner {
             let existing = p.web.borrow_mut().take();
             if let Some(view) = existing {
                 p.host.remove_overlay(&view);
-                // All three belong to the view: a fresh view has an empty document, so a stale `head_len` would
-                // body-swap into a missing `<head>` and a stale `pending_fragment` scroll to an old anchor.
+                // These belong to the view: a fresh view has an empty document, so a stale `head_len` would
+                // body-swap into a missing `<head>` and a stale fragment or scroll apply to another page.
                 p.loaded.set(None);
                 p.head_len.set(0);
                 *p.pending_fragment.borrow_mut() = None;
+                p.reported_scroll.set(None);
+                p.pending_scroll.set(None);
             }
         }
     }
@@ -2232,15 +2527,16 @@ impl PaneInner {
         }
     }
 
-    /// Applies a waiting cross-file fragment once pane `pane_id`'s new document has
-    /// finished loading.
+    /// Applies a waiting cross-file fragment, else a restored pane's saved scroll, once
+    /// pane `pane_id`'s new document has finished loading.
     ///
     /// Connected to `load-changed` and reached on [`webkit6::LoadEvent::Finished`]
     /// alone. That edge is produced by a real `load_html` and NEVER by an in-place
     /// body swap, which is why [`preview_ui::document_update`] forces a full load
-    /// whenever this slot is occupied.
+    /// whenever the fragment slot is occupied. A restored preview's first load is a
+    /// full one, since nothing was loaded before it.
     ///
-    /// The slot is TAKEN in a statement of its own, so the scroll runs once and a
+    /// Each slot is TAKEN in a statement of its own, so the scroll runs once and a
     /// later unrelated load — the next edit's re-render — does not repeat it.
     fn on_preview_load_finished(&self, pane_id: PaneId) {
         let fragment = self
@@ -2248,10 +2544,35 @@ impl PaneInner {
             .borrow()
             .get(&pane_id)
             .and_then(|p| p.pending_fragment.borrow_mut().take());
-        let Some(fragment) = fragment else {
+        if let Some(fragment) = fragment {
+            self.scroll_preview_to_fragment(pane_id, &fragment);
+            return;
+        }
+        let pending = self
+            .panes
+            .borrow()
+            .get(&pane_id)
+            .and_then(|p| Some((p.pending_scroll.take()?, p.web.borrow().clone()?)));
+        let Some((fraction, view)) = pending else {
             return;
         };
-        self.scroll_preview_to_fragment(pane_id, &fragment);
+        let script = preview_ui::scroll_to_fraction_js(fraction);
+        view.evaluate_javascript(&script, None, None, gio::Cancellable::NONE, |result| {
+            if let Err(err) = result {
+                eprintln!("wolf-gnome: preview scroll restore failed: {err}");
+            }
+        });
+    }
+
+    /// Records a scroll fraction pane `pane_id`'s page reported, when
+    /// [`preview_ui::reported_scroll`] accepts it.
+    fn on_scroll_report(&self, pane_id: PaneId, value: f64) {
+        let Some(scroll) = preview_ui::reported_scroll(value) else {
+            return;
+        };
+        if let Some(p) = self.panes.borrow().get(&pane_id) {
+            p.reported_scroll.set(Some(scroll));
+        }
     }
 
     /// Scrolls pane `pane_id`'s preview to the element with id `fragment`.
@@ -3776,6 +4097,9 @@ impl PaneInner {
         // A stale id would block reopening it for the session.
         self.clear_drawer();
         self.zoomed.set(None);
+        self.views.borrow_mut().clear();
+        self.pending_drawer_restore.set(None);
+        self.pending_restore_zoom.set(None);
         // Tears everything down and builds nothing, through `rebuild_pane_area`'s own focus guard;
         // reusing it rather than open-coding teardown keeps the focus-wedge fix through a restart.
         self.rebuild_pane_area();
@@ -3864,6 +4188,20 @@ impl PaneHandle {
     #[must_use]
     pub fn layout_snapshot(&self) -> pane_layout::LayoutGather {
         self.inner.layout_snapshot()
+    }
+
+    /// Captures every tree leaf's cursor and top line, or preview scroll, for the next
+    /// save: `specs/application-state.md` §4's tab-switch, window-close and quit moments.
+    /// An edit pane's read is a BLOCKING `WolfCore::window_cursor`, issued only against
+    /// an `Alive` Neovim ([`crate::state_seam::may_capture_cursor`]).
+    pub fn capture_viewports(&self) {
+        self.inner.capture_viewports();
+    }
+
+    /// This tab's drawer share, which New Tab passes on to the tab it opens.
+    #[must_use]
+    pub fn drawer_share(&self) -> DrawerShare {
+        self.inner.drawer_share.get()
     }
 
     /// `(panes with a resolved grid, windows nvim has reported buffers for)`, for
@@ -3982,13 +4320,12 @@ impl PaneHandle {
 /// Builds the pane view (container, pane area host, cmdline strip) and returns a
 /// [`PaneHandle`]. No panes exist until the first window grid appears on a wake.
 ///
-/// `drawer_share` is the window's, shared by every tab, so the drawer's divider keeps
-/// one position across the window's tabs.
+/// `drawer_share` seeds this tab's own share, which only this tab's drawer divider moves.
 #[must_use]
 pub fn build(
     core: &Rc<RefCell<Option<WolfCore>>>,
     metrics: &Rc<CellMetrics>,
-    drawer_share: &Rc<Cell<DrawerShare>>,
+    drawer_share: DrawerShare,
 ) -> PaneHandle {
     let cmdline_area = gtk::DrawingArea::builder()
         .hexpand(true)
@@ -4058,10 +4395,13 @@ pub fn build(
         core: core.clone(),
         active_pane: Cell::new(None),
         drawer: Cell::new(DrawerState::new()),
-        drawer_share: drawer_share.clone(),
+        drawer_share: Rc::new(Cell::new(drawer_share)),
         drawer_divider: RefCell::new(None),
         zoomed: Cell::new(None),
         pending_layout: RefCell::new(None),
+        views: RefCell::new(HashMap::new()),
+        pending_drawer_restore: Cell::new(None),
+        pending_restore_zoom: Cell::new(None),
         preview_coalescer: RefCell::new(PreviewCoalescer::new()),
         terminal_sizers: RefCell::new(BTreeMap::new()),
         sent_terminal_sizes: RefCell::new(BTreeMap::new()),
@@ -4433,7 +4773,7 @@ fn install_paned_position(
 
 /// The drawer's divider: a vertical `gtk::Paned` with `editor` (the tree's widget) as
 /// its start child and `drawer` (the drawer's host) as its end child, its position tied
-/// to the window's `share` by [`install_drawer_divider`].
+/// to the tab's `share` by [`install_drawer_divider`].
 ///
 /// Neither child shrinks below its request, which is what holds both at
 /// [`PaneInner::make_pane_area`]'s pane floor: the drawer's limits are the tree
@@ -4454,7 +4794,7 @@ fn build_drawer_paned(
     (paned, guard)
 }
 
-/// Ties the drawer's paned to the window's [`DrawerShare`] in both directions, under
+/// Ties the drawer's paned to the tab's [`DrawerShare`] in both directions, under
 /// the rules [`install_paned_position`] gives for a tree divider: the share takes the
 /// tree's place, and a drag writes it rather than a weight.
 ///

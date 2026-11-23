@@ -66,6 +66,8 @@ use wolf_core::WolfCore;
 
 use crate::pane_layout::LayoutGather;
 use crate::pane_view::PaneHandle;
+use crate::search_panel::SearchFields;
+use crate::sidebar::SidebarPage;
 use crate::state_seam;
 
 /// The live handles [`build`] needs, as one struct rather than six positional
@@ -88,6 +90,10 @@ pub struct StateParts<'a> {
     /// Held for [`crate::state_seam::seeded_tab`], not for the rebuild — the
     /// rebuild is the pane view's, and it has already been asked for it.
     pub saved: Option<Tab>,
+    /// The sidebar page the tab records ([`crate::state_seam::TabPlan::sidebar_page`]).
+    pub sidebar_page: SidebarPage,
+    /// The search panel's fields the tab records ([`crate::state_seam::TabPlan::search`]).
+    pub search: SearchFields,
 }
 
 /// The persistence glue's shared state. Single GTK main thread, so `Cell` /
@@ -110,6 +116,11 @@ struct PersistInner {
     /// The user's LIVE sidebar preference, kept in step by
     /// [`StateHandle::set_sidebar_shown`].
     sidebar_shown: Cell<bool>,
+    /// The tab's record of the window's sidebar page, kept by
+    /// [`StateHandle::record_sidebar`].
+    sidebar_page: Cell<SidebarPage>,
+    /// The tab's record of the window's search panel fields, kept with `sidebar_page`.
+    search: RefCell<SearchFields>,
 }
 
 /// A cloneable handle to the state-persistence glue.
@@ -131,6 +142,8 @@ pub fn build(parts: StateParts<'_>) -> StateHandle {
             saved: parts.saved,
             empty: Cell::new(parts.empty),
             sidebar_shown: Cell::new(parts.sidebar_shown),
+            sidebar_page: Cell::new(parts.sidebar_page),
+            search: RefCell::new(parts.search),
         }),
     }
 }
@@ -168,6 +181,37 @@ impl StateHandle {
         self.inner.sidebar_shown.get()
     }
 
+    /// Records the window's sidebar page and search panel fields as this tab's.
+    ///
+    /// The window has one sidebar and one panel, so the selected tab's record follows the
+    /// widgets: the shell records it before every gather of the window and into the tab a
+    /// switch leaves.
+    pub fn record_sidebar(&self, page: SidebarPage, search: SearchFields) {
+        self.inner.sidebar_page.set(page);
+        *self.inner.search.borrow_mut() = search;
+    }
+
+    /// The sidebar page this tab records.
+    #[must_use]
+    pub fn sidebar_page(&self) -> SidebarPage {
+        self.inner.sidebar_page.get()
+    }
+
+    /// The search panel fields this tab records.
+    #[must_use]
+    pub fn search_fields(&self) -> SearchFields {
+        self.inner.search.borrow().clone()
+    }
+
+    /// This tab's saved sidebar: the preference, the recorded page and fields.
+    fn sidebar(&self) -> wolf_core::app_state::Sidebar {
+        state_seam::sidebar_entry(
+            self.inner.sidebar_shown.get(),
+            self.inner.sidebar_page.get(),
+            &self.inner.search.borrow(),
+        )
+    }
+
     /// The cwd this tab's core was launched with.
     #[must_use]
     pub fn launch_cwd(&self) -> &Path {
@@ -179,8 +223,8 @@ impl StateHandle {
     /// [`state_seam::seeded_tab`]'s answer.
     ///
     /// The seed is derived HERE, at read time, rather than written into the cache
-    /// at build time, for two reasons. It follows live preference changes, so a
-    /// sidebar toggle or an Open Folder reaches a tab whose gate never opened; and
+    /// at build time, for two reasons. It follows the live sidebar, so a sidebar
+    /// toggle, a page or a query reaches a tab whose gate never opened; and
     /// it stops being consulted the instant a real gather succeeds, so a seeded
     /// value can never outlive the fact it was standing in for.
     ///
@@ -193,9 +237,7 @@ impl StateHandle {
         // Bound in its own statement so the seed below is not derived under a live
         // borrow of the cache it may replace.
         let cached = self.inner.tab.borrow().clone();
-        cached.or_else(|| {
-            state_seam::seeded_tab(self.inner.saved.as_ref(), self.inner.sidebar_shown.get())
-        })
+        cached.or_else(|| state_seam::seeded_tab(self.inner.saved.as_ref(), self.sidebar()))
     }
 
     /// Gathers the live values into this tab's cache, gated by
@@ -229,7 +271,7 @@ impl StateHandle {
 
         // The second refusal route: a leaf whose window is in neither snapshot map contributes the cache,
         // as a shut gate does.
-        let LayoutGather::Ready { root, zoomed } = self.inner.panes.layout_snapshot() else {
+        let LayoutGather::Ready(layout) = self.inner.panes.layout_snapshot() else {
             return;
         };
 
@@ -242,7 +284,7 @@ impl StateHandle {
         let cwd = state_seam::snapshot_cwd(empty, &self.inner.launch_cwd, live.as_deref());
         // The user's preference, never the live empty-state flag: `restore_plans` reads it back, and
         // `!empty` would make a tab ending empty hide the sidebar in the next real project.
-        let tab = state_seam::tab_entry(cwd, self.inner.sidebar_shown.get(), root, zoomed);
+        let tab = state_seam::tab_entry(cwd, self.sidebar(), layout);
         *self.inner.tab.borrow_mut() = Some(tab);
     }
 }

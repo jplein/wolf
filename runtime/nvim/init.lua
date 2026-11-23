@@ -874,6 +874,29 @@ function _G.wolf_create_tabpage(cwd)
 	return vim.api.nvim_get_current_tabpage()
 end
 
+-- Applies a saved view to `win`, which must be current: winrestview acts on the current window.
+-- Neovim rejects a line past the buffer but clamps an over-long column itself.
+local function apply_window_view(win, line, col, top_line)
+	local line_count = vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(win))
+	if type(line) == "number" then
+		local clamped = math.min(math.max(line, 1), line_count)
+		pcall(vim.api.nvim_win_set_cursor, win, { clamped, math.max(tonumber(col) or 0, 0) })
+	end
+	if type(top_line) == "number" then
+		vim.fn.winrestview({ topline = math.min(math.max(top_line, 1), line_count) })
+	end
+end
+
+-- A front-end calls this once it has sized the window's grid, which re-scrolls the rebuilt view.
+function _G.wolf_set_window_cursor(win, line, col, top_line)
+	if not vim.api.nvim_win_is_valid(win) then
+		return
+	end
+	vim.api.nvim_win_call(win, function()
+		apply_window_view(win, line, col, top_line)
+	end)
+end
+
 -- Handles come back in DFS leaf order, which must match the front-end's PaneTree.leaves(). See
 -- runtime/nvim/README.md#wolf_rebuild_layoutspec_json.
 function _G.wolf_rebuild_layout(spec_json)
@@ -903,16 +926,8 @@ function _G.wolf_rebuild_layout(spec_json)
 				wolf_preview_file(win, node.path)
 			elseif node.path ~= nil and node.path ~= "" then
 				vim.cmd("edit " .. vim.fn.fnameescape(node.path))
-				local line_count = vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(win))
-				local cursor = node.cursor
-				if type(cursor) == "table" and type(cursor.line) == "number" then
-					-- Neovim rejects a line past the buffer but clamps an over-long column itself.
-					local line = math.min(math.max(cursor.line, 1), line_count)
-					pcall(vim.api.nvim_win_set_cursor, win, { line, math.max(tonumber(cursor.col) or 0, 0) })
-				end
-				if type(node.top_line) == "number" then
-					vim.fn.winrestview({ topline = math.min(math.max(node.top_line, 1), line_count) })
-				end
+				local cursor = type(node.cursor) == "table" and node.cursor or {}
+				apply_window_view(win, cursor.line, cursor.col, node.top_line)
 			end
 			return { win }
 		end

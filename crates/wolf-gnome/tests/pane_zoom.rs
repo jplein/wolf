@@ -11,20 +11,23 @@
 //!
 //! G6a pins `pane_layout::leaf_index`, the depth-first index a saved tab's `zoomed` names. P3
 //! is this file's own: the `leaf_index`, `encode` and `decode` round trip a relaunch makes,
-//! since this front-end has no FFI push-builder for the Swift P3 to cover.
+//! since this front-end has no FFI push-builder for the Swift P3 to cover. E10 pins
+//! `restore_targets`, which maps a saved tab's `zoomed` and `focused` onto the restored panes.
 //!
 //! Pure: no display, no Neovim and no compositor. What the pane area shows for an answer is
 //! `smoke_headless/zoom_pane.rs`'s question.
 
 use std::collections::HashMap;
 
+use wolf_core::app_state::PaneRef;
 use wolf_core::FocusDir;
 use wolf_gnome::drawer::{focus_target, DrawerState};
 use wolf_gnome::layout::{Orientation, PaneId, PaneLayout, PaneTree};
 use wolf_gnome::other_pane_seam::Target;
 use wolf_gnome::pane_layout::{decode, encode, leaf_index, LeafContent};
 use wolf_gnome::pane_zoom::{
-    focus_origin, other_pane_target, shown_alone, zoomed_after, ZoomEvent,
+    focus_origin, other_pane_target, restore_targets, shown_alone, zoomed_after, RestoreTarget,
+    RestoreTargets, ZoomEvent,
 };
 
 const P1: PaneId = 1;
@@ -578,4 +581,89 @@ fn the_zoomed_leaf_round_trips_through_encode_and_decode() {
         "the restore event over the rebuilt leaves must re-zoom the found leaf; None means a \
          saved zoom is found and then dropped"
     );
+}
+
+/// The rebuilt leaves E10 maps saved references onto, apart from every index they name.
+const RESTORED_LEAVES: [PaneId; 2] = [10, 11];
+
+/// E10a and E10b: a saved zoom and focus map onto the rebuilt leaves, the drawer only while it
+/// is open, and a zoom wins the focus.
+#[test]
+fn restore_targets_map_the_saved_zoom_and_focus() {
+    let pane = |i: usize| RestoreTarget::Pane(RESTORED_LEAVES[i]);
+    let cases = [
+        (
+            Some(PaneRef::Pane(1)),
+            Some(PaneRef::Pane(0)),
+            false,
+            RestoreTargets {
+                zoom: Some(pane(1)),
+                focus: Some(pane(1)),
+            },
+            "zoomed on pane 1 and focused on pane 0, the zoom must win the focus too. A focus of \
+             leaf 10 means the focus ignores the zoom, so the restore focuses a pane the zoom \
+             hides",
+        ),
+        (
+            None,
+            Some(PaneRef::Pane(0)),
+            false,
+            RestoreTargets {
+                zoom: None,
+                focus: Some(pane(0)),
+            },
+            "focused on pane 0 with nothing zoomed, the focus must be leaf 10; None means a saved \
+             focus is dropped",
+        ),
+        (
+            Some(PaneRef::Drawer),
+            Some(PaneRef::Drawer),
+            true,
+            RestoreTargets {
+                zoom: Some(RestoreTarget::Drawer),
+                focus: Some(RestoreTarget::Drawer),
+            },
+            "a zoomed and focused drawer that restores open must be both targets",
+        ),
+        (
+            Some(PaneRef::Drawer),
+            None,
+            false,
+            RestoreTargets {
+                zoom: None,
+                focus: None,
+            },
+            "a drawer zoom with the drawer saved closed must zoom nothing: there is no drawer to \
+             zoom. Some(Drawer) means a reference to the drawer is mapped whether it opens or not",
+        ),
+        (
+            None,
+            Some(PaneRef::Drawer),
+            false,
+            RestoreTargets {
+                zoom: None,
+                focus: None,
+            },
+            "a drawer focus with the drawer saved closed must focus nothing",
+        ),
+        (
+            Some(PaneRef::Pane(5)),
+            Some(PaneRef::Pane(5)),
+            true,
+            RestoreTargets {
+                zoom: None,
+                focus: None,
+            },
+            "pane 5 names no rebuilt leaf of two, so it must map to nothing; Some means an index \
+             past the leaves is clamped or wrapped onto a pane nobody saved",
+        ),
+    ];
+    for (zoomed, focused, drawer_open, want, what) in cases {
+        assert_eq!(
+            restore_targets(zoomed, focused, drawer_open, &RESTORED_LEAVES),
+            want,
+            "restore_targets({zoomed:?}, {focused:?}, drawer open {drawer_open}) over \
+             {RESTORED_LEAVES:?}: {what}"
+        );
+    }
 }

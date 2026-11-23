@@ -148,7 +148,12 @@
 //! nothing on that path can time out. [`crate::clipboard_ui::paste_decision`] gates
 //! it anyway, for a reason that is not about blocking — see that module's docs.
 //!
-//! NEW TAB adds none either: it starts a new Neovim process for the new tab and
+//! A TAB SWITCH adds one, on the tab it leaves rather than the selected one:
+//! [`AppShell::on_tab_selected`] captures that tab's panes, which reads each edit pane's
+//! cursor through `WolfCore::window_cursor`, gated by [`state_seam::may_capture_cursor`]
+//! on that tab's own core.
+//!
+//! NEW TAB adds none beyond that switch: it starts a new Neovim process for the new tab and
 //! asks the selected one nothing but `WolfCore::live_cwd`, a lock read, so it has
 //! no liveness gate. Starting a tab's core stays outside the inventory, as starting
 //! a window's does.
@@ -583,9 +588,9 @@ pub fn build(parts: ShellParts<'_>) -> AppShell {
     // A tab switch closes all three overlays: one left over the next tab keeps `window::wire_keys`'
     // guard suppressing every key, and its focus-return lands in the strip it opened from.
     let weak_tabs = Rc::downgrade(&shell.inner);
-    shell.inner.tabs.connect_selected(move || {
+    shell.inner.tabs.connect_selected(move |previous| {
         if let Some(shell) = upgrade(&weak_tabs) {
-            shell.on_tab_selected();
+            shell.on_tab_selected(previous);
         }
     });
 
@@ -815,11 +820,17 @@ impl AppShell {
     /// buffer picker's recorded reason: the captive Neovim runs in a project-less
     /// window too, and a drawer there is a working shell rather than a dead
     /// surface.
+    ///
+    /// It shows the selected tab's recorded sidebar page, and leaves the search panel's
+    /// query, toggles and rows as they are: the panel is per window.
     pub fn apply_selected_tab(&self) {
         let empty = self.selected_is_empty();
         // Never `sidebar.set_visible` directly: a toggle and the empty state are two inputs to one rule,
         // or the next selection undoes the user's toggle.
         self.apply_sidebar_visibility();
+        if let Some(tab) = self.inner.tabs.selected() {
+            self.inner.sidebar.show_page(tab.sidebar_page());
+        }
         self.inner.sidebar.toggles().set_sensitive(!empty);
         if let Some(action) = self.inner.go_to_file.borrow().as_ref() {
             action.set_enabled(!empty);
@@ -829,6 +840,15 @@ impl AppShell {
         }
         if let Some(action) = self.inner.toggle_sidebar.borrow().as_ref() {
             action.set_enabled(!empty);
+        }
+    }
+
+    /// Records the window's sidebar page and search panel fields into the selected tab,
+    /// so its saved sidebar follows the widgets. `window::WindowHandle::refresh_subtree`
+    /// calls it before every gather of the window.
+    pub fn record_selected_sidebar(&self) {
+        if let Some(tab) = self.inner.tabs.selected() {
+            tab.record_sidebar(self.inner.sidebar.page(), self.inner.search.fields());
         }
     }
 
@@ -2067,7 +2087,8 @@ impl AppShell {
     }
 
     /// Opens a new TAB in this window, with a Neovim of its own, rooted at the
-    /// selected tab's folder, with its empty state and sidebar preference.
+    /// selected tab's folder, with its empty state, sidebar preference and drawer share,
+    /// and the window's sidebar page and search fields, so nothing on screen changes.
     ///
     /// No liveness gate and no blocking call: it starts a new process and asks the
     /// selected Neovim nothing but `WolfCore::live_cwd`, a lock read, so a wedged or
@@ -2097,14 +2118,20 @@ impl AppShell {
             empty,
             sidebar_shown: selected.sidebar_shown(),
             saved: None,
+            sidebar_page: self.inner.sidebar.page(),
+            search: self.inner.search.fields(),
+            drawer_share: selected.panes().drawer_share(),
         });
     }
 
-    /// Reacts to a tab switch: closes all three transient overlays, applies the newly
-    /// selected tab's empty state and sidebar preference, re-applies the crash
-    /// overlay for it, moves the UI focus to its Neovim, and wakes it, so the title, the bars, the navigation buttons, the drawer
-    /// divider, the sidebar's root and its queued commands follow on its drain. The
-    /// sidebar's search panel is per window and stays as it is.
+    /// Reacts to a tab switch. It first records the window's sidebar page and search
+    /// fields into `previous`, the tab left, and captures its panes' cursors and scrolls
+    /// (`specs/application-state.md` §4). It then closes all three transient overlays,
+    /// applies the newly selected tab's empty state, sidebar preference and page,
+    /// re-applies the crash overlay for it, moves the UI focus to its Neovim, and wakes
+    /// it, so the title, the bars, the navigation buttons, the drawer divider, the
+    /// sidebar's root and its queued commands follow on its drain. The sidebar's search
+    /// panel is per window and keeps its query, toggles and rows.
     ///
     /// Wired through [`crate::tab_view::TabsHandle::connect_selected`], which fires
     /// only on a REAL selection change. Every `close()` is idempotent, and each
@@ -2114,7 +2141,11 @@ impl AppShell {
     /// The buffer picker is the one this cannot skip, for
     /// [`AppShell::apply_overlay`]'s recorded reason: an overlay left flagged open
     /// keeps `window::wire_keys`' guard suppressing every key to Neovim.
-    fn on_tab_selected(&self) {
+    fn on_tab_selected(&self, previous: Option<&TabHandle>) {
+        if let Some(previous) = previous {
+            previous.record_sidebar(self.inner.sidebar.page(), self.inner.search.fields());
+            previous.capture_viewports();
+        }
         self.inner.picker.close();
         self.inner.palette.close();
         self.inner.buffers.close();

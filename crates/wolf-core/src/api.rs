@@ -1330,6 +1330,19 @@ impl WolfCore {
         self.send_input(InputEvent::FocusWin { win });
     }
 
+    /// Applies a saved cursor and top line to window `win` (fire-and-forget via
+    /// [`InputEvent::SetWindowCursor`]), clamped as the layout rebuild clamps them.
+    ///
+    /// The rebuild applies a saved view at Neovim's own window size. A front-end that resizes
+    /// the window's grid afterwards has it re-scrolled by Neovim (`splitkeep=cursor`), so it
+    /// calls this once the grid has settled to apply the saved view again. Window `win` need
+    /// not be current, and the current window is left alone; an invalid `win` does nothing.
+    /// Enqueued on the ordered input channel, so it lands behind every resize and key queued
+    /// before it.
+    pub fn set_window_cursor(&self, win: i64, view: WindowCursor) {
+        self.send_input(InputEvent::SetWindowCursor { win, view });
+    }
+
     /// Forwards the OS window/app focus state to the captive Neovim UI via
     /// `nvim_ui_set_focus`, so `FocusGained` / `FocusLost` fire in the running app.
     ///

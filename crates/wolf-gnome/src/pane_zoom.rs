@@ -5,6 +5,8 @@
 //! or its weights, which is what lets an unzoom restore the layout exactly: the pane view
 //! holds only the zoomed pane's id and asks these functions what it means.
 
+use wolf_core::app_state::PaneRef;
+
 use crate::layout::PaneId;
 use crate::other_pane_seam::Target;
 
@@ -89,4 +91,46 @@ pub fn other_pane_target(zoomed: PaneId, drawer: Option<PaneId>) -> Option<Targe
 #[must_use]
 pub fn shown_alone(zoomed: Option<PaneId>, bound: &[PaneId]) -> Option<PaneId> {
     zoomed.filter(|z| bound.contains(z))
+}
+
+/// A saved `zoomed` or `focused` reference, mapped onto a restored tab's panes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RestoreTarget {
+    /// The rebuilt tree leaf.
+    Pane(PaneId),
+    /// The drawer, which binds only once the restore reopens it.
+    Drawer,
+}
+
+/// What a restored tab zooms and focuses, from [`restore_targets`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RestoreTargets {
+    /// The pane to re-zoom, or `None`.
+    pub zoom: Option<RestoreTarget>,
+    /// The pane to focus, or `None` to keep the first leaf.
+    pub focus: Option<RestoreTarget>,
+}
+
+/// Maps a saved tab's `zoomed` and `focused` onto its restored panes: `Pane(i)` onto
+/// `leaf_ids[i]`, and `Drawer` onto the drawer only when it restores open. Anything
+/// else maps to `None`.
+///
+/// The zoom wins the focus: a restored zoom focuses the zoomed pane, since focusing a
+/// pane the zoom hides would unzoom it on the next focus move.
+#[must_use]
+pub fn restore_targets(
+    zoomed: Option<PaneRef>,
+    focused: Option<PaneRef>,
+    drawer_open: bool,
+    leaf_ids: &[PaneId],
+) -> RestoreTargets {
+    let map = |r: Option<PaneRef>| match r? {
+        PaneRef::Pane(i) => leaf_ids.get(i).copied().map(RestoreTarget::Pane),
+        PaneRef::Drawer => drawer_open.then_some(RestoreTarget::Drawer),
+    };
+    let zoom = map(zoomed);
+    RestoreTargets {
+        zoom,
+        focus: zoom.or(map(focused)),
+    }
 }

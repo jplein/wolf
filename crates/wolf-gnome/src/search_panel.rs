@@ -100,7 +100,7 @@
 //! - **A status line and a `SEARCH_MAX_ROWS` cap on line rows**, which the
 //!   counterpart does not have.
 //!
-//! Its pure, display-free seams are [`show_decision`], [`SearchToggles`],
+//! Its pure, display-free seams are [`show_decision`], [`SearchToggles`], [`SearchFields`],
 //! [`search_options_for`], [`panel_rows`], [`char_budget`], [`first_line_row`], [`selection_after_rebuild`],
 //! [`enter_action`], [`row_activation`], [`activation_route`] and [`search_status`],
 //! tested in `crates/wolf-gnome/tests/sidebar_search.rs`.
@@ -267,6 +267,26 @@ impl SearchToggles {
         use_regex: true,
         all_files: false,
     };
+}
+
+/// The panel's field text and toggles, as a tab records them and a restore applies
+/// them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchFields {
+    /// The field's RAW text, untrimmed.
+    pub query: String,
+    /// The toggles' states.
+    pub toggles: SearchToggles,
+}
+
+impl Default for SearchFields {
+    /// An empty field and [`SearchToggles::INITIAL`], the panel as it opens.
+    fn default() -> Self {
+        Self {
+            query: String::new(),
+            toggles: SearchToggles::INITIAL,
+        }
+    }
 }
 
 /// The [`SearchOptions`] this front-end ships for `query` under `toggles`: every
@@ -1157,6 +1177,28 @@ impl SearchPanelHandle {
     /// once if a refresh was refused while it was not.
     pub fn set_sidebar_visible(&self, visible: bool) {
         self.inner.set_sidebar_visible(visible);
+    }
+
+    /// The field's raw text and the toggles' states.
+    #[must_use]
+    pub fn fields(&self) -> SearchFields {
+        SearchFields {
+            query: self.inner.entry.text().to_string(),
+            toggles: self.inner.toggles(),
+        }
+    }
+
+    /// Sets the field's text and the toggles to `fields`, and runs the search on the
+    /// selected tab's core when `run` is set, as Enter would. It moves no focus.
+    pub fn restore(&self, fields: &SearchFields, run: bool) {
+        let inner = &self.inner;
+        inner.entry.set_text(&fields.query);
+        inner.case_toggle.set_active(fields.toggles.case_sensitive);
+        inner.regex_toggle.set_active(fields.toggles.use_regex);
+        inner.all_toggle.set_active(fields.toggles.all_files);
+        if run {
+            inner.run_search(fields.query.clone(), fields.toggles);
+        }
     }
 
     /// Drops the session, CANCELLING any in-flight `rg`. The rows stay drawn.

@@ -588,6 +588,10 @@ impl Coordinator {
     /// `match`; each arm's reason lives with the rule rather than here. The
     /// deregistration is last, so `KeepSubtree` really does commit a tree that
     /// still holds the closing window.
+    ///
+    /// `KeepSubtree` first captures the window's pane cursors and scrolls
+    /// (`specs/application-state.md` §4's window-closing moment). The other two arms
+    /// write nothing of this window that survives, so they capture nothing.
     pub fn on_window_closing(&self, id: WindowId) {
         let others = self
             .inner
@@ -601,6 +605,9 @@ impl Coordinator {
             CloseCommit::KeepSubtree => {
                 // Gathered while the cores and panes are alive: after a core is taken out the gate refuses
                 // the subtree and the session is silently not saved.
+                if let Some(handle) = self.handles().into_iter().find(|h| h.id() == id) {
+                    handle.capture_viewports();
+                }
                 self.refresh(id);
                 self.commit_tree();
                 self.flush();
@@ -621,10 +628,11 @@ impl Coordinator {
     ///
     /// Every step of the order is load-bearing. `shutting_down` is latched FIRST so
     /// each window's close handler answers [`CloseCommit::Skip`] and does not
-    /// re-commit a tree that shrinks by one window per close. The refresh runs BEFORE any window is
-    /// closed, because a window whose core has gone contributes nothing. The
-    /// flush runs before the closes so a wedged writer cannot lose the tree that
-    /// was just assembled.
+    /// re-commit a tree that shrinks by one window per close. Every window's panes are
+    /// captured next, before any Neovim exits (`specs/application-state.md` §4). The
+    /// refresh runs BEFORE any window is closed, because a window whose core has gone
+    /// contributes nothing. The flush runs before the closes so a wedged writer cannot
+    /// lose the tree that was just assembled.
     ///
     /// Every window the APPLICATION holds is closed, not merely every window the
     /// coordinator registered: a transient toplevel such as the About window is
@@ -639,6 +647,9 @@ impl Coordinator {
     /// `close-request` and leaves every captive Neovim orphaned.
     pub fn quit(&self, app: &gtk::Application) {
         self.inner.shutting_down.set(true);
+        for handle in self.handles() {
+            handle.capture_viewports();
+        }
         self.refresh_all();
         self.commit_tree();
         self.flush();

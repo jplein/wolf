@@ -36,14 +36,15 @@ pub const DRAWER_WEIGHT: f64 = 1.0 / 3.0;
 /// The drawer's share of the pane area: the fraction of the drawer divider's
 /// `gtk::Paned` span that the drawer, its end child, takes.
 ///
-/// One per window, held by `tab_view` and shared by every tab's pane view, so a drag
-/// in one tab reaches the others. It is a separate value from [`DrawerState`] so that
-/// [`DrawerState::clear`] (the drawer closing, a restart) leaves it alone. A new
-/// window starts at [`DRAWER_WEIGHT`].
+/// One per tab, held by that tab's pane view, so a drag changes its own tab alone. New
+/// Tab inherits the selected tab's share, a new window starts at [`DRAWER_WEIGHT`], and
+/// a restored tab starts at its saved share through [`DrawerShare::restored`]. It is a
+/// separate value from [`DrawerState`] so that [`DrawerState::clear`] (the drawer
+/// closing, a restart) leaves it alone.
 ///
-/// It is never persisted, and needs no fraction floor: a tree weight keeps one
-/// because a zero survives the saved state, while every use of the share is clamped into
-/// GTK's `[min_position, max_position]`.
+/// It needs no fraction floor: a tree weight keeps one because a zero survives the
+/// saved state, while [`DrawerShare::restored`] refuses a share outside `(0, 1)` and
+/// every use of the share is clamped into GTK's `[min_position, max_position]`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DrawerShare(f64);
 
@@ -52,6 +53,17 @@ impl DrawerShare {
     #[must_use]
     pub const fn new() -> Self {
         Self(DRAWER_WEIGHT)
+    }
+
+    /// A saved share: `share` when it is finite and strictly between 0 and 1, else
+    /// [`DRAWER_WEIGHT`], so a corrupt saved state never reaches the paned.
+    #[must_use]
+    pub fn restored(share: f64) -> Self {
+        if share.is_finite() && share > 0.0 && share < 1.0 {
+            Self(share)
+        } else {
+            Self::new()
+        }
     }
 
     /// The drawer's fraction of the span, in `[0, 1]`.

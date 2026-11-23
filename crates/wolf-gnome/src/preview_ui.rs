@@ -88,6 +88,15 @@
 //! its own. The key is the source BUFNR and never the tick, for the reason stated
 //! just above.
 //!
+//! ## The saved scroll is pushed by the page, never read
+//!
+//! `evaluate_javascript` is asynchronous, so a quit could not wait for a read of a
+//! preview's scroll. Each preview view instead runs [`SCROLL_REPORT_JS`], which posts the
+//! scroll fraction to the script message handler [`SCROLL_REPORT_HANDLER`] on every
+//! scroll and once at load, and [`crate::pane_view`] keeps the last one
+//! [`reported_scroll`] accepts. A restored scroll is applied with
+//! [`scroll_to_fraction_js`] once the page has loaded.
+//!
 //! ## A preview pane's statusbar does not come from `WolfCore::pane_status`
 //!
 //! Preview windows are omitted from `win_buffers` entirely, so core answers
@@ -105,6 +114,64 @@ use wolf_core::{Liveness, PaneStatus};
 /// `runtime/nvim/init.lua` gives the preview scratch buffer so the buffer picker
 /// and the statusbar read the same way.
 pub const PREVIEW_STATUS_PREFIX: &str = "Preview: ";
+
+/// The name of the script message handler a preview view registers for
+/// [`SCROLL_REPORT_JS`]'s reports.
+pub const SCROLL_REPORT_HANDLER: &str = "wolfScroll";
+
+/// The user script each preview view injects into its top frame at document start: it
+/// posts `scrollY / (scrollHeight - innerHeight)`, or `0` when nothing scrolls, to
+/// [`SCROLL_REPORT_HANDLER`] at most once per animation frame while the page scrolls,
+/// and once at `load`.
+pub const SCROLL_REPORT_JS: &str = "(function () {
+  var queued = false;
+  function report() {
+    queued = false;
+    var el = document.scrollingElement || document.documentElement;
+    if (!el) { return; }
+    var range = el.scrollHeight - window.innerHeight;
+    var fraction = range > 0 ? window.scrollY / range : 0;
+    window.webkit.messageHandlers.wolfScroll.postMessage(fraction);
+  }
+  window.addEventListener('scroll', function () {
+    if (!queued) { queued = true; window.requestAnimationFrame(report); }
+  }, { passive: true });
+  window.addEventListener('load', report);
+})();";
+
+/// The scroll fraction a [`SCROLL_REPORT_JS`] report names: `None` when it is not
+/// finite, else clamped to `[0, 1]`.
+#[must_use]
+pub fn reported_scroll(value: f64) -> Option<f64> {
+    // `+ 0.0` turns a `-0.0` into `0.0`.
+    value.is_finite().then(|| value.clamp(0.0, 1.0) + 0.0)
+}
+
+/// The script that scrolls a loaded preview to `fraction` of its scrollable height,
+/// applied at once and again on the next animation frame, after layout settles.
+///
+/// `fraction` is clamped to `[0, 1]` and a non-finite one is `0`, so nothing but a
+/// finite number in that range is ever formatted into the script.
+#[must_use]
+pub fn scroll_to_fraction_js(fraction: f64) -> String {
+    let fraction = if fraction.is_finite() {
+        fraction.clamp(0.0, 1.0) + 0.0
+    } else {
+        0.0
+    };
+    format!(
+        "(function (f) {{
+  function apply() {{
+    var el = document.scrollingElement || document.documentElement;
+    if (!el) {{ return; }}
+    var range = el.scrollHeight - window.innerHeight;
+    window.scrollTo(0, range > 0 ? f * range : 0);
+  }}
+  apply();
+  window.requestAnimationFrame(apply);
+}})({fraction});"
+    )
+}
 
 /// What a preview pane's web view was last loaded from: the source buffer's
 /// number AND its `changedtick`.

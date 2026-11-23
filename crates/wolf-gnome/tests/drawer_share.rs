@@ -1,5 +1,5 @@
-//! Table-driven tests for `wolf_gnome::drawer::DrawerShare`, the window's share of the pane
-//! area that the terminal drawer's divider holds.
+//! Table-driven tests for `wolf_gnome::drawer::DrawerShare`, a tab's share of the pane area
+//! that the terminal drawer's divider holds, and the rule that restores a saved one.
 //!
 //! The share is the drawer's fraction of the vertical paned's span; the paned's position is
 //! the editor tree's height. Every expected position here is a literal worked out by hand,
@@ -223,6 +223,40 @@ fn share_survives_a_pane_area_resize() {
              px pane area, want {expected}. 500 at span 900 means the drawer's PIXEL height was \
              stored rather than its share, so a window resize keeps the drawer's height and \
              hands the whole change to the editor."
+        );
+    }
+}
+
+/// E9a and E9b: a saved share comes back only when it is a fraction strictly between 0 and 1,
+/// and anything else restores a new share.
+#[test]
+fn a_saved_share_restores_only_strictly_between_zero_and_one() {
+    for saved in [0.5, 0.25] {
+        assert_eq!(
+            DrawerShare::restored(saved).get(),
+            saved,
+            "a saved share of {saved} restored as {}. It is a fraction strictly between 0 and 1, \
+             so it must come back as saved; one third means every saved share is dropped and a \
+             relaunched drawer opens at a new window's share.",
+            DrawerShare::restored(saved).get()
+        );
+    }
+    for saved in [
+        0.0,
+        1.0,
+        -0.1,
+        1.5,
+        f64::NAN,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+    ] {
+        let got = DrawerShare::restored(saved).get();
+        assert_eq!(
+            got, DRAWER_WEIGHT,
+            "a saved share of {saved} restored as {got}, not DRAWER_WEIGHT. It names no drawer \
+             the paned can show: 0 and below hide it, 1 and above hide the editor, and NaN makes \
+             `position` answer the floor, so a corrupt saved state must restore a new share. \
+             The saved value kept means `restored` checks nothing."
         );
     }
 }

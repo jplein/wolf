@@ -97,7 +97,7 @@ pub(crate) fn tg_group_start_x() -> f64 {
 /// [`tg_search_x`]'s stay inside their own toggles for toggle widths from 28 to 40 px. A wrong
 /// value fails loudly rather than passing by accident, because a click that misses the group
 /// moves no sidebar.
-fn tg_files_x() -> f64 {
+pub(crate) fn tg_files_x() -> f64 {
     tg_group_start_x() + TG_GROUP_PADDING_PX + TG_TOGGLE_WIDTH_PX / 2.0
 }
 
@@ -108,7 +108,7 @@ pub(crate) fn tg_search_x() -> f64 {
 
 /// The row both toggles are clicked on: the middle of the header bar above its shade, which is
 /// where libadwaita centres its children.
-fn tg_click_y() -> f64 {
+pub(crate) fn tg_click_y() -> f64 {
     (OVERLAY_ORIGIN_Y_EXPECTED - TB_HEADER_SHADE_PX) / 2.0
 }
 

@@ -78,7 +78,7 @@ const SCROLL_DETENTS: i64 = 3;
 /// MEASURED under cage: `axis 15.0 1` arrives at the client as `axis_source(0)` +
 /// `axis_relative_direction(0, 0)` + `axis_value120(0, 120)` + `axis(t, 0, 15.0)` +
 /// `frame()`.
-const SCROLL_AXIS_VALUE: &str = "15.0";
+pub(crate) const SCROLL_AXIS_VALUE: &str = "15.0";
 
 /// What `visualmode()` returns for a CHARWISE visual selection. An EMPTY string
 /// instead means Neovim never entered visual mode at all.
