@@ -462,7 +462,7 @@ Real Neovim (`WOLF_NVIM_BIN`, `no-sandbox` target with staged nvim runfiles).
 
 Headless, over real Unix-domain sockets (`//crates/wolf-core:open_channel`: `no-sandbox`, for the sockets).
 
-**Covers** — the 103-byte socket path limit on both sides, a refused path creating no directory; a request taken, queued and waking, and requests drained in arrival order; a wait, a malformed line, a relative path and an oversized line refused and not queued; a stalled client not holding up another, and a silent one let go; a stale socket replaced, a live listener never stolen, the socket's mode `0600`, and a drop removing only its own socket; `connect_or_launch` retrying after a launch, giving up at its timeout, never launching a running app, and returning a launch failure at once.
+**Covers** — the 103-byte socket path limit on both sides, a refused path creating no directory; a request taken, queued and waking, and requests drained in arrival order; a wait, a malformed line, a relative path and an oversized line refused and not queued; a stalled client not holding up another, and a silent one let go; a stale socket replaced, while a live listener, a socket of another kind and a file that is not a socket are left alone; the socket's mode `0600`, and a drop removing only its own socket; `connect_or_launch` retrying after a launch, giving up at its timeout, never launching a running app, and returning a launch failure at once.
 
 **Gotchas**
 

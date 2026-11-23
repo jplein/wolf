@@ -193,7 +193,7 @@ A state table at a newer version is frozen per `db::Table` handle. Its flag is s
 - Each connection is served on a thread of its own, with the read timeout `OPEN_REQUEST_TIMEOUT` and the line cap `OPEN_REQUEST_MAX`, so a client that stalls or floods holds up no other and holds no thread for long.
 - A request is queued and the wake fired before `Taken` is sent, so a command that exited `0` has its request in the queue.
 - The socket is mode `0600`, because any process that can connect can make Wolf open a path.
-- An existing socket file is probed before it is unlinked. A refused connect means a stale socket a crashed app left; a live listener's is `InUse` and left alone, and a file that is not a socket is never removed.
+- An existing socket file is probed before it is unlinked, and only a refused connect marks it as stale, left by a crashed app. Any other connect failure is returned and removes nothing, because it does not show the listener is gone: a socket of another kind, or one the user cannot connect to, may be live. A live listener's socket is `InUse`, and a file that is not a socket is never removed.
 - `Drop` unlinks the socket only when its `(dev, ino)` is still the one it bound, read through the absolute path recorded at bind, so a listener never removes a successor's socket, whatever the working directory has become.
 - The accept loop polls the listener beside one end of a socket pair that `Drop` closes, so a drop stops it at once rather than at the next connection.
 - The 103-byte limit measures the socket path as given, so a relative state directory passes. The tests rely on it, because Bazel's test `TMPDIR` on macOS leaves no room for an absolute socket path.
