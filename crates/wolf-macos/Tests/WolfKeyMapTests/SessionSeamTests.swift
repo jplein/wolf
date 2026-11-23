@@ -54,13 +54,30 @@ final class SessionSeamTests: XCTestCase {
       weights: [0.6, 0.4])
   }
 
+  /// The drawer's pane id in the gather tests: no leaf of `nested`.
+  private let drawer: PaneId = 9
+
+  /// Three distinct edit leaves over `nested`, in depth-first order.
+  private var nestedContent: Content {
+    [p1: .buffer(path: fileA), p2: .buffer(path: fileB), p3: .buffer(path: fileC)]
+  }
+
   private func gather(
     hasFolder: Bool = true, cwd: String? = nil, sidebarVisible: Bool = true,
-    layout: PaneLayout, content: Content, zoomed: PaneId? = nil
+    layout: PaneLayout, content: Content, zoomed: PaneId? = nil,
+    views: [PaneId: SavedPaneView] = [:], active: PaneId? = nil,
+    drawer: SessionSeam.LiveDrawer? = nil, sidebar: RestoreSeam.SavedSidebar = .init()
   ) -> SessionSeam.TabGather {
     SessionSeam.gatherTab(
       hasFolder: hasFolder, cwd: cwd ?? folder, sidebarVisible: sidebarVisible, layout: layout,
-      content: content, zoomed: zoomed)
+      content: content, zoomed: zoomed, views: views, active: active, drawer: drawer,
+      sidebar: sidebar)
+  }
+
+  /// The tab a ready gather persists, or `nil` for a refusal.
+  private func readyTab(_ gather: SessionSeam.TabGather) -> RestoreSeam.SavedTab? {
+    guard case .ready(let tab) = gather else { return nil }
+    return tab
   }
 
   // MARK: - Closing a view (C2)
@@ -322,34 +339,116 @@ final class SessionSeamTests: XCTestCase {
         + "above holds for every tab, not for a missing cwd")
   }
 
-  func testGatherTabPersistsTheZoomedLeafButNotAZoomedDrawer() {
-    let content: Content = [
-      p1: .buffer(path: fileA), p2: .buffer(path: fileB), p3: .buffer(path: fileC),
-    ]
-    func expected(zoomingB: Bool) -> SessionSeam.TabGather {
-      .ready(
-        RestoreSeam.SavedTab(
-          cwd: folder, sidebarVisible: true,
-          layout: .split(
-            orientation: .vertical, weights: [0.6, 0.4],
+  /// S3: a zoomed leaf persists as the leaf's mark, and a zoomed drawer as `drawer.zoomed`.
+  func testGatherTabPersistsTheZoomedLeafAndAZoomedDrawer() {
+    let open = SessionSeam.LiveDrawer(pane: drawer, share: 0.4)
+    func leaves(zoomingB: Bool) -> SavedPaneNode {
+      .split(
+        orientation: .vertical, weights: [0.6, 0.4],
+        children: [
+          .leaf(path: fileA, preview: false),
+          .split(
+            orientation: .horizontal, weights: [0.25, 0.75],
             children: [
-              .leaf(path: fileA, preview: false),
-              .split(
-                orientation: .horizontal, weights: [0.25, 0.75],
-                children: [
-                  .leaf(path: fileB, preview: false, zoomed: zoomingB),
-                  .leaf(path: fileC, preview: false),
-                ]),
-            ])))
+              .leaf(path: fileB, preview: false, zoomed: zoomingB),
+              .leaf(path: fileC, preview: false),
+            ]),
+        ])
     }
+
+    let onPane = readyTab(gather(layout: nested, content: nestedContent, zoomed: p2, drawer: open))
     XCTAssertEqual(
-      gather(layout: nested, content: content, zoomed: p2), expected(zoomingB: true),
+      onPane?.layout, leaves(zoomingB: true),
       "zoomed on pane 2, the saved layout must mark its leaf, beta.md, and no other. No mark"
         + " means gatherTab drops the zoom from the saved state, so a relaunch restores unzoomed")
-    let drawer: PaneId = 9
     XCTAssertEqual(
-      gather(layout: nested, content: content, zoomed: drawer), expected(zoomingB: false),
-      "zoomed on the drawer, which is not persisted, the saved layout must mark no leaf")
+      onPane?.drawer, RestoreSeam.SavedDrawer(open: true, share: 0.4, zoomed: false),
+      "zoomed on pane 2, the open drawer must persist unzoomed; zoomed: true means drawer.zoomed"
+        + " is set for any zoom rather than for the drawer's own")
+
+    let onDrawer = readyTab(
+      gather(layout: nested, content: nestedContent, zoomed: drawer, drawer: open))
+    XCTAssertEqual(
+      onDrawer?.layout, leaves(zoomingB: false),
+      "zoomed on the drawer, which is no leaf of the layout, the saved layout must mark no leaf")
+    XCTAssertEqual(
+      onDrawer?.drawer, RestoreSeam.SavedDrawer(open: true, share: 0.4, zoomed: true),
+      "zoomed on the drawer, the saved drawer must carry zoomed: true; false means a zoomed"
+        + " drawer persists unzoomed and a relaunch shows every pane")
+  }
+
+  /// S2: the focus, the drawer, each leaf's view and the sidebar reach the saved tab.
+  func testGatherTabPersistsFocusDrawerViewsAndSidebar() {
+    let open = SessionSeam.LiveDrawer(pane: drawer, share: 0.4)
+    XCTAssertEqual(
+      readyTab(gather(layout: nested, content: nestedContent, active: p2, drawer: open))?
+        .focused, .pane(1),
+      "active on pane 2, depth-first leaf 1, the saved focus must be .pane(1); nil means the"
+        + " focus is not gathered, and .pane(2) that it is the pane id rather than the index")
+    XCTAssertEqual(
+      readyTab(gather(layout: nested, content: nestedContent, active: drawer, drawer: open))?
+        .focused, .drawer,
+      "active on the open drawer, the saved focus must be .drawer; nil means an active drawer is"
+        + " taken for a pane that is no leaf")
+    XCTAssertEqual(
+      readyTab(gather(layout: nested, content: nestedContent, active: drawer))?.focused, nil,
+      "with no drawer passed, an active id that is no leaf must persist no focus")
+
+    XCTAssertEqual(
+      readyTab(gather(layout: nested, content: nestedContent, drawer: open))?.drawer,
+      RestoreSeam.SavedDrawer(open: true, share: 0.4),
+      "an open drawer at a share of 0.4 must persist open at 0.4; open: false means a drawer"
+        + " with a pane is taken for a closed one")
+    XCTAssertEqual(
+      readyTab(
+        gather(
+          layout: nested, content: nestedContent,
+          drawer: SessionSeam.LiveDrawer(pane: nil, share: 0.25)))?.drawer,
+      RestoreSeam.SavedDrawer(open: false, share: 0.25),
+      "a closed drawer must persist closed, keeping its share of 0.25")
+    XCTAssertEqual(
+      readyTab(gather(layout: nested, content: nestedContent))?.drawer, nil,
+      "with no drawer passed, the saved tab must carry none")
+
+    let edited = SavedPaneView(cursor: .init(line: 12, col: 4), topLine: 7)
+    let scrolled = SavedPaneView(scroll: 0.25)
+    XCTAssertEqual(
+      readyTab(
+        gather(layout: nested, content: nestedContent, views: [p1: edited, p3: scrolled]))?
+        .layout?.leafViews,
+      [edited, SavedPaneView(), scrolled],
+      "each leaf must carry its own pane's view, and pane 2, which has none, an empty one;"
+        + " empty views throughout mean gatherTab does not pass `views` to encode")
+
+    let sidebar = RestoreSeam.SavedSidebar(
+      mode: .search, query: "TODO", caseSensitive: true, useRegex: false, allFiles: true)
+    XCTAssertEqual(
+      readyTab(gather(layout: nested, content: nestedContent, sidebar: sidebar))?.sidebar,
+      sidebar,
+      "the sidebar must pass through to the saved tab; SavedSidebar() means it is dropped")
+
+    let empty = readyTab(
+      gather(
+        hasFolder: false, cwd: home, layout: .leaf(p1), content: [p1: .buffer(path: "")],
+        active: p1, drawer: open, sidebar: sidebar))
+    XCTAssertEqual(
+      empty,
+      RestoreSeam.SavedTab(cwd: "", sidebarVisible: true, layout: nil, sidebar: sidebar),
+      "a view without a folder must persist its sidebar with no layout, focus or drawer; a focus"
+        + " or a drawer here is restored into a tab with no panes")
+  }
+
+  /// S4: the quit captures every view, then commits, then flushes, then tears every view down.
+  func testTerminateCapturesEveryViewBeforeTheFinalWriteAndFlushesBeforeTeardown() {
+    var log: [String] = []
+    SessionSeam.terminate(
+      ["a", "b"], capture: { log.append("capture \($0)") }, commit: { log.append("commit") },
+      flush: { log.append("flush") }, teardown: { log.append("teardown \($0)") })
+    XCTAssertEqual(
+      log, ["capture a", "capture b", "commit", "flush", "teardown a", "teardown b"],
+      "every view must be captured before the final write, and the write flushed before any"
+        + " Neovim exits (§4). A commit before a capture writes the cursors of the last focus"
+        + " change; a teardown before the flush can lose the write")
   }
 
   // MARK: - Contribution and its cache (C1, C5, C6, C7)

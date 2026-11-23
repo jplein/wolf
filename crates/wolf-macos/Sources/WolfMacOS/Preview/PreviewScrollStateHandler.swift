@@ -21,9 +21,10 @@ final class PreviewScrollStateHandler: NSObject, WKScriptMessageHandler {
   }
 
   /// The page pushed its scroll state: `{ a: <cursor anchor's viewport-relative Y,
-  /// or null when unresolved>, s: <window.scrollY> }`. A body that is not the
-  /// expected dictionary is ignored; a missing `s` degrades to `0` rather than
-  /// dropping the message, so a partially decodable push still refreshes the cache.
+  /// or null when unresolved>, s: <window.scrollY>, m: <scrollable height> }`. A body
+  /// that is not the expected dictionary is ignored; a missing `s` or `m` degrades to
+  /// `0` rather than dropping the message, so a partially decodable push still
+  /// refreshes the cache.
   func userContentController(
     _ userContentController: WKUserContentController,
     didReceive message: WKScriptMessage
@@ -31,7 +32,8 @@ final class PreviewScrollStateHandler: NSObject, WKScriptMessageHandler {
     guard let body = message.body as? [String: Any] else { return }
     let state = PreviewScrollSeam.ScrollState(
       anchorTop: body["a"] as? Double,
-      scrollY: body["s"] as? Double ?? 0)
+      scrollY: body["s"] as? Double ?? 0,
+      maxScrollY: body["m"] as? Double ?? 0)
     container?.recordPreviewScrollState(win: win, state: state)
   }
 }

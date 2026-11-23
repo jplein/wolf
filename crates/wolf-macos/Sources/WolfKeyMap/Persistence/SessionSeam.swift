@@ -20,6 +20,18 @@ public enum SessionSeam {
     case unreported
   }
 
+  /// A view's live terminal drawer: its pane while open, `nil` while closed, and its share of
+  /// the pane area's height.
+  public struct LiveDrawer: Equatable {
+    public let pane: PaneId?
+    public let share: Double
+
+    public init(pane: PaneId?, share: Double) {
+      self.pane = pane
+      self.share = share
+    }
+  }
+
   /// The outcome of reading one view's live state.
   public enum TabGather: Equatable {
     /// Every leaf and the cwd are reported: this is the tab to persist.
@@ -34,11 +46,15 @@ public enum SessionSeam {
   /// It refuses when `hasFolder` and `cwd` is empty, and when any leaf of `layout`
   /// is `.unreported` or missing from `content`. A view without a folder persists
   /// `cwd: ""`, whatever Neovim reports, and a lone empty leaf persists no layout.
-  /// The leaf whose id is `zoomed` is marked zoomed; the drawer is no leaf of `layout`, so
-  /// a zoomed drawer persists unzoomed.
+  /// The leaf whose id is `zoomed` is marked zoomed, and a zoomed open drawer persists as
+  /// `drawer.zoomed`. Each leaf carries its id's entry in `views`. `focused` is `.drawer`
+  /// when `active` is the open drawer's pane, else the depth-first index of the leaf
+  /// `active` names. A view without a folder persists `sidebar` with no focus or drawer.
   public static func gatherTab(
     hasFolder: Bool, cwd: String, sidebarVisible: Bool, layout: PaneLayout,
-    content: [PaneId: LeafContent], zoomed: PaneId? = nil
+    content: [PaneId: LeafContent], zoomed: PaneId? = nil, views: [PaneId: SavedPaneView] = [:],
+    active: PaneId? = nil, drawer: LiveDrawer? = nil,
+    sidebar: RestoreSeam.SavedSidebar = RestoreSeam.SavedSidebar()
   ) -> TabGather {
     if hasFolder && cwd.isEmpty { return .refuse }
     var paths: [PaneId: String] = [:]
@@ -59,11 +75,40 @@ public enum SessionSeam {
       }
     }
     let node = PaneLayoutCodec.encode(
-      layout, paths: paths, previews: previews, terminals: terminals, zoomed: zoomed)
+      layout, paths: paths, previews: previews, terminals: terminals, zoomed: zoomed,
+      views: views)
+    guard hasFolder else {
+      return .ready(
+        RestoreSeam.SavedTab(
+          cwd: "", sidebarVisible: sidebarVisible, layout: node.isEmptyLeaf ? nil : node,
+          sidebar: sidebar))
+    }
+    let focused: RestoreSeam.SavedPaneRef?
+    if let active, active == drawer?.pane {
+      focused = .drawer
+    } else {
+      focused = active.flatMap { leafIds(layout).firstIndex(of: $0) }.map { .pane($0) }
+    }
+    let savedDrawer = drawer.map {
+      RestoreSeam.SavedDrawer(
+        open: $0.pane != nil, share: $0.share, zoomed: $0.pane != nil && zoomed == $0.pane)
+    }
     return .ready(
       RestoreSeam.SavedTab(
-        cwd: hasFolder ? cwd : "", sidebarVisible: sidebarVisible,
-        layout: node.isEmptyLeaf ? nil : node))
+        cwd: cwd, sidebarVisible: sidebarVisible, layout: node.isEmptyLeaf ? nil : node,
+        focused: focused, sidebar: sidebar, drawer: savedDrawer))
+  }
+
+  /// The quit's order (§4): every view captures, then the final write is committed and
+  /// flushed, and only then does any view tear its Neovim down.
+  public static func terminate<View>(
+    _ views: [View], capture: (View) -> Void, commit: () -> Void, flush: () -> Void,
+    teardown: (View) -> Void
+  ) {
+    views.forEach(capture)
+    commit()
+    flush()
+    views.forEach(teardown)
   }
 
   /// Whether a view's live state may replace its cached contribution at all.

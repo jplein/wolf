@@ -17,7 +17,8 @@
 //! The rebuild document the captive Neovim's `_G.wolf_rebuild_layout` decodes is a
 //! wire format of its own, separate from this model, and [`tab_rebuild_spec`] is its
 //! producer. It keeps `preview` and `terminal` booleans rather than `kind`, because
-//! that is the shape `init.lua` decodes.
+//! that is the shape `init.lua` decodes, and marks the focused leaf with
+//! `"focused": true` so the rebuild leaves Neovim on it.
 //!
 //! See `specs/application-state.md#2-the-state-model`,
 //! `specs/application-state.md#which-tab-becomes-a-directorys-project-state` and
@@ -487,8 +488,9 @@ fn replace_missing(node: &mut Node, first: usize, replaced: &mut Vec<usize>) -> 
 ///
 /// It renders the tab as is, checking no file: pass it [`restored_tab`]'s output.
 /// An edit leaf carries its `cursor` and `top_line`, which the helper applies with
-/// the line clamped to the buffer, and the leaf `zoomed` names is marked zoomed. A
-/// zoom on the drawer marks no leaf.
+/// the line clamped to the buffer. The leaf `zoomed` names is marked zoomed, and the
+/// leaf `focused` names carries `"focused": true`, which no other leaf carries. A zoom
+/// or a focus on the drawer marks no leaf.
 ///
 /// Leaves are emitted in depth-first order, the order
 /// [`crate::WolfCore::rebuild_layout`] returns window handles in. Total: a
@@ -497,23 +499,35 @@ fn replace_missing(node: &mut Node, first: usize, replaced: &mut Vec<usize>) -> 
 #[must_use]
 pub fn tab_rebuild_spec(content: &TabContent) -> Option<String> {
     let root = content.root.as_ref()?;
-    let zoomed = match content.zoomed {
+    let pane_index = |r: Option<PaneRef>| match r {
         Some(PaneRef::Pane(i)) => Some(i),
         _ => None,
     };
+    let marks = LeafMarks {
+        zoomed: pane_index(content.zoomed),
+        focused: pane_index(content.focused),
+    };
     let mut next = 0;
-    let value = node_spec(root, zoomed, &mut next);
+    let value = node_spec(root, marks, &mut next);
     Some(serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_owned()))
 }
 
+/// The depth-first indices of the leaves the rebuild document marks.
+#[derive(Clone, Copy)]
+struct LeafMarks {
+    zoomed: Option<usize>,
+    focused: Option<usize>,
+}
+
 /// The rebuild document of `node`, numbering its leaves from `*next` and marking
-/// the leaf at depth-first index `zoomed`.
-fn node_spec(node: &Node, zoomed: Option<usize>, next: &mut usize) -> serde_json::Value {
+/// the leaves at `marks`' depth-first indices.
+fn node_spec(node: &Node, marks: LeafMarks, next: &mut usize) -> serde_json::Value {
     match node {
         Node::Pane(pane) => {
-            let z = zoomed == Some(*next);
+            let z = marks.zoomed == Some(*next);
+            let focused = marks.focused == Some(*next);
             *next += 1;
-            match pane {
+            let mut leaf = match pane {
                 Pane::Edit {
                     path,
                     cursor,
@@ -521,13 +535,17 @@ fn node_spec(node: &Node, zoomed: Option<usize>, next: &mut usize) -> serde_json
                 } => leaf_spec(path, false, false, z, *cursor, *top_line),
                 Pane::Preview { path, .. } => leaf_spec(path, true, false, z, None, None),
                 Pane::Terminal { path } => leaf_spec(path, false, true, z, None, None),
+            };
+            if let (true, Some(map)) = (focused, leaf.as_object_mut()) {
+                map.insert("focused".to_owned(), serde_json::Value::Bool(true));
             }
+            leaf
         }
         Node::Layout(layout) => {
             let children = layout
                 .children
                 .iter()
-                .map(|child| node_spec(child, zoomed, next))
+                .map(|child| node_spec(child, marks, next))
                 .collect();
             layout_spec(layout.orientation, &layout.weights, children)
         }
@@ -537,7 +555,7 @@ fn node_spec(node: &Node, zoomed: Option<usize>, next: &mut usize) -> serde_json
 /// One leaf of the rebuild document: `leaf`, `path`, `preview`, `terminal` and
 /// `zoomed` always, plus `"cursor": {"line", "col"}` and `"top_line"` only when
 /// they are `Some`, so a document with neither is the one `init.lua` has always
-/// read.
+/// read. [`node_spec`] adds `"focused"` to the focused leaf.
 fn leaf_spec(
     path: &str,
     preview: bool,

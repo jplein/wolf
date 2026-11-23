@@ -357,6 +357,18 @@ void* __swift_bridge__$Vec_FfiWinBuffer$get_mut(void* vec_ptr, uintptr_t index);
 uintptr_t __swift_bridge__$Vec_FfiWinBuffer$len(void* vec_ptr);
 void* __swift_bridge__$Vec_FfiWinBuffer$as_ptr(void* vec_ptr);
 
+typedef struct FfiWindowCursor FfiWindowCursor;
+void __swift_bridge__$FfiWindowCursor$_free(void* self);
+
+void* __swift_bridge__$Vec_FfiWindowCursor$new(void);
+void __swift_bridge__$Vec_FfiWindowCursor$drop(void* vec_ptr);
+void __swift_bridge__$Vec_FfiWindowCursor$push(void* vec_ptr, void* item_ptr);
+void* __swift_bridge__$Vec_FfiWindowCursor$pop(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiWindowCursor$get(void* vec_ptr, uintptr_t index);
+void* __swift_bridge__$Vec_FfiWindowCursor$get_mut(void* vec_ptr, uintptr_t index);
+uintptr_t __swift_bridge__$Vec_FfiWindowCursor$len(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiWindowCursor$as_ptr(void* vec_ptr);
+
 typedef struct FfiCmdline FfiCmdline;
 void __swift_bridge__$FfiCmdline$_free(void* self);
 
@@ -469,6 +481,7 @@ struct __swift_bridge__$FfiColor __swift_bridge__$WolfCoreHandle$theme_titlebar_
 struct __swift_bridge__$FfiColor __swift_bridge__$WolfCoreHandle$theme_titlebar_fg(void* self);
 void* __swift_bridge__$WolfCoreHandle$pane_status_for_grid(void* self, uint64_t grid);
 void* __swift_bridge__$WolfCoreHandle$win_buffer(void* self, int64_t win);
+void* __swift_bridge__$WolfCoreHandle$window_cursor(void* self, int64_t win);
 void __swift_bridge__$WolfCoreHandle$open(void* self, void* path);
 void __swift_bridge__$WolfCoreHandle$chdir(void* self, void* path);
 void __swift_bridge__$WolfCoreHandle$set_background(void* self, bool dark);
@@ -715,6 +728,10 @@ void* __swift_bridge__$FfiPaneStatus$abs_path(void* self);
 bool __swift_bridge__$FfiWinBuffer$reported(void* self);
 void* __swift_bridge__$FfiWinBuffer$abs_path(void* self);
 uint64_t __swift_bridge__$FfiWinBuffer$terminal(void* self);
+bool __swift_bridge__$FfiWindowCursor$found(void* self);
+uint32_t __swift_bridge__$FfiWindowCursor$line(void* self);
+uint32_t __swift_bridge__$FfiWindowCursor$col(void* self);
+uint32_t __swift_bridge__$FfiWindowCursor$top_line(void* self);
 bool __swift_bridge__$FfiCmdline$active(void* self);
 void* __swift_bridge__$FfiCmdline$firstc(void* self);
 void* __swift_bridge__$FfiCmdline$prompt(void* self);

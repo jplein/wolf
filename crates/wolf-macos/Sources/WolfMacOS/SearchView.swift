@@ -77,6 +77,23 @@ final class SearchView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate {
   /// The current (transient) search session; `nil` before the first run / once
   /// closed.
   private var search: FfiSearch?
+
+  /// The live session's query: `nil` before a run, after a run on an empty query, and
+  /// once closed.
+  private(set) var searchedQuery: String?
+
+  /// Fired by Return and by each toggle click, none of which wakes the core, so the
+  /// window controller can schedule a state write.
+  var onChange: (() -> Void)?
+
+  /// The search field's text, which the window state saves as the sidebar's query.
+  var query: String { searchField.stringValue }
+  /// Whether the case-sensitive toggle is on.
+  var caseSensitive: Bool { caseButton.state == .on }
+  /// Whether the regex toggle is on.
+  var useRegex: Bool { regexButton.state == .on }
+  /// Whether the all-files toggle is on.
+  var allFiles: Bool { allFilesButton.state == .on }
   /// The projected file rows, in display order.
   private var files: [SearchFileItem] = []
   /// Absolute paths of file rows the user has explicitly collapsed, so a rebuild
@@ -172,20 +189,45 @@ final class SearchView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate {
   func close() {
     refreshCoalescer.cancelPending()
     search = nil
+    searchedQuery = nil
+  }
+
+  /// Restores a saved query and toggles: the field takes `query` and each toggle its
+  /// non-`nil` value. With `run`, the search runs as Return runs it; without, the field
+  /// and toggles only show the saved values. Fires no `onChange`.
+  func restore(query: String?, caseSensitive: Bool?, useRegex: Bool?, allFiles: Bool?, run: Bool) {
+    if let query { searchField.stringValue = query }
+    if let caseSensitive { caseButton.state = caseSensitive ? .on : .off }
+    if let useRegex { regexButton.state = useRegex ? .on : .off }
+    if let allFiles { allFilesButton.state = allFiles ? .on : .off }
+    if run { startSearch() }
   }
 
   // MARK: - Actions
 
-  /// Runs a fresh search from the field + toggle states (Return only). Replacing
-  /// the session drops the prior `FfiSearch`, cancelling its rg subprocess.
+  /// Return in the search field: runs the search, then reports the change.
   @objc private func runSearch() {
+    startSearch()
+    onChange?()
+  }
+
+  /// A toggle click: reports the change and runs no search, which waits for Return.
+  @objc private func toggleChanged() {
+    onChange?()
+  }
+
+  /// Runs a fresh search from the field + toggle states. Replacing the session drops
+  /// the prior `FfiSearch`, cancelling its rg subprocess.
+  private func startSearch() {
     let query = searchField.stringValue
     guard !query.isEmpty else {
       search = nil
+      searchedQuery = nil
       files = []
       outlineView.reloadData()
       return
     }
+    searchedQuery = query
     search = handle.start_search(
       query,
       regexButton.state == .on,
@@ -415,6 +457,8 @@ final class SearchView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate {
     button.bezelStyle = .rounded
     button.setButtonType(.pushOnPushOff)
     button.font = font
+    button.target = self
+    button.action = #selector(toggleChanged)
   }
 
   /// Creates a reusable outline cell with a wrapping label.

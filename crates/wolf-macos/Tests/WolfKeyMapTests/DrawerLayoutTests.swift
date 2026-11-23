@@ -340,4 +340,24 @@ final class DrawerLayoutTests: XCTestCase {
       editor: 0, drawer: 0,
       "a zero pane area with a drawer gives (0, 0)")
   }
+
+  /// S9: a saved share restores only when it is a fraction strictly inside the pane area, since a
+  /// non-finite weight collapses the layout to zero heights and 0 or 1 leaves one side empty.
+  func testARestoredShareIsKeptOnlyWhenItIsAFractionOfTheArea() {
+    XCTAssertEqual(
+      DrawerLayout.restoredWeight(0.5), 0.5,
+      "a saved share of 0.5 must restore as 0.5; \(DrawerLayout.defaultWeight) means every"
+        + " saved share is replaced by the default")
+    XCTAssertEqual(
+      DrawerLayout.restoredWeight(0.05), 0.05,
+      "a small saved share inside (0, 1) must be kept; the minimum height floors it on layout")
+    let rejected: [Double] = [.nan, .infinity, -.infinity, 0, 1, -0.2, 1.4]
+    for share in rejected {
+      XCTAssertEqual(
+        DrawerLayout.restoredWeight(share), DrawerLayout.defaultWeight,
+        "a saved share of \(share) is no fraction strictly between 0 and 1, so it must restore"
+          + " as the default \(DrawerLayout.defaultWeight); \(share) itself means the share is"
+          + " returned unchecked")
+    }
+  }
 }

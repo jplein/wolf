@@ -5,6 +5,47 @@ import Foundation
 /// The pure restore planner. A namespace (`enum` with only static members),
 /// mirroring `StateSeam`.
 public enum RestoreSeam {
+  /// A tab's reference to one of its panes: a depth-first leaf index, or the drawer.
+  public enum SavedPaneRef: Hashable {
+    case pane(Int)
+    case drawer
+  }
+
+  /// A tab's saved sidebar mode and search panel, each field `nil` when not saved. The
+  /// toggles mirror `SearchOptions`.
+  public struct SavedSidebar: Hashable {
+    public var mode: SidebarPanel?
+    public var query: String?
+    public var caseSensitive: Bool?
+    public var useRegex: Bool?
+    public var allFiles: Bool?
+
+    public init(
+      mode: SidebarPanel? = nil, query: String? = nil, caseSensitive: Bool? = nil,
+      useRegex: Bool? = nil, allFiles: Bool? = nil
+    ) {
+      self.mode = mode
+      self.query = query
+      self.caseSensitive = caseSensitive
+      self.useRegex = useRegex
+      self.allFiles = allFiles
+    }
+  }
+
+  /// A tab's saved terminal drawer: whether it is open, its share of the pane area's height,
+  /// and whether it is the tab's zoomed pane.
+  public struct SavedDrawer: Hashable {
+    public let open: Bool
+    public let share: Double
+    public let zoomed: Bool
+
+    public init(open: Bool, share: Double, zoomed: Bool = false) {
+      self.open = open
+      self.share = share
+      self.zoomed = zoomed
+    }
+  }
+
   /// One saved tab's state: its working directory and sidebar visibility, in
   /// the shape the AppKit caller reads back from `FfiAppTab`, and the shape a
   /// live view contributes to a commit (`SessionSeam`).
@@ -19,11 +60,23 @@ public enum RestoreSeam {
     /// single leaf. A PASSTHROUGH: it rides into the matching `PlannedTab.layout`
     /// verbatim.
     public let layout: SavedPaneNode?
+    /// The tab's focused pane, `nil` when none is saved.
+    public let focused: SavedPaneRef?
+    /// The sidebar's mode, query and toggles.
+    public let sidebar: SavedSidebar
+    /// The terminal drawer, `nil` when none is saved.
+    public let drawer: SavedDrawer?
 
-    public init(cwd: String, sidebarVisible: Bool, layout: SavedPaneNode?) {
+    public init(
+      cwd: String, sidebarVisible: Bool, layout: SavedPaneNode?, focused: SavedPaneRef? = nil,
+      sidebar: SavedSidebar = SavedSidebar(), drawer: SavedDrawer? = nil
+    ) {
       self.cwd = cwd
       self.sidebarVisible = sidebarVisible
       self.layout = layout
+      self.focused = focused
+      self.sidebar = sidebar
+      self.drawer = drawer
     }
   }
 

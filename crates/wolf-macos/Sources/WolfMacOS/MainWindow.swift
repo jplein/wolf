@@ -87,6 +87,28 @@ final class MainWindow: NSWindow {
     }
   }
 
+  /// The sidebar's mode and the search panel's query and toggles, as the window state
+  /// saves them.
+  var savedSidebar: RestoreSeam.SavedSidebar {
+    let search = sidebar.search
+    return RestoreSeam.SavedSidebar(
+      mode: sidebarPanel, query: search.query, caseSensitive: search.caseSensitive,
+      useRegex: search.useRegex, allFiles: search.allFiles)
+  }
+
+  /// Restores a saved sidebar: a saved mode switches the panel without revealing the
+  /// sidebar, and the search panel takes the query and toggles, running the search only
+  /// for a `search` sidebar. The toolbar control is refreshed last, as `showSidebar` does.
+  func restoreSidebar(_ saved: RestoreSeam.SavedSidebar) {
+    if let mode = saved.mode {
+      sidebar.setMode(mode == .tree ? .tree : .search)
+    }
+    sidebar.search.restore(
+      query: saved.query, caseSensitive: saved.caseSensitive, useRegex: saved.useRegex,
+      allFiles: saved.allFiles, run: saved.mode == .search)
+    refreshSidebarToolbar()
+  }
+
   /// Reveals the sidebar (if collapsed), switches it to `panel`, and focuses the
   /// search field for `.search`. The `isCollapsed = false` write relays visibility
   /// to the container via KVO; `setMode` swaps the active child.

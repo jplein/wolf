@@ -286,8 +286,8 @@ final class PaneLayoutCodecTests: XCTestCase {
     XCTAssertEqual(
       PaneLayoutCodec.encode(tree.layout(), paths: paths, previews: [], zoomed: drawerId),
       .split(orientation: .vertical, weights: thirds, children: unmarked),
-      "zoomed on the drawer, which is not a layout leaf, no leaf may be marked: the drawer is"
-        + " not persisted, so a zoomed drawer persists unzoomed")
+      "zoomed on the drawer, which is not a layout leaf, no leaf may be marked: the drawer's"
+        + " zoom persists as SavedDrawer.zoomed, never as a leaf's mark")
   }
 
   /// P2: `zoomedLeafIndex` is the depth-first index of the first marked leaf, which the restore
@@ -332,5 +332,35 @@ final class PaneLayoutCodecTests: XCTestCase {
     XCTAssertEqual(
       PaneLayoutCodec.decodeTokens(tokens), node,
       "a zoomed leaf must round-trip through the tokens with its mark")
+  }
+
+  // MARK: - Per-leaf views (S5)
+
+  /// S5: `encode(views:)` puts each pane's view on its own leaf, and the view survives the
+  /// post-order tokens the FFI push-builder replays.
+  func testViewsRideEncodeAndTheTokenRoundTrip() {
+    let tree = PaneTree(root: p1)
+    tree.split(p1, p2, .vertical)
+    tree.split(p2, p3, .horizontal)
+    let paths: [PaneId: String] = [p1: "/notes/a.md", p2: "/notes/a.md", p3: "/notes/c.md"]
+    let edited = SavedPaneView(cursor: .init(line: 12, col: 4), topLine: 7)
+    let scrolled = SavedPaneView(scroll: 0.25)
+
+    let node = PaneLayoutCodec.encode(
+      tree.layout(), paths: paths, previews: [p2], views: [p1: edited, p2: scrolled])
+    XCTAssertEqual(
+      node.leafViews, [edited, scrolled, SavedPaneView()],
+      "each leaf must carry its own pane's view, and pane 3, which has none, an empty one."
+        + " Empty views throughout mean encode ignores `views`; swapped ones that it keys them"
+        + " by something other than the leaf's id")
+    XCTAssertTrue(
+      SavedPaneNode.leaf(path: "", preview: false, view: edited).isEmptyLeaf,
+      "a lone unnamed edit leaf is empty whatever its view, so a cursor on the startup buffer"
+        + " does not make an empty tab persist a layout")
+
+    XCTAssertEqual(
+      PaneLayoutCodec.decodeTokens(PaneLayoutCodec.postOrderTokens(node)), node,
+      "every leaf must round-trip through the tokens with its view; an empty view on leaf 1 or"
+        + " 2 means a token's view is dropped on emit or on decode")
   }
 }

@@ -827,8 +827,8 @@ fn terminal_drawer_opens_and_is_not_persisted_under_cage() {
     assert!(
         leaves.iter().all(|(_, terminal)| !terminal),
         "{SMOKE}: the frozen window state persists a TERMINAL pane: {leaves:?} (path, terminal). \
-         The drawer is never persisted (specs/terminal-panes.md, Session restore), so a terminal pane \
-         here means the drawer became a `PaneTree` leaf and `layout_snapshot` wrote it, and the \
+         The drawer is never a layout leaf: a tab's drawer persists as its `drawer` \
+         (specs/terminal-panes.md, Session restore), so a terminal pane here means the drawer became a `PaneTree` leaf and `layout_snapshot` wrote it, and the \
          next launch would restore it as a split terminal pane. File: {}",
         frozen_state_file.display()
     );

@@ -279,6 +279,103 @@ final class WindowStateRoundTripTests: XCTestCase {
         + "e2, must be stored. e1 means no recency was written and the rule fell back to tab "
         + "order; e3 means the back window counted as frontmost")
   }
+
+  // MARK: - RT4: the per-tab and per-pane extras
+
+  /// S1: every extra of §2 survives a quit and a relaunch: the focus, the sidebar's mode, query
+  /// and toggles, the drawer with its share and zoom, an edit pane's cursor and top line, and a
+  /// preview's scroll. An empty tab keeps its sidebar and nothing else.
+  func testEveryPerTabExtraSurvivesAQuitAndRelaunch() {
+    let d1 = uniqueDirectory("extras-one")
+    let d2 = uniqueDirectory("extras-two")
+    let edited = SavedPaneView(cursor: .init(line: 12, col: 4), topLine: 7)
+    let scrolled = SavedPaneView(scroll: 0.25)
+    let searching = RestoreSeam.SavedSidebar(
+      mode: .search, query: "TODO", caseSensitive: true, useRegex: false, allFiles: true)
+    let browsing = RestoreSeam.SavedSidebar(
+      mode: .tree, query: "", caseSensitive: false, useRegex: true, allFiles: false)
+    let first = RestoreSeam.SavedTab(
+      cwd: d1, sidebarVisible: true,
+      layout: .split(
+        orientation: .vertical, weights: [0.5, 0.3, 0.2],
+        children: [
+          .leaf(path: "\(d1)/alpha.md", preview: false, view: edited),
+          .leaf(path: "\(d1)/alpha.md", preview: true, view: scrolled),
+          .leaf(path: d1, preview: false, terminal: true),
+        ]),
+      focused: .pane(1), sidebar: searching,
+      drawer: RestoreSeam.SavedDrawer(open: true, share: 0.4))
+    let second = RestoreSeam.SavedTab(
+      cwd: d2, sidebarVisible: false, layout: .leaf(path: "\(d2)/beta.md", preview: false),
+      focused: .drawer, sidebar: browsing,
+      drawer: RestoreSeam.SavedDrawer(open: true, share: 0.5, zoomed: true))
+    let empty = RestoreSeam.SavedTab(
+      cwd: "", sidebarVisible: true, layout: .leaf(path: "\(d1)/stale.md", preview: false),
+      focused: .pane(0), sidebar: searching,
+      drawer: RestoreSeam.SavedDrawer(open: true, share: 0.3, zoomed: true))
+
+    var stacking = StackingOrder()
+    for tab in [3, 2, 1] { stacking.focus(tab) }
+    quit(
+      [
+        SessionSeam.LiveWindow(
+          frame: frame1,
+          tabs: [
+            SessionSeam.LiveTab(id: 1, tab: first), SessionSeam.LiveTab(id: 2, tab: second),
+            SessionSeam.LiveTab(id: 3, tab: empty),
+          ],
+          selected: 1)
+      ], stacking)
+
+    let loaded = load()
+    let tabs = loaded.first?.tabs ?? []
+    guard tabs.count == 3 else {
+      XCTFail("premise: the one window must load with its three tabs: \(loaded)")
+      return
+    }
+    XCTAssertEqual(
+      tabs[0].layout?.leafViews, [edited, scrolled, SavedPaneView()],
+      "the edit leaf must load its cursor (12, 4) and top line 7, and the preview its scroll"
+        + " 0.25. An empty first view means submit skips pane_cursor or load ignores has_cursor;"
+        + " an empty second that submit skips pane_scroll or load ignores has_scroll")
+    XCTAssertEqual(
+      tabs[0].sidebar, searching,
+      "the search sidebar must load with its query and toggles; SavedSidebar() means submit"
+        + " skips tab_sidebar or load reads none of it")
+    XCTAssertEqual(
+      tabs[1].sidebar, browsing,
+      "the tree sidebar must load with its empty query and its toggles; a nil query or toggle"
+        + " means an explicit value loads as unset")
+    XCTAssertEqual(
+      tabs[0].drawer, RestoreSeam.SavedDrawer(open: true, share: 0.4),
+      "the open drawer must load open at 0.4; nil means submit skips tab_drawer or load ignores"
+        + " has_drawer")
+    XCTAssertEqual(
+      tabs[0].focused, .pane(1),
+      "the focus on the preview, leaf 1, must load; nil means submit writes the focus as NONE")
+    XCTAssertEqual(
+      tabs[1].focused, .drawer,
+      "a focused drawer must load as .drawer; nil means load maps the DRAWER kind to no focus,"
+        + " .pane(0) that submit writes it as a pane")
+    XCTAssertEqual(
+      tabs[1].drawer, RestoreSeam.SavedDrawer(open: true, share: 0.5, zoomed: true),
+      "a zoomed drawer must load zoomed; zoomed: false means submit writes the drawer's zoom as"
+        + " no zoom, or load reads the DRAWER zoom kind as none")
+    XCTAssertEqual(
+      tabs[2], RestoreSeam.SavedTab(cwd: "", sidebarVisible: true, layout: nil, sidebar: searching),
+      "an empty tab must load with its sidebar and no layout, focus or drawer, whatever its"
+        + " cache held; a focus or drawer here would restore into a tab with no panes")
+    XCTAssertEqual(
+      tabs, [first, second, tabs[2]],
+      "every folder tab must load equal to what was saved; the first differing field names what"
+        + " the round trip loses")
+
+    relaunch(directories: [d1, d2])
+    XCTAssertEqual(
+      load(), loaded,
+      "a relaunch that changes nothing must write back every extra it read; a difference means"
+        + " the launch's restore steps drop an extra that the first load carried")
+  }
 }
 
 extension Array {

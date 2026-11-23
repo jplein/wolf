@@ -488,6 +488,42 @@ impl NvimProcess {
         }
     }
 
+    /// Returns window `win`'s cursor as `(line, col, top_line)`, or `None` when
+    /// Neovim knows no such window.
+    ///
+    /// `line` and `top_line` are 1-based and `col` is a 0-based byte column, as
+    /// `nvim_win_get_cursor` and `line("w0", win)` report them. One static Lua
+    /// snippet runs over `nvim_exec_lua` with `win` as its vararg, never
+    /// interpolated. A reply that is not three non-negative integers within `u32`
+    /// is `None`. An RPC error is propagated as [`NvimError::Rpc`].
+    pub fn window_cursor(
+        &self,
+        win: i64,
+    ) -> impl std::future::Future<Output = Result<Option<(u32, u32, u32)>, NvimError>> + Send + 'static
+    {
+        let nvim = self.nvim.clone();
+        async move {
+            let value = nvim
+                .call(
+                    "nvim_exec_lua",
+                    vec![
+                        Value::from(
+                            "local w = ... \
+                             if not vim.api.nvim_win_is_valid(w) then return nil end \
+                             local c = vim.api.nvim_win_get_cursor(w) \
+                             return { c[1], c[2], vim.fn.line('w0', w) }",
+                        ),
+                        Value::Array(vec![Value::from(win)]),
+                    ],
+                )
+                .await
+                .map_err(|e| NvimError::Rpc(e.to_string()))?
+                .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+
+            Ok(decode_window_cursor(&value))
+        }
+    }
+
     /// Previews the active source buffer in place (the active pane becomes the
     /// preview pane) and returns the preview scratch buffer's number (`0` when the
     /// active buffer is not Markdown).
@@ -1825,6 +1861,19 @@ fn decode_block_highlight(entry: &Value) -> Option<crate::markdown::BlockHighlig
         });
     }
     Some(crate::markdown::BlockHighlight { spans })
+}
+
+/// Decodes [`NvimProcess::window_cursor`]'s reply, `{ line, col, top_line }`, or
+/// `None` for `nil` or any other shape.
+fn decode_window_cursor(value: &Value) -> Option<(u32, u32, u32)> {
+    let field = |i: usize| -> Option<u32> {
+        let n = value.as_array()?.get(i)?.as_u64()?;
+        u32::try_from(n).ok()
+    };
+    match value.as_array()?.len() {
+        3 => Some((field(0)?, field(1)?, field(2)?)),
+        _ => None,
+    }
 }
 
 /// Interprets an optional msgpack [`Value`] as a boolean flag, tolerating either a

@@ -92,7 +92,7 @@ There is one drawer session per core, and so one per tab on both front-ends. `Wo
 
 Both front-ends keep the drawer outside their pane trees, as their existing decisions say. Core's router ignores split chords from the drawer's session, and `<C-w>c` or `<C-w>q` in the drawer closes it.
 
-The drawer opens at a third of the pane area. Dragging its top edge resizes it, and neither the drawer nor the editor tree goes below one pane's minimum height. The dragged share is remembered per window for the session: closing and reopening the drawer and a window resize keep it, while a new window and a relaunch start at a third. The share is never persisted.
+The drawer opens at a third of the pane area. Dragging its top edge resizes it, and neither the drawer nor the editor tree goes below one pane's minimum height. The dragged share is remembered per window for the session: closing and reopening the drawer and a window resize keep it, a new window starts at a third, and a relaunch restores the tab's saved share ([application-state.md](application-state.md#tab)).
 
 ## The render contract
 
@@ -162,9 +162,9 @@ Core replaces the `TermLeave` trigger. When a terminal pane loses focus, through
 
 ## Session restore
 
-Shells never survive a quit, and the drawer is not persisted.
+Shells never survive a quit. A tab's drawer persists as its `drawer` ([application-state.md](application-state.md#tab)), so an open one restores with a fresh shell in the tab's directory.
 
-A split terminal pane persists as a pane of kind `terminal` ([application-state.md](application-state.md#pane)), whose `path` holds the directory to start in, chosen by the cwd rule under [Terminal panes in the pane tree](#terminal-panes-in-the-pane-tree). Its `abs_path` is `""`, so no file path is persisted for it. A zoomed terminal pane keeps its zoom at restore whether or not its directory exists, since the leaf restores either way, while a zoomed drawer persists unzoomed.
+A split terminal pane persists as a pane of kind `terminal` ([application-state.md](application-state.md#pane)), whose `path` holds the directory to start in, chosen by the cwd rule under [Terminal panes in the pane tree](#terminal-panes-in-the-pane-tree). Its `abs_path` is `""`, so no file path is persisted for it. A zoomed terminal pane keeps its zoom at restore whether or not its directory exists, since the leaf restores either way, and a zoomed drawer restores zoomed when it restores open.
 
 The rebuild-layout document gains `{ leaf = true, terminal = true }`, for which `init.lua` opens nothing in the window. Once `rebuild_layout` returns the window handles, core starts a session per terminal leaf and binds it into that window. The session starts in `path` when it is an existing directory, else in the window's tabpage cwd. A front-end reads the cwd it persists through `terminal_cwd(id)`.
 

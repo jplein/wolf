@@ -8,6 +8,9 @@
 //!   zoom on it is dropped, so the rebuild does not end on it.
 //! - A saved cursor and top line restore, and a cursor beyond the end of its file is clamped.
 //!
+//! They also pin `WolfCore::window_cursor`, the read §4's cursor capture makes: it answers each
+//! window's own cursor and top line, not the current window's, and `None` for no window.
+//!
 //! Premises measured against the pinned Neovim rather than assumed:
 //!
 //! - An unzoomed rebuild ends on the last leaf it realizes, so `active_win` on return tells a
@@ -28,7 +31,7 @@ use wolf_core::app_state::{
     restored_tab, tab_rebuild_spec, Cursor, Layout, Node, Pane, PaneOrientation, PaneRef,
     TabContent,
 };
-use wolf_core::WolfCore;
+use wolf_core::{WindowCursor, WolfCore};
 
 /// The name of the anonymous startup buffer an empty-path leaf inherits.
 const UNTITLED_STARTUP: &str = "Untitled.md";
@@ -251,4 +254,92 @@ fn a_saved_cursor_and_top_line_restore() {
             SAVED_TOP_LINE - 1
         ),
     );
+}
+
+#[test]
+fn window_cursor_reads_each_windows_own_cursor_and_top_line() {
+    let dir = tempfile::tempdir().expect("failed to create the fixture tempdir");
+    let long = numbered_file(dir.path(), "long.md", 200);
+    let short = numbered_file(dir.path(), "short.md", 3);
+    let saved = tab_of(Node::Layout(Layout {
+        orientation: PaneOrientation::Vertical,
+        weights: vec![0.5, 0.5],
+        children: vec![
+            edit(
+                &long,
+                Some(Cursor {
+                    line: FAR_LINE,
+                    col: 3,
+                }),
+                Some(SAVED_TOP_LINE),
+            ),
+            edit(&short, None, None),
+        ],
+    }));
+
+    let (core, waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
+    let (_, handles, active) = restore(&core, &saved);
+    assert_eq!(
+        handles.len(),
+        2,
+        "a two-pane tab must rebuild into two windows; got {handles:?}"
+    );
+    assert_eq!(
+        active,
+        Some(handles[1]),
+        "premise: the rebuild must end on leaf b, so that reading leaf a is reading a window \
+         other than the current one; handles {handles:?}"
+    );
+    poll_viewport(
+        &core,
+        &waiter,
+        handles[0],
+        &format!(
+            "premise: leaf a's saved cursor (line {FAR_LINE}) and top line ({SAVED_TOP_LINE}) \
+             to apply (curline {}, topline {})",
+            FAR_LINE - 1,
+            SAVED_TOP_LINE - 1
+        ),
+        |&(topline, curline)| {
+            topline == u64::from(SAVED_TOP_LINE) - 1 && curline == u64::from(FAR_LINE) - 1
+        },
+    );
+    poll_win_filename(&core, &waiter, handles[1], "short.md", "leaf b's file");
+
+    assert_eq!(
+        core.window_cursor(handles[0]),
+        Some(WindowCursor {
+            cursor: Cursor {
+                line: FAR_LINE,
+                col: 3,
+            },
+            top_line: SAVED_TOP_LINE,
+        }),
+        "leaf a, which is not the current window, must read its own cursor and top line. A top \
+         line of 1 means the snippet reads line(\"w0\") of the current window, leaf b; col 4 \
+         means the 0-based column is reported 1-based; None means a valid window reads as none"
+    );
+    assert_eq!(
+        core.window_cursor(handles[1]),
+        Some(WindowCursor {
+            cursor: Cursor { line: 1, col: 0 },
+            top_line: 1,
+        }),
+        "leaf b, current and on a 3-line file with no saved cursor, must read line 1, col 0, top \
+         line 1; line {FAR_LINE} means every read answers leaf a"
+    );
+    assert_eq!(
+        core.window_cursor(999_999),
+        None,
+        "a window handle Neovim does not know must read as None; a zeroed Some means a nil \
+         reply is mapped to a cursor"
+    );
+    assert_eq!(
+        core.window_cursor(0),
+        None,
+        "window 0 must read as None: Neovim takes 0 for the current window, so Some means the \
+         read went to Neovim and answered leaf b"
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
 }

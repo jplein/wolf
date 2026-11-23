@@ -1,5 +1,33 @@
 // Pure codec between the `PaneTree` layout and its persisted and FFI shapes.
 
+/// The per-pane view values a leaf persists: an edit pane's `cursor` and `topLine`, and a
+/// preview's `scroll`, each `nil` when not captured (`specs/application-state.md#pane`).
+public struct SavedPaneView: Hashable {
+  /// A cursor position: `line` 1-based, `col` a 0-based byte column.
+  public struct Cursor: Hashable {
+    public let line: UInt32
+    public let col: UInt32
+
+    public init(line: UInt32, col: UInt32) {
+      self.line = line
+      self.col = col
+    }
+  }
+
+  /// An edit pane's cursor.
+  public var cursor: Cursor?
+  /// An edit pane's 1-based first visible line.
+  public var topLine: UInt32?
+  /// A preview's scroll, the fraction of the page's scrollable height above the viewport.
+  public var scroll: Double?
+
+  public init(cursor: Cursor? = nil, topLine: UInt32? = nil, scroll: Double? = nil) {
+    self.cursor = cursor
+    self.topLine = topLine
+    self.scroll = scroll
+  }
+}
+
 /// A persistable, serializable mirror of a pane-split tree keyed by per-leaf
 /// buffer path (the shape the window state is gathered into). Either a leaf bound to a buffer
 /// path (`""` for an unnamed buffer) or an n-ary split of child nodes along
@@ -10,8 +38,11 @@ public enum SavedPaneNode: Hashable {
   /// Markdown file's ABS path (restored via `wolf_preview_file`, not `:edit`). When
   /// `terminal` is `true` the pane is a terminal pane and `path` is the directory its
   /// session starts in (`""` for the tabpage cwd). When `zoomed` is `true` the pane is its
-  /// tab's zoomed pane, which the restore re-zooms.
-  case leaf(path: String, preview: Bool, terminal: Bool = false, zoomed: Bool = false)
+  /// tab's zoomed pane, which the restore re-zooms. `view` is the pane's last captured
+  /// cursor, top line or scroll.
+  case leaf(
+    path: String, preview: Bool, terminal: Bool = false, zoomed: Bool = false,
+    view: SavedPaneView = SavedPaneView())
   /// An n-ary split of `children` along `orientation`, with parallel per-child
   /// `weights`.
   case split(orientation: Orientation, weights: [Double], children: [SavedPaneNode])
@@ -33,7 +64,7 @@ public enum SavedPaneNode: Hashable {
     var index = 0
     func find(_ node: SavedPaneNode) -> Int? {
       switch node {
-      case .leaf(_, _, _, let zoomed):
+      case .leaf(_, _, _, let zoomed, _):
         defer { index += 1 }
         return zoomed ? index : nil
       case .split(_, _, let children):
@@ -46,14 +77,25 @@ public enum SavedPaneNode: Hashable {
     return find(self)
   }
 
+  /// Each leaf's `view`, in depth-first order.
+  public var leafViews: [SavedPaneView] {
+    switch self {
+    case .leaf(_, _, _, _, let view):
+      return [view]
+    case .split(_, _, let children):
+      return children.flatMap { $0.leafViews }
+    }
+  }
+
   /// The "suppress from persistence" predicate for a LONE pane: `true` iff this
-  /// node is `.leaf(path: "", preview: false, terminal: false)`, whatever its `zoomed` —
+  /// node is `.leaf(path: "", preview: false, terminal: false)`, whatever its `zoomed` and
+  /// `view` —
   /// an empty (unnamed), non-preview lone buffer. A preview or terminal leaf, a leaf
   /// with a non-empty path, and any `.split(...)` all return `false`, so multi-pane
   /// layouts and lone panes bound to a file, a preview or a terminal are never suppressed.
   public var isEmptyLeaf: Bool {
     switch self {
-    case .leaf(let path, let preview, let terminal, _):
+    case .leaf(let path, let preview, let terminal, _, _):
       return path.isEmpty && !preview && !terminal
     case .split:
       return false
@@ -70,9 +112,10 @@ public enum PaneLayoutCodec {
   public enum LayoutToken: Equatable {
     /// A leaf bound to `path` (a preview of `path` when `preview` is `true`, a terminal
     /// pane starting in `path` when `terminal` is `true`, the tab's zoomed pane when
-    /// `zoomed` is `true`), weighing `weight` within its parent split.
+    /// `zoomed` is `true`) with its captured `view`, weighing `weight` within its parent split.
     case leaf(
-      path: String, preview: Bool, terminal: Bool = false, zoomed: Bool = false, weight: Double)
+      path: String, preview: Bool, terminal: Bool = false, zoomed: Bool = false,
+      view: SavedPaneView = SavedPaneView(), weight: Double)
     /// A split along `orientation` of the top `childCount` stack nodes, weighing
     /// `weight` within its parent split.
     case split(orientation: Orientation, childCount: Int, weight: Double)
@@ -82,21 +125,25 @@ public enum PaneLayoutCodec {
   /// each leaf id up in `paths` (an unmapped leaf becomes an empty path) and marking
   /// it a `preview` leaf when its id is in `previews`, a `terminal` leaf when it is
   /// in `terminals`, and `zoomed` when it equals `zoomed`. A `zoomed` id that is no leaf
-  /// of `layout`, such as the drawer's, marks nothing.
+  /// of `layout`, such as the drawer's, marks nothing. Each leaf carries its id's entry in
+  /// `views`, and an empty view when it has none.
   public static func encode(
     _ layout: PaneLayout, paths: [PaneId: String], previews: Set<PaneId>,
-    terminals: Set<PaneId> = [], zoomed: PaneId? = nil
+    terminals: Set<PaneId> = [], zoomed: PaneId? = nil, views: [PaneId: SavedPaneView] = [:]
   ) -> SavedPaneNode {
     switch layout {
     case .leaf(let id):
       return .leaf(
         path: paths[id] ?? "", preview: previews.contains(id),
-        terminal: terminals.contains(id), zoomed: id == zoomed)
+        terminal: terminals.contains(id), zoomed: id == zoomed,
+        view: views[id] ?? SavedPaneView())
     case .split(let orientation, let children, let weights):
       return .split(
         orientation: orientation, weights: weights,
         children: children.map {
-          encode($0, paths: paths, previews: previews, terminals: terminals, zoomed: zoomed)
+          encode(
+            $0, paths: paths, previews: previews, terminals: terminals, zoomed: zoomed,
+            views: views)
         })
     }
   }
@@ -115,9 +162,12 @@ public enum PaneLayoutCodec {
     var stack: [(node: SavedPaneNode, weight: Double)] = []
     for token in tokens {
       switch token {
-      case .leaf(let path, let preview, let terminal, let zoomed, let weight):
+      case .leaf(let path, let preview, let terminal, let zoomed, let view, let weight):
         stack.append(
-          (.leaf(path: path, preview: preview, terminal: terminal, zoomed: zoomed), weight))
+          (
+            .leaf(path: path, preview: preview, terminal: terminal, zoomed: zoomed, view: view),
+            weight
+          ))
       case .split(let orientation, let childCount, let weight):
         guard childCount >= 0, stack.count >= childCount else {
           return nil
@@ -145,9 +195,11 @@ public enum PaneLayoutCodec {
     _ node: SavedPaneNode, weight: Double, into out: inout [LayoutToken]
   ) {
     switch node {
-    case .leaf(let path, let preview, let terminal, let zoomed):
+    case .leaf(let path, let preview, let terminal, let zoomed, let view):
       out.append(
-        .leaf(path: path, preview: preview, terminal: terminal, zoomed: zoomed, weight: weight))
+        .leaf(
+          path: path, preview: preview, terminal: terminal, zoomed: zoomed, view: view,
+          weight: weight))
     case .split(let orientation, let weights, let children):
       for (child, childWeight) in zip(children, weights) {
         emit(child, weight: childWeight, into: &out)

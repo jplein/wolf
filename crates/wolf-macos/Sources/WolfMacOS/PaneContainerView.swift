@@ -153,8 +153,8 @@ final class PaneContainerView: NSView {
   private var draggingDrawerEdge = false
   /// The drawer's share of the pane area, set by a drag on its top edge. The view holds
   /// it, outside `tree`, for this window's session: closing the drawer and a restart
-  /// keep it, a new view starts at `DrawerLayout.defaultWeight`, and it is never
-  /// persisted.
+  /// keep it, a new view starts at `DrawerLayout.defaultWeight`, and a launch restore
+  /// sets the tab's saved share. The window state records it through `drawerShare`.
   private var drawerWeight: Double = DrawerLayout.defaultWeight
   /// The pane Zoom Pane shows alone over the whole pane area, or `nil`. `PaneZoom` owns
   /// every rule that sets it. Zoom is front-end geometry: it never touches `tree`, its
@@ -164,8 +164,36 @@ final class PaneContainerView: NSView {
 
   /// A saved pane-split layout awaiting rebuild once this view's first pane binds
   /// (consumed once in `onRenderWake`): Rust renders and realizes `tab`, and
-  /// `saved` is the same tree projected for the Swift `PaneTree`.
-  private var pendingLayoutRebuild: (saved: SavedPaneNode, tab: FfiAppTab)?
+  /// `saved` is the same tree projected for the Swift `PaneTree`. `focused` and `drawer`
+  /// are the restored tab's.
+  private var pendingLayoutRebuild:
+    (
+      saved: SavedPaneNode, tab: FfiAppTab, focused: RestoreSeam.SavedPaneRef?,
+      drawer: RestoreSeam.SavedDrawer?
+    )?
+
+  /// A pane a launch restore zooms or focuses, resolved to its id.
+  private enum RestoreTarget: Equatable {
+    case pane(PaneId)
+    case drawer
+  }
+
+  /// The zoom and focus a restore applies once its reopened drawer binds, in `applyDrawerOpen`.
+  /// They wait because the open's `DrawerOpen` intent unzooms, and because Neovim reports the
+  /// drawer current before it emits that intent, so once it is drained `active_win` is the
+  /// drawer or the queued focus target, never an earlier pane.
+  private var pendingDrawerRestore: (zoom: RestoreTarget?, focus: RestoreTarget?)?
+
+  /// The leaf a restore re-zooms once Neovim's current window is on it, in `updateActivePane`.
+  private var pendingRestoreZoom: PaneId?
+
+  /// The last captured cursor, top line or scroll of each tree leaf (§4 "Cursor and scroll
+  /// capture"), which the window state writes. `captureViewports()` and a focus change fill it.
+  private(set) var paneViews: [PaneId: SavedPaneView] = [:]
+
+  /// The saved scroll fraction of each restored preview window, applied at its first
+  /// finished load in `previewDidFinishLoad`. A capture leaves a window here untouched.
+  private var pendingSavedScrolls: [Int64: Double] = [:]
 
   /// The terminal restore a crash-restart requested (`requestTerminalRestore`), run once
   /// by `onRenderWake` after the first pane binds and no layout rebuild waits. See
@@ -674,8 +702,17 @@ final class PaneContainerView: NSView {
   var isZoomed: Bool { zoomedPane != nil }
 
   /// The zoomed pane's id, which the window state records by its leaf's index. A zoomed
-  /// drawer is no leaf of `paneLayout`, so it marks none and persists unzoomed.
+  /// drawer is no leaf of `paneLayout`, so it marks none and persists as the drawer's zoom.
   var zoomedPaneId: PaneId? { zoomedPane }
+
+  /// The active pane's id, the drawer's included, or `nil` before the first pane binds.
+  var activePaneId: PaneId? { activePane }
+
+  /// The open drawer's pane id, or `nil` while the drawer is closed.
+  var drawerPane: PaneId? { drawerPaneId }
+
+  /// The drawer's share of the pane area, kept while the drawer is closed.
+  var drawerShare: Double { drawerWeight }
 
   /// The frame of each pane this view shows, by its Neovim window handle: the zoomed
   /// pane alone while zoomed.
@@ -1187,10 +1224,10 @@ final class PaneContainerView: NSView {
       onLayoutChanged?()
       return
     }
-    // No `onLayoutChanged`: the drawer's share is the view's for this session and is never
-    // persisted, and nothing else a drawer drag changes is.
+    // Finish a drawer drag: the window state records the share.
     if draggingDrawerEdge {
       draggingDrawerEdge = false
+      onLayoutChanged?()
       return
     }
 
@@ -1494,11 +1531,11 @@ final class PaneContainerView: NSView {
 
     // One-shot launch restore: once the first pane is bound, realize the saved split tree in nvim
     // and rebind the panes.
-    if let (saved, tab) = pendingLayoutRebuild {
+    if let (saved, tab, focused, drawer) = pendingLayoutRebuild {
       ensureInitialPane()
       if panes.isEmpty { return }  // no window grid yet; retry on the next wake.
       pendingLayoutRebuild = nil
-      rebuildLayout(from: saved, tab: tab)
+      rebuildLayout(from: saved, tab: tab, focused: focused, drawer: drawer)
       applyTitlebarTheme()
       syncPreviewWebViews()
       refreshOverlays()
@@ -1563,6 +1600,10 @@ final class PaneContainerView: NSView {
     drawerPaneId = nil
     pendingTerminalRestore = nil
     zoomedPane = nil
+    pendingDrawerRestore = nil
+    pendingRestoreZoom = nil
+    paneViews.removeAll()
+    pendingSavedScrolls.removeAll()
     for win in Array(previewWebViews.keys) {
       removePreviewWebView(win)
     }
@@ -2087,6 +2128,7 @@ final class PaneContainerView: NSView {
     previewSelections[win] = nil
     lastPreviewCursors[win] = nil
     pendingPreviewRestores[win] = nil
+    pendingSavedScrolls[win] = nil
     previewSourcePaths[win] = nil
     pendingPreviewFragments[win] = nil
     // Leftover in-place bookkeeping would pin a recreated window on the full path, judge it against
@@ -2199,8 +2241,24 @@ final class PaneContainerView: NSView {
 
     if let fragment = pendingPreviewFragments.removeValue(forKey: win) {
       pendingPreviewRestores[win] = nil
+      pendingSavedScrolls[win] = nil
       previewWebViews[win]?.evaluateJavaScript(
         PreviewLinkSeam.scrollIntoViewJS(fragmentId: fragment), completionHandler: nil)
+      return
+    }
+
+    // A launch restore's saved scroll wins over a reload's restore, and the live cursor is
+    // recorded so the follow coalescer does not re-follow over it.
+    if let fraction = pendingSavedScrolls.removeValue(forKey: win) {
+      pendingPreviewRestores[win] = nil
+      previewWebViews[win]?.evaluateJavaScript(
+        PreviewScrollSeam.scrollFractionJS(fraction), completionHandler: nil)
+      for preview in handle.previews() where preview.win() == win {
+        let cursor = PreviewScrollSeam.CursorPos(
+          line: preview.source_cursor_line(), col: preview.source_cursor_col())
+        if cursor.isKnown { lastPreviewCursors[win] = cursor }
+        break
+      }
       return
     }
 
@@ -2401,9 +2459,44 @@ final class PaneContainerView: NSView {
   /// Requests that this view's pane layout be rebuilt once its first pane binds
   /// (consumed once in `onRenderWake`). `tab` is the restored bridge tab the launch
   /// read returned (`WindowStateCodec.Rebuild`), which Rust renders and realizes;
-  /// `saved` is the same tree projected for the Swift `PaneTree`.
-  func requestLayoutRebuild(_ saved: SavedPaneNode, tab: FfiAppTab) {
-    pendingLayoutRebuild = (saved, tab)
+  /// `saved` is the same tree projected for the Swift `PaneTree`, carrying each leaf's
+  /// saved view. `focused` and `drawer` are the tab's: the rebuild restores the focused
+  /// pane, and reopens an open drawer at its share with a fresh shell.
+  func requestLayoutRebuild(
+    _ saved: SavedPaneNode, tab: FfiAppTab, focused: RestoreSeam.SavedPaneRef? = nil,
+    drawer: RestoreSeam.SavedDrawer? = nil
+  ) {
+    pendingLayoutRebuild = (saved, tab, focused, drawer)
+  }
+
+  /// Captures the cursor and top line of every edit leaf and the scroll of every loaded
+  /// preview into `paneViews`, as the quit, a tab switch and a window close do (§4).
+  func captureViewports() {
+    for id in tree.leaves() {
+      captureViewport(id)
+    }
+  }
+
+  /// Captures leaf `id` into `paneViews`, overwriting it only with what could be read: an
+  /// edit pane when `window_cursor` answers, and a loaded preview with no saved scroll still
+  /// waiting to apply. A terminal pane persists nothing. The edit read runs only while the
+  /// core is alive, so a stalled Neovim costs no RPC timeout.
+  private func captureViewport(_ id: PaneId) {
+    guard tree.leaves().contains(id), let win = panes[id]?.win, win != 0,
+      terminalByPane[id] == nil
+    else { return }
+    if previewWebViews[win] != nil {
+      guard previewLoadedWins.contains(win), pendingSavedScrolls[win] == nil,
+        let state = previewScrollStates[win]
+      else { return }
+      paneViews[id] = SavedPaneView(scroll: PreviewScrollSeam.scrollFraction(state))
+      return
+    }
+    guard NvimLiveness(rawValue: handle.liveness()) == .alive else { return }
+    let read = handle.window_cursor(win)
+    guard read.found() else { return }
+    paneViews[id] = SavedPaneView(
+      cursor: SavedPaneView.Cursor(line: read.line(), col: read.col()), topLine: read.top_line())
   }
 
   /// Replaces the pure layout tree wholesale (launch restore only).
@@ -2414,10 +2507,15 @@ final class PaneContainerView: NSView {
   /// Has Rust render and realize `tab` in nvim (its window topology), then rebuilds
   /// the pane bindings from the returned DFS-ordered handles, taking the tree's
   /// weights from `PaneTree.rebuilt(from: saved)`, `saved` being the same tree
-  /// projected for Swift. It then re-zooms the leaf `saved` marks zoomed, which it makes
-  /// active. On a handle-count mismatch it logs and falls back to the single
-  /// already-bound pane (leaving `tree` untouched), unzoomed.
-  private func rebuildLayout(from saved: SavedPaneNode, tab: FfiAppTab) {
+  /// projected for Swift. It then re-zooms the leaf `saved` marks zoomed, and makes the
+  /// zoomed leaf, else the `focused` one, active. A saved `drawer` sets the share, and an
+  /// open one reopens, deferring the zoom and focus to its bind. It seeds `paneViews` and
+  /// the pending saved scrolls from `saved`. On a handle-count mismatch it logs and falls
+  /// back to the single already-bound pane (leaving `tree` untouched), unzoomed.
+  private func rebuildLayout(
+    from saved: SavedPaneNode, tab: FfiAppTab, focused: RestoreSeam.SavedPaneRef?,
+    drawer: RestoreSeam.SavedDrawer?
+  ) {
     let handles = Array(handle.rebuild_tab(tab))
     guard handles.count == saved.leafCount else {
       NSLog(
@@ -2435,12 +2533,37 @@ final class PaneContainerView: NSView {
     }
     panes = rebound
     drawerPaneId = nil
-    // The rebuild left Neovim's current window on the zoomed leaf, so no wake unzooms it.
-    if let index = saved.zoomedLeafIndex, index < leafIds.count {
-      zoomedPane = PaneZoom.zoomed(
-        after: .restore(leafIds[index]), zoomed: nil, active: nil, panes: viewPanes)
+    let drawerOpen = drawer?.open == true
+    if let drawer {
+      drawerWeight = DrawerLayout.restoredWeight(drawer.share)
     }
-    setActivePane(zoomedPane ?? leafIds.first)
+    func target(_ ref: RestoreSeam.SavedPaneRef?) -> RestoreTarget? {
+      switch ref {
+      case .pane(let index): return index < leafIds.count ? .pane(leafIds[index]) : nil
+      case .drawer: return drawerOpen ? .drawer : nil
+      case nil: return nil
+      }
+    }
+    let zoom =
+      target(saved.zoomedLeafIndex.map { .pane($0) })
+      ?? (drawer?.zoomed == true ? target(.drawer) : nil)
+    let focus = zoom ?? target(focused)
+    var focusedLeaf: PaneId?
+    if case .pane(let id) = focus { focusedLeaf = id }
+    if drawerOpen {
+      // The open's DrawerOpen intent unzooms, so the zoom and focus wait for the drawer's bind.
+      handle.toggle_terminal()
+      if let id = focusedLeaf, let win = panes[id]?.win { handle.focus_win(win) }
+      pendingDrawerRestore = (zoom, focus)
+    } else if case .pane(let id) = zoom {
+      // The rebuild left Neovim's current window on the zoomed leaf, so no wake unzooms it.
+      zoomedPane = PaneZoom.zoomed(after: .restore(id), zoomed: nil, active: nil, panes: viewPanes)
+    }
+    setActivePane(focusedLeaf ?? leafIds.first)
+    paneViews = Dictionary(uniqueKeysWithValues: zip(leafIds, saved.leafViews))
+    for (index, view) in saved.leafViews.enumerated() {
+      if let scroll = view.scroll { pendingSavedScrolls[handles[index]] = scroll }
+    }
     resolvePendingGrids()
     syncGridSizes()
     window?.invalidateCursorRects(for: self)
@@ -2526,6 +2649,20 @@ final class PaneContainerView: NSView {
     let grid = handle.grid_for_win(win)
     panes[id] = PaneBinding(win: win, boundGrid: grid == 0 ? nil : grid)
     setActivePane(id)
+    guard let (zoom, focus) = pendingDrawerRestore else { return }
+    pendingDrawerRestore = nil
+    switch zoom {
+    case .drawer:
+      // The open left Neovim on the drawer, so no wake unzooms it.
+      zoomedPane = PaneZoom.zoomed(after: .restore(id), zoomed: nil, active: nil, panes: viewPanes)
+    case .pane(let leaf):
+      pendingRestoreZoom = leaf
+    case nil:
+      break
+    }
+    if case .pane(let leaf) = focus, panes[leaf] != nil {
+      setActivePane(leaf)
+    }
   }
 
   /// Applies a focus-direction intent, bridging editor <-> drawer since the drawer
@@ -2612,6 +2749,7 @@ final class PaneContainerView: NSView {
       if tree.leaves().count <= 1 { break }
       tree.remove(id)
       panes.removeValue(forKey: id)
+      paneViews.removeValue(forKey: id)
     }
     if let active = activePane, panes[active] == nil {
       setActivePane(tree.leaves().first)
@@ -2643,6 +2781,11 @@ final class PaneContainerView: NSView {
     if target == nil {
       let cursorGrid = handle.read_frame().cursor_grid()
       target = panes.first(where: { $0.value.boundGrid == cursorGrid })?.key
+    }
+    if let leaf = pendingRestoreZoom, target == leaf {
+      pendingRestoreZoom = nil
+      zoomedPane = PaneZoom.zoomed(
+        after: .restore(leaf), zoomed: nil, active: nil, panes: viewPanes)
     }
     applyZoom(.focusMove(target: target))
     if let id = target, activePane != id {
@@ -3124,8 +3267,12 @@ final class PaneContainerView: NSView {
   ///
   /// Also records the most-recently-active EDITOR pane (a live tree leaf, never the
   /// drawer) into `lastEditorPane`, which the `<C-w>k` drawer -> up bridge targets.
-  /// All focus changes funnel through here, so this one update covers them.
+  /// All focus changes funnel through here, so this one update covers them, and so does
+  /// the capture of the pane focus leaves (§4), when that pane is still bound.
   private func setActivePane(_ pane: PaneId?) {
+    if let previous = activePane, previous != pane, panes[previous] != nil {
+      captureViewport(previous)
+    }
     if let pane, pane != drawerPaneId, tree.leaves().contains(pane) {
       lastEditorPane = pane
     }

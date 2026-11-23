@@ -40,10 +40,14 @@ public enum PreviewScrollSeam {
     public let anchorTop: Double?
     /// The raw `window.scrollY`, used as the fallback when no anchor resolves.
     public let scrollY: Double
+    /// The page's scrollable height, `max(0, scrollHeight - innerHeight)`, which
+    /// ``scrollFraction(_:)`` divides by.
+    public let maxScrollY: Double
 
-    public init(anchorTop: Double?, scrollY: Double) {
+    public init(anchorTop: Double?, scrollY: Double, maxScrollY: Double = 0) {
       self.anchorTop = anchorTop
       self.scrollY = scrollY
+      self.maxScrollY = maxScrollY
     }
   }
 
@@ -723,7 +727,9 @@ public enum PreviewScrollSeam {
           var a = el ? el.getBoundingClientRect().top : null;
           var wk = W.webkit && W.webkit.messageHandlers;
           var h = wk && wk.\(handlerName);
-          if (h) { h.postMessage({ a: a, s: W.scrollY }); }
+          var doc = document.documentElement;
+          var m = Math.max(0, doc.scrollHeight - W.innerHeight);
+          if (h) { h.postMessage({ a: a, s: W.scrollY, m: m }); }
         };
         W.__wolfFollow = function (line, col) {
           W.__wolfLine = line;
@@ -750,6 +756,12 @@ public enum PreviewScrollSeam {
             moveTo(fallbackY);
           }
           W.__wolfFollow(line, col);
+        };
+        W.__wolfScrollFraction = function (f) {
+          W.__wolfUserScrolled = false;
+          var doc = document.documentElement;
+          moveTo(f * Math.max(0, doc.scrollHeight - W.innerHeight));
+          post();
         };
         W.__wolfUpdate = function (html, line, col) {
           if (!document.body) { return 0; }
@@ -828,6 +840,33 @@ public enum PreviewScrollSeam {
     let call =
       "window.__wolfRestore&&window.__wolfRestore("
       + "\(line),\(col),\(target),\(fallback),\(hasTarget));"
+    return "(function(){var f=function(){\(call)};f();"
+      + "window.requestAnimationFrame(function(){"
+      + "if(!window.__wolfUserScrolled){f();}});"
+      + "if(document.fonts&&document.fonts.ready){"
+      + "document.fonts.ready.then(function(){"
+      + "if(!window.__wolfUserScrolled){f();}});}})();"
+  }
+
+  /// A preview's saved scroll: the share of the page's scrollable height above the viewport,
+  /// `state.scrollY / state.maxScrollY` clamped to `[0, 1]`. `0` when the page has no
+  /// scrollable height or either value is non-finite, so the store never sees a non-number.
+  public static func scrollFraction(_ state: ScrollState) -> Double {
+    let y = state.scrollY
+    let max = state.maxScrollY
+    guard y.isFinite, max.isFinite, max > 0 else { return 0 }
+    return Swift.min(Swift.max(y / max, 0), 1)
+  }
+
+  /// The JS evaluated at a restored preview's first finished load, scrolling to the saved
+  /// `fraction` of the scrollable height through the page's `__wolfScrollFraction`.
+  ///
+  /// The fraction is clamped to `[0, 1]`, a non-finite one sent as `0`, since a bare `nan`
+  /// or `inf` is no JS literal. Like ``restoreJS(_:)`` it re-applies on the next animation
+  /// frame and once `document.fonts` settles, each skipped after a user scroll.
+  public static func scrollFractionJS(_ fraction: Double) -> String {
+    let f = fraction.isFinite ? Swift.min(Swift.max(fraction, 0), 1) : 0
+    let call = "window.__wolfScrollFraction&&window.__wolfScrollFraction(\(f));"
     return "(function(){var f=function(){\(call)};f();"
       + "window.requestAnimationFrame(function(){"
       + "if(!window.__wolfUserScrolled){f();}});"

@@ -175,7 +175,8 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
     // Rebuild any saved layout, including a single leaf, which reopens its file or preview in the
     // tab's sole window.
     if let rebuild = restoredTab?.rebuild {
-      paneContainer.requestLayoutRebuild(rebuild.layout, tab: rebuild.tab)
+      paneContainer.requestLayoutRebuild(
+        rebuild.layout, tab: rebuild.tab, focused: rebuild.focused, drawer: rebuild.drawer)
     }
 
     // The sidebar owns its own file-search session. `start()` waits for the end of this method,
@@ -255,7 +256,10 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
       window.sidebarItem.isCollapsed = true
     } else if let restoredTab {
       window.sidebarItem.isCollapsed = !restoredTab.saved.sidebarVisible
+      window.restoreSidebar(restoredTab.saved.sidebar)
     }
+    // A mode change, a toggle click and Return wake no core, so each schedules a write itself.
+    sidebarContainer.onChange = { [weak self] in self?.coordinator?.scheduleStateSnapshot() }
 
     window.delegate = self
     window.makeKeyAndOrderFront(nil)
@@ -771,13 +775,25 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
     return tab
   }
 
-  /// Reads this view's live state into the tab it persists.
+  /// Reads this view's live state into the tab it persists, each pane's view being its
+  /// last capture.
   private func liveTab() -> SessionSeam.TabGather {
     guard let paneContainer, let handle else { return .refuse }
     return SessionSeam.gatherTab(
       hasFolder: hasFolder, cwd: handle.cwd().toString(),
       sidebarVisible: sidebarVisible, layout: paneContainer.paneLayout,
-      content: paneContainer.leafContents(), zoomed: paneContainer.zoomedPaneId)
+      content: paneContainer.leafContents(), zoomed: paneContainer.zoomedPaneId,
+      views: paneContainer.paneViews, active: paneContainer.activePaneId,
+      drawer: SessionSeam.LiveDrawer(
+        pane: paneContainer.drawerPane, share: paneContainer.drawerShare),
+      sidebar: window?.savedSidebar ?? persistedCache?.sidebar ?? RestoreSeam.SavedSidebar())
+  }
+
+  /// Captures every pane's cursor, top line or scroll (§4), as a tab switch, a window close
+  /// and the quit do. A no-op once torn down.
+  func captureViewports() {
+    guard !isTornDown else { return }
+    paneContainer?.captureViewports()
   }
 
   /// Whether this window's active document is in Neovim visual mode

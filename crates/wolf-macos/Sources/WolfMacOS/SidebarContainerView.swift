@@ -17,6 +17,10 @@ final class SidebarContainerView: NSView {
   /// The active body; switching swaps which child is hidden.
   private(set) var mode: Mode = .tree
 
+  /// Fired when `setMode` changes the mode, and relayed from the search panel's
+  /// `onChange`, so the window controller can schedule a state write.
+  var onChange: (() -> Void)?
+
   /// The sidebar's last-relayed visibility (from the split item's `isCollapsed`
   /// KVO), forwarded only to the ACTIVE child so the hidden one does no work.
   private var isSidebarVisible = true
@@ -28,6 +32,7 @@ final class SidebarContainerView: NSView {
     super.init(frame: .zero)
     buildSubviews()
     updateMode()
+    search.onChange = { [weak self] in self?.onChange?() }
   }
 
   @available(*, unavailable)
@@ -41,6 +46,7 @@ final class SidebarContainerView: NSView {
     guard newMode != mode else { return }
     mode = newMode
     updateMode()
+    onChange?()
   }
 
   /// Relays the sidebar's collapse state (from `isCollapsed` KVO) to BOTH children

@@ -35,6 +35,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   /// The tab whose Neovim was last told it has focus (`refreshTabFocus()`), or `nil`.
   private var focusedTabId: Int?
 
+  /// The main window's tab at the last `refreshTabFocus()`, whose panes are captured when
+  /// another tab becomes main.
+  private var lastMainTabId: Int?
+
   /// The next monotonic tab id to mint: the Window-menu / raise key and the stacking
   /// order's tab id.
   private var nextTabId = 0
@@ -381,10 +385,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   /// reports nothing.
   ///
   /// The main window's tab also moves to the front of the stacking order, which
-  /// schedules a snapshot when it changes the order.
+  /// schedules a snapshot when it changes the order. When the main window's tab changes,
+  /// the tab switched away from captures its panes' cursors and scroll first (§4); the
+  /// app resigning active leaves the main tab as it is, so it captures nothing.
   func refreshTabFocus() {
     let mainTab = controllers.first { !$0.isTornDown && $0.owns(NSApp.mainWindow) }?.tabId
     if let mainTab {
+      if let previous = lastMainTabId, previous != mainTab {
+        controllers.first { $0.tabId == previous }?.captureViewports()
+      }
+      lastMainTabId = mainTab
       let before = stacking
       stacking.focus(mainTab)
       if stacking != before { scheduleStateSnapshot() }
@@ -439,15 +449,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     // Stop observing the OS appearance before teardown.
     removeAppearanceObserver()
 
-    // Commit the whole tree synchronously, as a coalesced snapshot may not have fired, then block
-    // briefly on the writer so the window state is on disk before any Neovim exits.
-    snapshotNow()
-    _ = wolf_ffi_app_state_flush()
-
-    // Backstop for views that skipped windowWillClose; each teardown shuts its tab's core down.
-    for controller in controllers {
-      controller.teardown()
-    }
+    // Capture every tab, then commit synchronously, as a coalesced snapshot may not have fired,
+    // and flush before any teardown shuts a Neovim down (§4). Teardown is also the backstop.
+    SessionSeam.terminate(
+      controllers, capture: { $0.captureViewports() }, commit: { snapshotNow() },
+      flush: { _ = wolf_ffi_app_state_flush() }, teardown: { $0.teardown() })
   }
 
   /// The Cmd-N (⇧⌘N) entry point: opens a new STANDALONE window. Cmd-N ALWAYS
@@ -627,9 +633,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   /// live. Closing the last live view quits the app, so it commits synchronously,
   /// before returning, the tree read at the burst's first close: a tabbed window
   /// closed by its close button closes each tab in turn, and so keeps every tab.
+  ///
+  /// Outside a quit it first captures every live tab of the closing view's group, so the
+  /// burst's read carries the cursors (§4). A drop then writes at once, while the closing
+  /// view still counts, so its directory's project state keeps the capture.
   func closeCommit(for view: WolfWindowController) -> SessionSeam.CloseCommit {
+    if !isTerminating, let window = view.nsWindow {
+      let group = window.tabGroup?.windows ?? [window]
+      for controller in controllers where !controller.isTornDown {
+        if group.contains(where: { controller.owns($0) }) { controller.captureViewports() }
+      }
+    }
     let others = controllers.filter { $0 !== view && !$0.isTornDown }.count
-    return closeBurst.close(terminating: isTerminating, otherLiveViews: others)
+    let decision = closeBurst.close(terminating: isTerminating, otherLiveViews: others)
+    if decision == .dropSubtree { snapshotNow() }
+    return decision
   }
 
   /// Walks the live window/tab tree and submits it to the window state, when

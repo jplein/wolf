@@ -104,6 +104,20 @@ impl std::ops::Deref for SnapshotReadGuard {
     }
 }
 
+/// A window's cursor and first visible line, as [`WolfCore::window_cursor`] reads
+/// them for the application state's capture.
+///
+/// `cursor.line` is 1-based, `cursor.col` is a 0-based byte column, and `top_line`
+/// is 1-based: the units of a saved edit pane's `cursor` and `top_line`
+/// (`specs/application-state.md#pane`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WindowCursor {
+    /// The cursor position.
+    pub cursor: crate::app_state::Cursor,
+    /// The first visible line.
+    pub top_line: u32,
+}
+
 /// The live core: tokio runtime + captive Neovim + shared snapshot.
 pub struct WolfCore {
     runtime: Runtime,
@@ -1082,9 +1096,9 @@ impl WolfCore {
     ///
     /// When it returns, [`Snapshot::win_buffers`] and [`Snapshot::previews`] already
     /// report every returned window: the helper ends with a `wolf_buffers` emit and a
-    /// `wolf_barrier` request core answers only once that emit is applied. When the document
-    /// marks a zoomed leaf, Neovim's current window and [`Snapshot::active_win`] are then the
-    /// first such leaf's window.
+    /// `wolf_barrier` request core answers only once that emit is applied. Neovim's current
+    /// window and [`Snapshot::active_win`] are then the first zoomed leaf's window, else the
+    /// focused leaf's, when the document marks one.
     ///
     /// `init.lua` opens nothing in a terminal leaf's window. Once the handles return, core
     /// starts a session of the user's shell for each terminal leaf, in the leaf's `path`
@@ -1128,6 +1142,37 @@ impl WolfCore {
             }
         }
         handles
+    }
+
+    /// Reads window `win`'s cursor and top line from Neovim, for the capture of
+    /// `specs/application-state.md#cursor-and-scroll-capture`.
+    ///
+    /// Any window of any tabpage answers with its own values, not the current
+    /// window's. `None` for `win <= 0` with no RPC, since Neovim reads window `0` as
+    /// the current one; for a window Neovim does not know; and for an RPC error or
+    /// timeout, which is logged. Blocks through [`block_on_rpc`](Self::block_on_rpc),
+    /// so a wedged Neovim costs [`rpc_timeout`](Self::rpc_timeout). The snapshot's
+    /// viewport mirror is not used: it lags Neovim by a flush and carries no column.
+    #[must_use]
+    pub fn window_cursor(&self, win: i64) -> Option<WindowCursor> {
+        if win <= 0 {
+            return None;
+        }
+        let read = {
+            let nvim = self.nvim.borrow();
+            self.block_on_rpc("window_cursor", nvim.window_cursor(win))
+        };
+        match read {
+            Ok(Some((line, col, top_line))) => Some(WindowCursor {
+                cursor: crate::app_state::Cursor { line, col },
+                top_line,
+            }),
+            Ok(None) => None,
+            Err(e) => {
+                tracing::warn!("window_cursor failed: {e}");
+                None
+            }
+        }
     }
 
     /// Returns the CANONICALIZED tab-local working directory of tabpage `handle`,

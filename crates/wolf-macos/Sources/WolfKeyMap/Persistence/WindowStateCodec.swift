@@ -6,11 +6,11 @@ import Foundation
 /// Converts between the front-end's persistence types and the `wolf_ffi_app_state_*` surface,
 /// in the shape `specs/application-state.md` §2 defines.
 ///
-/// The zoom travels as the tab's `zoomed` pane index, the depth-first index of the first leaf
-/// `SavedPaneNode` marks zoomed, and is read back onto that leaf. An empty tab (`cwd == ""`)
-/// writes no root. A folder tab with no layout writes a lone edit pane on no file, which reads
-/// back as no layout. The per-tab extras (`focused`, cursor, scroll, the sidebar's mode, query and
-/// toggles, the drawer) are written as absent.
+/// A pane zoom travels as the tab's `zoomed` pane index, the depth-first index of the first leaf
+/// `SavedPaneNode` marks zoomed, and is read back onto that leaf; a drawer zoom travels as the
+/// `drawer` reference and is read back as `SavedDrawer.zoomed`. An empty tab (`cwd == ""`)
+/// writes its sidebar and no root, focus, zoom or drawer, whatever its cache holds. A folder tab
+/// with no layout writes a lone edit pane on no file, which reads back as no layout.
 public enum WindowStateCodec {
   /// One window a commit writes, frontmost first.
   public struct Window: Equatable {
@@ -41,6 +41,10 @@ public enum WindowStateCodec {
   public struct Rebuild {
     public let layout: SavedPaneNode
     public let tab: FfiAppTab
+    /// The restored tab's focused pane.
+    public let focused: RestoreSeam.SavedPaneRef?
+    /// The restored tab's drawer.
+    public let drawer: RestoreSeam.SavedDrawer?
   }
 
   /// One saved tab, as saved and as it restores.
@@ -75,6 +79,20 @@ public enum WindowStateCodec {
     case drawer = 2
   }
 
+  /// Mirrors wolf-ffi's `mod sidebar_mode`.
+  private enum SidebarMode: UInt8 {
+    case unset = 0
+    case tree = 1
+    case search = 2
+  }
+
+  /// Mirrors wolf-ffi's `mod tristate`.
+  private enum Tristate: UInt8 {
+    case unset = 0
+    case off = 1
+    case on = 2
+  }
+
   /// Submits `windows`, in list order, to the shared app-state store, which writes the window
   /// state and the project states in one transaction. It does not flush.
   public static func submit(_ windows: [Window]) {
@@ -85,13 +103,7 @@ public enum WindowStateCodec {
         window.frame.size.height, UInt32(clamping: window.activeTab))
       if window.minimized { wolf_ffi_app_state_window_minimized(true) }
       for tab in window.tabs {
-        let folder = !tab.cwd.isEmpty
-        let zoomed = folder ? tab.layout?.zoomedLeafIndex : nil
-        wolf_ffi_app_state_add_tab(
-          tab.cwd, tab.sidebarVisible, PaneRef.none.rawValue, 0,
-          (zoomed == nil ? PaneRef.none : PaneRef.pane).rawValue, UInt32(clamping: zoomed ?? 0))
-        guard folder else { continue }
-        pushRoot(tab.layout ?? .leaf(path: "", preview: false))
+        submitTab(tab)
       }
       for index in window.recency {
         wolf_ffi_app_state_push_recency(UInt32(clamping: index))
@@ -126,13 +138,61 @@ public enum WindowStateCodec {
     return result
   }
 
-  /// Replays `node` through the builder in post order onto the last tab's root.
+  /// Pushes `tab` onto the last window: its references, sidebar and drawer, then its root.
+  private static func submitTab(_ tab: RestoreSeam.SavedTab) {
+    let folder = !tab.cwd.isEmpty
+    let focused = folder ? reference(tab.focused) : (PaneRef.none, 0)
+    let zoomed: (PaneRef, UInt32)
+    if folder, let index = tab.layout?.zoomedLeafIndex {
+      zoomed = (.pane, UInt32(clamping: index))
+    } else if folder, tab.drawer?.zoomed == true {
+      zoomed = (.drawer, 0)
+    } else {
+      zoomed = (.none, 0)
+    }
+    wolf_ffi_app_state_add_tab(
+      tab.cwd, tab.sidebarVisible, focused.0.rawValue, focused.1, zoomed.0.rawValue, zoomed.1)
+    let sidebar = tab.sidebar
+    if sidebar != RestoreSeam.SavedSidebar() {
+      let mode: SidebarMode
+      switch sidebar.mode {
+      case .tree: mode = .tree
+      case .search: mode = .search
+      case nil: mode = .unset
+      }
+      wolf_ffi_app_state_tab_sidebar(
+        mode.rawValue, sidebar.query ?? "", sidebar.caseSensitive ?? false,
+        sidebar.useRegex ?? false, sidebar.allFiles ?? false)
+    }
+    guard folder else { return }
+    if let drawer = tab.drawer {
+      wolf_ffi_app_state_tab_drawer(drawer.open, drawer.share)
+    }
+    pushRoot(tab.layout ?? .leaf(path: "", preview: false))
+  }
+
+  /// A pane reference as a `pane_ref` kind and its index.
+  private static func reference(_ ref: RestoreSeam.SavedPaneRef?) -> (PaneRef, UInt32) {
+    switch ref {
+    case .pane(let index): return (.pane, UInt32(clamping: index))
+    case .drawer: return (.drawer, 0)
+    case nil: return (.none, 0)
+    }
+  }
+
+  /// Replays `node` through the builder in post order onto the last tab's root, each pane
+  /// followed by its view's cursor or scroll.
   private static func pushRoot(_ node: SavedPaneNode) {
     for token in PaneLayoutCodec.postOrderTokens(node) {
       switch token {
-      case .leaf(let path, let preview, let terminal, _, let weight):
+      case .leaf(let path, let preview, let terminal, _, let view, let weight):
         let kind: PaneKind = terminal ? .terminal : preview ? .preview : .edit
         wolf_ffi_app_state_push_pane(kind.rawValue, path, weight)
+        if kind == .edit, let cursor = view.cursor, let topLine = view.topLine {
+          wolf_ffi_app_state_pane_cursor(cursor.line, cursor.col, topLine)
+        } else if kind == .preview, let scroll = view.scroll {
+          wolf_ffi_app_state_pane_scroll(scroll)
+        }
       case .split(let orientation, let childCount, let weight):
         wolf_ffi_app_state_push_layout(
           orientation == .vertical ? 1 : 0, UInt32(clamping: childCount), weight)
@@ -149,13 +209,54 @@ public enum WindowStateCodec {
       layout = node.isEmptyLeaf ? nil : node
     }
     let saved = RestoreSeam.SavedTab(
-      cwd: tab.directory().toString(), sidebarVisible: tab.sidebar_visible(), layout: layout)
+      cwd: tab.directory().toString(), sidebarVisible: tab.sidebar_visible(), layout: layout,
+      focused: focusedRef(tab), sidebar: sidebar(tab), drawer: drawer(tab))
     let restored = tab.restored()
     let rebuild =
       restored.has_root()
-      ? Rebuild(layout: project(restored.root(), zoomed: zoomedIndex(restored)), tab: restored)
+      ? Rebuild(
+        layout: project(restored.root(), zoomed: zoomedIndex(restored)), tab: restored,
+        focused: focusedRef(restored), drawer: drawer(restored))
       : nil
     return LoadedTab(saved: saved, rebuild: rebuild)
+  }
+
+  /// The tab's focused pane, `nil` when it saved none.
+  private static func focusedRef(_ tab: FfiAppTabRef) -> RestoreSeam.SavedPaneRef? {
+    switch PaneRef(rawValue: tab.focused_kind()) {
+    case .pane: return .pane(Int(tab.focused_index()))
+    case .drawer: return .drawer
+    case .some(.none), nil: return nil
+    }
+  }
+
+  /// The tab's sidebar mode, query and toggles, each `nil` when unset.
+  private static func sidebar(_ tab: FfiAppTabRef) -> RestoreSeam.SavedSidebar {
+    let mode: SidebarPanel?
+    switch SidebarMode(rawValue: tab.sidebar_mode()) {
+    case .tree: mode = .tree
+    case .search: mode = .search
+    case .unset, nil: mode = nil
+    }
+    func flag(_ raw: UInt8) -> Bool? {
+      switch Tristate(rawValue: raw) {
+      case .on: return true
+      case .off: return false
+      case .unset, nil: return nil
+      }
+    }
+    return RestoreSeam.SavedSidebar(
+      mode: mode, query: tab.has_query() ? tab.query().toString() : nil,
+      caseSensitive: flag(tab.case_sensitive()), useRegex: flag(tab.use_regex()),
+      allFiles: flag(tab.all_files()))
+  }
+
+  /// The tab's drawer, zoomed when the tab's zoom is the drawer; `nil` when it saved none.
+  private static func drawer(_ tab: FfiAppTabRef) -> RestoreSeam.SavedDrawer? {
+    guard tab.has_drawer() else { return nil }
+    return RestoreSeam.SavedDrawer(
+      open: tab.drawer_open(), share: tab.drawer_share(),
+      zoomed: tab.zoomed_kind() == PaneRef.drawer.rawValue)
   }
 
   /// The depth-first index of the tab's zoomed pane, `nil` when it zooms none.
@@ -171,9 +272,15 @@ public enum WindowStateCodec {
       if node.is_pane() {
         defer { next += 1 }
         let kind = PaneKind(rawValue: node.kind())
+        var view = SavedPaneView()
+        if node.has_cursor() {
+          view.cursor = SavedPaneView.Cursor(line: node.cursor_line(), col: node.cursor_col())
+        }
+        if node.has_top_line() { view.topLine = node.top_line() }
+        if node.has_scroll() { view.scroll = node.scroll() }
         return .leaf(
           path: node.path().toString(), preview: kind == .preview, terminal: kind == .terminal,
-          zoomed: next == zoomed)
+          zoomed: next == zoomed, view: view)
       }
       var weights: [Double] = []
       var children: [SavedPaneNode] = []

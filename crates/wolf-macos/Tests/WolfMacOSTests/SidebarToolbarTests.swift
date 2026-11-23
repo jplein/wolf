@@ -369,4 +369,86 @@ final class SidebarToolbarTests: XCTestCase {
           + " view's top, under the transparent titlebar")
     }
   }
+
+  /// The search panel's toggles, case-sensitive, regex and all files, in that order.
+  private static func toggles(_ search: SearchView) -> [Bool] {
+    [search.caseSensitive, search.useRegex, search.allFiles]
+  }
+
+  /// A restored search sidebar shows its query and toggles, runs the search, and leaves the
+  /// control on the search segment. The panel starts on tree with every toggle off, unseeded.
+  func testARestoredSearchSidebarShowsItsQueryAndTogglesAndRunsIt() {
+    guard let fixture = SidebarToolbarFixture() else { return }
+    defer { fixture.shutdown() }
+    guard let control = requireControl(fixture) else { return }
+    let window = fixture.window
+    let search = fixture.sidebar.search
+    guard
+      expect(
+        fixture, control, step: "at start", visible: true, mode: .tree, selected: [true, false],
+        meaning: "Neither means the control is built without the derived selection")
+    else { return }
+
+    let saved = RestoreSeam.SavedSidebar(
+      mode: .search, query: "needle", caseSensitive: true, useRegex: false, allFiles: true)
+    window.restoreSidebar(saved)
+    XCTAssertEqual(
+      window.sidebarPanel, .search,
+      "a restored search sidebar must show the search panel; tree means restoreSidebar leaves"
+        + " the mode alone")
+    XCTAssertEqual(
+      search.query, "needle", "the search field must hold the restored query \"needle\"")
+    XCTAssertEqual(
+      Self.toggles(search), [true, false, true],
+      "the toggles must be the restored case-sensitive on, regex off, all files on; all off"
+        + " means restoreSidebar leaves the toggles alone")
+    XCTAssertEqual(
+      search.searchedQuery, "needle",
+      "a restored search sidebar with a query must run it (§2); nil means restoreSidebar fills"
+        + " the field without running the search, so the panel shows no results")
+    XCTAssertEqual(
+      window.savedSidebar, saved,
+      "savedSidebar must read back what was restored, or the next write saves another sidebar")
+    expect(
+      fixture, control, step: "restoreSidebar(search)", visible: true, mode: .search,
+      selected: [false, true],
+      meaning: "Tree still selected means restoreSidebar switches the mode without refreshing"
+        + " the control",
+      unreached: "Still on tree means restoreSidebar leaves the mode alone; hidden means it"
+        + " changes the sidebar's visibility, which is not its to restore")
+  }
+
+  /// A restored tree sidebar keeps the search panel's query and toggles without running the
+  /// search. The panel is switched to search first, so the restore has to switch it back.
+  func testARestoredTreeSidebarKeepsItsQueryWithoutRunningIt() {
+    guard let fixture = SidebarToolbarFixture() else { return }
+    defer { fixture.shutdown() }
+    let window = fixture.window
+    let search = fixture.sidebar.search
+    window.showSidebar(panel: .search)
+    guard fixture.reach(visible: true, mode: .search) else {
+      XCTFail("premise: showSidebar(.search) must switch the sidebar to the search panel")
+      return
+    }
+
+    let saved = RestoreSeam.SavedSidebar(
+      mode: .tree, query: "kept", caseSensitive: false, useRegex: true, allFiles: false)
+    window.restoreSidebar(saved)
+    XCTAssertEqual(
+      window.sidebarPanel, .tree,
+      "a restored tree sidebar must show the tree panel; search means restoreSidebar leaves the"
+        + " mode alone")
+    XCTAssertEqual(search.query, "kept", "the search field must keep the restored query \"kept\"")
+    XCTAssertEqual(
+      Self.toggles(search), [false, true, false],
+      "the toggles must be the restored case-sensitive off, regex on, all files off; all off"
+        + " means restoreSidebar leaves the toggles alone")
+    XCTAssertNil(
+      search.searchedQuery,
+      "a tree sidebar's query must be kept without running it; \"kept\" means restoreSidebar"
+        + " runs the search whatever the mode")
+    XCTAssertEqual(
+      window.savedSidebar, saved,
+      "savedSidebar must read back what was restored, or the next write saves another sidebar")
+  }
 }

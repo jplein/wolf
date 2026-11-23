@@ -1,5 +1,6 @@
 // See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#previewscrollseamtestsswift
 
+import JavaScriptCore
 import XCTest
 
 @testable import WolfKeyMap
@@ -2059,32 +2060,89 @@ final class PreviewScrollSeamTests: XCTestCase {
         + "single funnel that arms and clamps __wolfProgrammatic: \(region)")
   }
 
-  // MARK: - stateScriptJS: the in-place path must NOT clear the user-scroll flag
+  // MARK: - stateScriptJS: only the document-start init, restore and fraction clear the flag
 
-  /// `__wolfRestore` clears `__wolfUserScrolled` for one reason only: to re-open the
-  /// gate on `restoreJS`'s `requestAnimationFrame` and `document.fonts.ready`
-  /// re-applies. There are NO late re-applies on the in-place path — the fonts were
-  /// never unloaded, and `getBoundingClientRect()` forces layout synchronously — so
-  /// clearing the flag inside `__wolfUpdate` would buy nothing and would silently
-  /// discard a genuine user scroll that the NEXT full load's restore then has to
-  /// respect.
+  /// The squeezed body of `stateScriptJS`'s `__wolf<name> = function (…) { … }`, from the `{`
+  /// after its parameter list to the matching `}`, brace for brace. Searches by name, so no
+  /// definition order is pinned; fails naming the function when it is absent or unbalanced.
+  private func stateScriptFunctionBody(
+    _ squeezed: String,
+    named name: String,
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) -> Substring? {
+    guard let definition = squeezed.range(of: "\(name)=function("),
+      let open = squeezed[definition.upperBound...].firstIndex(of: "{")
+    else {
+      XCTFail(
+        "stateScriptJS must define `window.\(name) = function (…) { … }` at document "
+          + "start; it is missing, so its user-scroll clear cannot be located: \(squeezed)",
+        file: file, line: line)
+      return nil
+    }
+    var depth = 0
+    var index = open
+    while index < squeezed.endIndex {
+      switch squeezed[index] {
+      case "{": depth += 1
+      case "}":
+        depth -= 1
+        if depth == 0 { return squeezed[squeezed.index(after: open)..<index] }
+      default: break
+      }
+      index = squeezed.index(after: index)
+    }
+    XCTFail(
+      "\(name)'s body opened with `{` never closes with a matching `}`: \(squeezed)",
+      file: file, line: line)
+    return nil
+  }
+
+  /// `__wolfRestore` and `__wolfScrollFraction` each clear `__wolfUserScrolled` for one
+  /// reason only: to re-open the gate on the `requestAnimationFrame` and
+  /// `document.fonts.ready` re-applies of `restoreJS` and `scrollFractionJS` respectively,
+  /// which skip themselves once the flag is set. There are NO late re-applies on the
+  /// in-place path — the fonts were never unloaded, and `getBoundingClientRect()` forces
+  /// layout synchronously — so clearing the flag inside `__wolfUpdate` would buy nothing and
+  /// would silently discard a genuine user scroll that the NEXT full load's restore then has
+  /// to respect.
+  ///
+  /// The script therefore holds exactly three clears: the document-start init, so the first
+  /// real scroll is not swallowed, and one inside each of those two bodies. Each body is
+  /// located by brace matching, so a clear moved from one function into another (say into
+  /// `__wolfFollow`, which `__wolfUpdate` calls) keeps the count at three and still fails.
   func testStateScriptJSInPlaceUpdateDoesNotClearTheUserScrollFlag() {
     let squeezed = String(PreviewScrollSeam.stateScriptJS().filter { !$0.isWhitespace })
+    let clear = "__wolfUserScrolled=false"
     guard let region = inPlaceUpdateRegion(squeezed) else { return }
     XCTAssertFalse(
       region.contains("__wolfUserScrolled"),
       "__wolfUpdate must not READ or WRITE the user-scroll flag at all: \(region)")
 
-    // Only the two legitimate assignment sites: the document-start init (so the first real scroll
-    // is not swallowed) and __wolfRestore's deliberate clear.
-    let expectedAssignments = 2
+    // The document-start init, __wolfRestore's clear and __wolfScrollFraction's clear; each
+    // of the two functions clears to re-open the gate on its own JS's late re-applies.
+    let expectedAssignments = 3
     XCTAssertEqual(
-      squeezed.components(separatedBy: "__wolfUserScrolled=false").count - 1,
+      squeezed.components(separatedBy: clear).count - 1,
       expectedAssignments,
       "there must be exactly \(expectedAssignments) `__wolfUserScrolled = false` "
-        + "assignments in the whole script — the document-start initialization and "
-        + "__wolfRestore's clear. A third would mean some other entry point (almost "
-        + "certainly __wolfUpdate) started discarding user scrolls: \(squeezed)")
+        + "assignments in the whole script — the document-start initialization, "
+        + "__wolfRestore's clear and __wolfScrollFraction's clear. More means some other "
+        + "entry point (almost certainly __wolfUpdate) started discarding user scrolls; "
+        + "fewer means a restore whose rAF / fonts.ready re-applies stay gated shut by a "
+        + "stale user scroll, or a first real scroll swallowed: \(squeezed)")
+
+    for (name, script) in [
+      ("__wolfRestore", "restoreJS"), ("__wolfScrollFraction", "scrollFractionJS"),
+    ] {
+      guard let body = stateScriptFunctionBody(squeezed, named: name) else { continue }
+      XCTAssertEqual(
+        body.components(separatedBy: clear).count - 1, 1,
+        "\(name)'s own body must clear `__wolfUserScrolled` exactly once, so a user scroll "
+          + "made before it ran does not gate shut \(script)'s rAF and document.fonts.ready "
+          + "re-applies. None means the clear moved elsewhere (into __wolfFollow, say, "
+          + "which __wolfUpdate also calls) or was dropped; two means a duplicate: \(body)")
+    }
   }
 
   // MARK: - loadCommitOutcome fixtures
@@ -2369,5 +2427,193 @@ final class PreviewScrollSeamTests: XCTestCase {
       commitNothing, .commit(documentN),
       "and the commit payload participates in equality, so committing a descriptor is "
         + "distinguishable from clearing the live slot")
+  }
+
+  // MARK: - the saved scroll fraction (S6 to S8)
+
+  /// A JavaScriptCore context standing in for a preview page: `prelude` defines the `window` and
+  /// `document` stubs a generated script reads, and every exception a script throws is kept in
+  /// `errors`, since the state script swallows its own.
+  private final class Page {
+    let context: JSContext = JSContext()
+    private(set) var errors: [String] = []
+
+    init(_ prelude: String) {
+      context.exceptionHandler = { [weak self] _, exception in
+        self?.errors.append(exception?.toString() ?? "an exception with no value")
+      }
+      context.evaluateScript(prelude)
+    }
+
+    func run(_ script: String) {
+      context.evaluateScript(script)
+    }
+
+    /// `expr`'s value as a number, or `nil` when it is not one, such as `undefined`.
+    func number(_ expr: String) -> Double? {
+      guard let value = context.evaluateScript(expr), value.isNumber else { return nil }
+      return value.toDouble()
+    }
+
+    /// `expr`'s value as JavaScript prints it.
+    func text(_ expr: String) -> String {
+      context.evaluateScript(expr)?.toString() ?? "nil"
+    }
+  }
+
+  /// The stubs `scrollFractionJS` runs against: `__wolfScrollFraction` records each fraction it
+  /// is called with in `__calls`, and the animation frame and `document.fonts.ready` callbacks
+  /// are queued in `__rafs` and `__fonts` for the test to run.
+  private let fractionPrelude = """
+    var window = this;
+    var __calls = [];
+    var __rafs = [];
+    var __fonts = [];
+    window.__wolfUserScrolled = false;
+    window.__wolfScrollFraction = function (f) { __calls.push(Number(f)); };
+    window.requestAnimationFrame = function (f) { __rafs.push(f); };
+    var document = { fonts: { ready: { then: function (f) { __fonts.push(f); } } } };
+    """
+
+  /// The stubs `stateScriptJS` runs against: a 500-point viewport over a 2500-point document,
+  /// so the scrollable height is 2000, with no source anchors. `scrollTo` moves `scrollY` at
+  /// once and records the offset in `__scrolls`, and each posted message lands in `__posts`.
+  private var statePrelude: String {
+    """
+    var window = this;
+    var __posts = [];
+    var __scrolls = [];
+    window.innerHeight = 500;
+    window.scrollY = 0;
+    window.scrollTo = function (x, y) { __scrolls.push(y); window.scrollY = y; };
+    window.addEventListener = function () {};
+    window.requestAnimationFrame = function () {};
+    window.webkit = { messageHandlers: { \(PreviewScrollSeam.stateHandlerName): {
+      postMessage: function (m) { __posts.push(m); } } } };
+    var document = {
+      documentElement: { scrollHeight: 2500 },
+      body: null,
+      getElementById: function () { return null; },
+      querySelectorAll: function () { return []; }
+    };
+    """
+  }
+
+  /// S6: the saved scroll is the share of the scrollable height above the viewport, from 0 to 1.
+  func testScrollFractionIsTheShareOfTheScrollableHeightAboveTheViewport() {
+    func fraction(_ scrollY: Double, _ max: Double) -> Double {
+      PreviewScrollSeam.scrollFraction(
+        PreviewScrollSeam.ScrollState(anchorTop: nil, scrollY: scrollY, maxScrollY: max))
+    }
+    XCTAssertEqual(
+      fraction(250, 1000), 0.25, accuracy: 1e-12,
+      "250 points down a scrollable height of 1000 is a quarter of the way; 0 means the max is"
+        + " not read, and 250 that scrollY is saved unscaled")
+    XCTAssertEqual(
+      fraction(1500, 1000), 1,
+      "a scrollY past the scrollable height, as an elastic overscroll reports, must clamp to 1")
+    XCTAssertEqual(
+      fraction(-40, 1000), 0, "a negative scrollY, an overscroll at the top, must clamp to 0")
+    XCTAssertEqual(
+      fraction(0, 0), 0,
+      "a page shorter than its viewport has no scrollable height, so its fraction is 0; NaN"
+        + " means 0 / 0 is not guarded")
+    XCTAssertEqual(
+      fraction(250, -10), 0, "a negative scrollable height must give 0, as no height does")
+    let nonFinite: [(Double, Double)] = [
+      (.nan, 1000), (250, .nan), (.infinity, 1000), (250, .infinity),
+    ]
+    for (scrollY, max) in nonFinite {
+      XCTAssertEqual(
+        fraction(scrollY, max), 0,
+        "a non-finite scrollY \(scrollY) or height \(max) must give 0, never a value the"
+          + " store writes as a non-number")
+    }
+  }
+
+  /// S7: the restore scrolls to the fraction at once, then again on the next animation frame and
+  /// when the fonts settle, each re-apply skipped once the user has scrolled.
+  func testScrollFractionJSRestoresAndReappliesUnlessTheUserScrolled() {
+    let js = PreviewScrollSeam.scrollFractionJS(0.25)
+
+    let scrolled = Page(fractionPrelude)
+    scrolled.run(js)
+    XCTAssertEqual(scrolled.errors, [], "the generated JS must run without an exception: \(js)")
+    XCTAssertEqual(
+      scrolled.text("JSON.stringify(__calls)"), "[0.25]",
+      "the JS must call __wolfScrollFraction(0.25) once, at once: \(js)")
+    XCTAssertEqual(
+      scrolled.number("__rafs.length"), 1,
+      "the JS must queue one re-apply for the next animation frame, since the page may lay out"
+        + " after didFinish: \(js)")
+    XCTAssertEqual(
+      scrolled.number("__fonts.length"), 1,
+      "the JS must queue one re-apply on document.fonts.ready, since the inlined fonts settle"
+        + " layout late: \(js)")
+    scrolled.run("window.__wolfUserScrolled = true; __rafs.forEach(function (f) { f(); });")
+    scrolled.run("__fonts.forEach(function (f) { f(); });")
+    XCTAssertEqual(
+      scrolled.text("JSON.stringify(__calls)"), "[0.25]",
+      "after a user scroll, neither re-apply may scroll again; a second or third call means a"
+        + " re-apply lost its !window.__wolfUserScrolled guard and yanks the user back: \(js)")
+
+    let still = Page(fractionPrelude)
+    still.run(js)
+    still.run("__rafs.forEach(function (f) { f(); }); __fonts.forEach(function (f) { f(); });")
+    XCTAssertEqual(
+      still.text("JSON.stringify(__calls)"), "[0.25,0.25,0.25]",
+      "with no user scroll, both re-applies must scroll to the fraction again; one call means"
+        + " the re-applies never run, so the guard above proves nothing: \(js)")
+
+    let clamps: [(Double, String)] = [(1.5, "1"), (-0.5, "0"), (.nan, "0"), (.infinity, "0")]
+    for (given, sent) in clamps {
+      let page = Page(fractionPrelude)
+      let clamped = PreviewScrollSeam.scrollFractionJS(given)
+      page.run(clamped)
+      XCTAssertEqual(
+        page.text("String(__calls[0])"), sent,
+        "a saved fraction of \(given) must be sent as \(sent); undefined with an exception"
+          + " \(page.errors) means a non-finite value reached the JS as a bare identifier:"
+          + " \(clamped)")
+    }
+  }
+
+  /// S8: the page posts its scrollable height with each state, and `__wolfScrollFraction` scrolls
+  /// to that share of it through `moveTo`, clearing a user scroll first.
+  func testTheStateScriptPostsTheScrollableHeightAndScrollsAFractionThroughMoveTo() {
+    let page = Page(statePrelude)
+    page.run(PreviewScrollSeam.stateScriptJS())
+    XCTAssertEqual(page.errors, [], "the stub page must run the state script without an exception")
+    XCTAssertEqual(
+      page.number("__posts.length").map { $0 >= 1 }, true,
+      "premise: the state script must post its state at load; no post means a stub is missing"
+        + " and the script's own try/catch swallowed the error")
+    XCTAssertEqual(
+      page.number("__posts[__posts.length - 1].m"), 2000,
+      "each post must carry m, the scrollable height: 2500 - 500 = 2000. nil means post omits"
+        + " m, so the Swift side reads every fraction as 0")
+    XCTAssertEqual(page.number("__posts[__posts.length - 1].s"), 0, "premise: the page is at 0")
+
+    let posted = page.number("__posts.length") ?? 0
+    page.run("window.__wolfUserScrolled = true; window.__wolfScrollFraction(0.25);")
+    XCTAssertEqual(page.errors, [], "__wolfScrollFraction(0.25) must run without an exception")
+    XCTAssertEqual(
+      page.text("JSON.stringify(__scrolls)"), "[500]",
+      "a quarter of the scrollable height 2000 is 500, so the page must scroll there once; []"
+        + " means __wolfScrollFraction is missing or does not scroll")
+    XCTAssertEqual(
+      page.text("String(window.__wolfProgrammatic)"), "true",
+      "the scroll must go through moveTo, which arms __wolfProgrammatic; false means it scrolls"
+        + " around moveTo, and its scroll event is taken for the user's")
+    XCTAssertEqual(
+      page.text("String(window.__wolfUserScrolled)"), "false",
+      "__wolfScrollFraction must clear __wolfUserScrolled, as __wolfRestore does, or the"
+        + " re-applies of scrollFractionJS stay skipped after any earlier user scroll")
+    XCTAssertEqual(
+      page.number("__posts.length").map { $0 > posted }, true,
+      "__wolfScrollFraction must post the new state, so the Swift cache sees the restored offset")
+    XCTAssertEqual(
+      page.number("__posts[__posts.length - 1].s"), 500,
+      "the post after the scroll must carry the restored offset 500")
   }
 }

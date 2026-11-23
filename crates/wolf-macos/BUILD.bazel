@@ -279,6 +279,7 @@ swift_test(
 swift_test(
     name = "WolfMacOSTests",
     srcs = [
+        "Tests/WolfMacOSTests/ExtrasRestoreTests.swift",
         "Tests/WolfMacOSTests/FileTreeViewTests.swift",
         "Tests/WolfMacOSTests/LighthouseColours.swift",
         "Tests/WolfMacOSTests/LiveCore.swift",
@@ -304,6 +305,7 @@ swift_test(
         "Tests/WolfMacOSTests/TerminalToastTests.swift",
         "Tests/WolfMacOSTests/TerminalViewFixture.swift",
         "Tests/WolfMacOSTests/TitlebarColourTests.swift",
+        "Tests/WolfMacOSTests/ViewportCaptureTests.swift",
         "Tests/WolfMacOSTests/ZoomPaneTests.swift",
     ],
     # Spawning a real nvim child does not work under the macOS build sandbox, so

@@ -75,6 +75,13 @@ public struct DrawerLayout {
     return min(max(paneAreaHeight - pointerY, floor), paneAreaHeight - floor) / paneAreaHeight
   }
 
+  /// The share a saved drawer restores at: `share` when it is finite and strictly between 0
+  /// and 1, else ``defaultWeight``, since a non-finite weight collapses the layout to zero
+  /// heights.
+  public static func restoredWeight(_ share: Double) -> Double {
+    share.isFinite && share > 0 && share < 1 ? share : defaultWeight
+  }
+
   /// The full-width drawer rectangle: a bottom strip at `y == editorHeight`,
   /// `x == 0`, `w == width`, `h == drawerHeight`. `nil` when no drawer is present.
   public func drawerRect(width: Double) -> Rect? {

@@ -25,7 +25,7 @@
 //! The spec JSON shape is the one `wolf_core::app_state::tab_rebuild_spec` renders,
 //! the document's only renderer:
 //!   * leaf:  `{ "leaf": true, "path": "<abs path or empty>", "preview": <bool>,
-//!     "terminal": <bool>, "zoomed": <bool> }`
+//!     "terminal": <bool>, "zoomed": <bool> }`, plus `"focused": true` on the focused leaf alone
 //!   * split: `{ "orientation": "h"|"v", "weights": [...], "children": [...] }`
 //!
 //! ## Preview leaves
@@ -51,6 +51,11 @@
 //!
 //! A leaf with `"zoomed": true` is the pane the front-end re-zooms. The rebuild returns with
 //! Neovim's current window, and the snapshot's `active_win`, on the first such leaf.
+//!
+//! ## Focused leaves
+//!
+//! A leaf with `"focused": true` is the tab's focused pane. With no zoomed leaf, the rebuild
+//! returns with Neovim's current window on it; a zoomed leaf wins over it.
 
 mod common;
 
@@ -81,11 +86,12 @@ const BARRIER_ROUNDS: usize = 50;
 const BARRIER_FILES: [&str; 3] = ["a.md", "b.md", "c.md"];
 
 /// The rebuild document of a tab whose root is `root`, with the pane at depth-first index
-/// `zoomed` (if any) zoomed.
-fn rebuild_spec(root: Node, zoomed: Option<usize>) -> String {
+/// `zoomed` (if any) zoomed and the one at `focused` (if any) focused.
+fn rebuild_spec(root: Node, zoomed: Option<usize>, focused: Option<usize>) -> String {
     let content = TabContent {
         root: Some(root),
         zoomed: zoomed.map(PaneRef::Pane),
+        focused: focused.map(PaneRef::Pane),
         ..TabContent::default()
     };
     tab_rebuild_spec(&content).expect("a tab with a root must render a rebuild document")
@@ -487,6 +493,7 @@ fn rebuild_reports_every_leaf_window_on_return() {
                     .collect(),
             ),
             None,
+            None,
         );
 
         let handles = core.rebuild_layout(&spec);
@@ -633,6 +640,7 @@ fn a_terminal_leaf_starts_a_session_in_its_directory() {
             ],
         ),
         None,
+        None,
     );
     let handles = core.rebuild_layout(&spec);
     assert_eq!(
@@ -695,6 +703,7 @@ fn a_terminal_leaf_without_a_directory_starts_in_the_tabpage_cwd() {
             ],
         ),
         None,
+        None,
     );
     let handles = core.rebuild_layout(&spec);
     assert_eq!(
@@ -724,8 +733,12 @@ fn a_terminal_leaf_without_a_directory_starts_in_the_tabpage_cwd() {
 }
 
 /// Rebuilds `vertical[a, b, c]` over three fresh files on a fresh core, with leaf `zoomed` (if
-/// any) marked, and returns the handles and the snapshot's `active_win` read at once on return.
-fn rebuild_three_and_read_active(zoomed: Option<usize>) -> (Vec<i64>, Option<i64>) {
+/// any) marked zoomed and leaf `focused` (if any) marked focused, and returns the handles and the
+/// snapshot's `active_win` read at once on return.
+fn rebuild_three_and_read_active(
+    zoomed: Option<usize>,
+    focused: Option<usize>,
+) -> (Vec<i64>, Option<i64>) {
     let (core, _waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
     let files: Vec<tempfile::NamedTempFile> = (0..3).map(|_| common::temp_md(DOC)).collect();
     let spec = rebuild_spec(
@@ -738,6 +751,7 @@ fn rebuild_three_and_read_active(zoomed: Option<usize>) -> (Vec<i64>, Option<i64
                 .collect(),
         ),
         zoomed,
+        focused,
     );
 
     let handles = core.rebuild_layout(&spec);
@@ -761,7 +775,7 @@ fn rebuild_three_and_read_active(zoomed: Option<usize>) -> (Vec<i64>, Option<i64
 /// `handles[1]` cannot come from where the rebuild happens to leave the cursor.
 #[test]
 fn rebuild_ends_on_the_zoomed_leaf() {
-    let (control, control_active) = rebuild_three_and_read_active(None);
+    let (control, control_active) = rebuild_three_and_read_active(None, None);
     assert_eq!(
         control_active,
         Some(control[2]),
@@ -770,7 +784,7 @@ fn rebuild_ends_on_the_zoomed_leaf() {
          the zoom's doing from the rebuild's own order"
     );
 
-    let (handles, active) = rebuild_three_and_read_active(Some(1));
+    let (handles, active) = rebuild_three_and_read_active(Some(1), None);
     assert_eq!(
         active,
         Some(handles[1]),
@@ -778,5 +792,40 @@ fn rebuild_ends_on_the_zoomed_leaf() {
          {handles:?}. The last handle means init.lua does not make the zoomed leaf's window \
          current, or the spec does not mark it; None means no wolf_active_win reached core \
          before the rebuild's barrier"
+    );
+}
+
+/// (k) When `rebuild_layout` returns, the snapshot's `active_win` is the focused leaf's window,
+/// read once with no poll, unless another leaf is zoomed, which wins. The macOS restore takes the
+/// active pane from Neovim's current window, so the focus has to be current on return.
+///
+/// The control is (j)'s: an unmarked rebuild ends on the last leaf, so neither run's `handles[1]`
+/// comes from the rebuild's own order.
+#[test]
+fn rebuild_ends_on_the_focused_leaf() {
+    let (control, control_active) = rebuild_three_and_read_active(None, None);
+    assert_eq!(
+        control_active,
+        Some(control[2]),
+        "premise: an unmarked rebuild of vertical[a, b, c] must end on its last leaf; handles \
+         {control:?}. Otherwise the focused runs below cannot tell the focus from the order"
+    );
+
+    let (handles, active) = rebuild_three_and_read_active(None, Some(1));
+    assert_eq!(
+        active,
+        Some(handles[1]),
+        "with leaf b focused, active_win must be b's window when rebuild_layout returns; handles \
+         {handles:?}. The last handle means init.lua ignores the focused leaf, or the spec does \
+         not mark it; None means no wolf_active_win reached core before the rebuild's barrier"
+    );
+
+    let (handles, active) = rebuild_three_and_read_active(Some(1), Some(0));
+    assert_eq!(
+        active,
+        Some(handles[1]),
+        "with leaf a focused and leaf b zoomed, the zoom must win and active_win be b's window; \
+         handles {handles:?}. The first handle means init.lua makes the focused window current \
+         over the zoomed one, which leaves the restored zoom on a pane Neovim is not on"
     );
 }

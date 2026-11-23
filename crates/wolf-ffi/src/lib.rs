@@ -647,6 +647,9 @@ mod ffi {
         // What window `win` shows, keyed by handle and global across tabpages, unlike
         // `pane_status_for_grid`. Not reported for an unknown window or a shut-down core.
         fn win_buffer(&self, win: i64) -> FfiWinBuffer;
+        // Window `win`'s cursor and top line, read from Neovim for the state capture. Blocks
+        // briefly; not found for `win <= 0`, an unknown window, an error or a shut-down core.
+        fn window_cursor(&self, win: i64) -> FfiWindowCursor;
         // Opens `path` (an absolute filesystem path) in Neovim via
         // `InputEvent::Open`; the core's input pump records the MRU.
         fn open(&self, path: String);
@@ -1337,6 +1340,19 @@ mod ffi {
         fn abs_path(&self) -> String;
         // The session the window shows as a terminal pane; 0 for none or not reported.
         fn terminal(&self) -> u64;
+    }
+
+    extern "Rust" {
+        type FfiWindowCursor;
+
+        // Whether the window was found; every field reads 0 when not.
+        fn found(&self) -> bool;
+        // The 1-based cursor line.
+        fn line(&self) -> u32;
+        // The 0-based byte column of the cursor.
+        fn col(&self) -> u32;
+        // The 1-based first visible line.
+        fn top_line(&self) -> u32;
     }
 
     extern "Rust" {
@@ -3057,6 +3073,25 @@ impl WolfCoreHandle {
             })
     }
 
+    /// Window `win`'s cursor and top line, read from Neovim through
+    /// [`WolfCore::window_cursor`] for the application state's capture.
+    ///
+    /// Blocks briefly on the captive nvim. Not found, with every field `0`, for
+    /// `win <= 0`, an unknown window, an RPC error or timeout, or a shut-down core.
+    #[must_use]
+    pub fn window_cursor(&self, win: i64) -> FfiWindowCursor {
+        self.core
+            .borrow()
+            .as_ref()
+            .and_then(|core| core.window_cursor(win))
+            .map_or_else(FfiWindowCursor::default, |c| FfiWindowCursor {
+                found: true,
+                line: c.cursor.line,
+                col: c.cursor.col,
+                top_line: c.top_line,
+            })
+    }
+
     /// Opens `path` (an absolute filesystem path) in Neovim via
     /// [`InputEvent::Open`]; the core's input pump records the MRU. A no-op once
     /// the core has been shut down.
@@ -4567,6 +4602,44 @@ impl FfiWinBuffer {
             abs_path: String::new(),
             terminal: 0,
         }
+    }
+}
+
+// --- FfiWindowCursor: one window's cursor and top line (opaque to Swift) ---
+
+/// One window's cursor and top line, as [`WolfCoreHandle::window_cursor`] reads them.
+/// A projection of [`wolf_core::WindowCursor`], with `found` for its `None`.
+#[derive(Default)]
+pub struct FfiWindowCursor {
+    found: bool,
+    line: u32,
+    col: u32,
+    top_line: u32,
+}
+
+impl FfiWindowCursor {
+    /// Whether the window was found; every other field is `0` when not.
+    #[must_use]
+    pub fn found(&self) -> bool {
+        self.found
+    }
+
+    /// The 1-based cursor line.
+    #[must_use]
+    pub fn line(&self) -> u32 {
+        self.line
+    }
+
+    /// The 0-based byte column of the cursor.
+    #[must_use]
+    pub fn col(&self) -> u32 {
+        self.col
+    }
+
+    /// The 1-based first visible line.
+    #[must_use]
+    pub fn top_line(&self) -> u32 {
+        self.top_line
     }
 }
 
