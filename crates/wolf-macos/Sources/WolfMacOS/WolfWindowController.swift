@@ -244,8 +244,8 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
     bufferPicker.onActivate = { [weak self] row in self?.activateBufferRow(row) }
     self.bufferPicker = bufferPicker
 
-    // Only the first tab of a restored group anchors the validated saved frame; a joining tab or a
-    // fresh window keeps AppKit's cascade placement.
+    // A restored group's first tab and an Open Folder window anchor a validated saved frame; a
+    // joining tab or a fresh window keeps AppKit's cascade placement.
     if let anchorFrame {
       window.setFrame(anchorFrame, display: false)
     }
@@ -317,7 +317,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
     let cwd = handle?.cwd().toString() ?? ""
 
     // Detect a typed `:cd` out of the empty state against the first observed cwd (nvim reports
-    // `home`). A `:cd` to that same dir does not transition; the Open Folder button always does.
+    // `home`). A `:cd` to that same dir does not transition.
     if !hasFolder, !cwd.isEmpty {
       if let baseline = initialCwd {
         if cwd != baseline {
@@ -394,10 +394,10 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
     paneContainer?.requestTerminalRestore(steps)
   }
 
-  /// Transitions this window from the empty state into an open project: reveals
-  /// the sidebar, hides the "Open folder…" overlay, and lets the file tree start
-  /// (reroot at the opened folder on the next render wake). Idempotent — the
-  /// second caller (both transition paths may fire) is a no-op.
+  /// Transitions this window from the empty state into an open project on a typed `:cd`:
+  /// reveals the sidebar, hides the "Open folder…" overlay, and lets the file tree start
+  /// (reroot at the new folder on the next render wake). Open Folder never lands here: it
+  /// replaces the empty tab instead. Idempotent.
   private func didOpenFolder() {
     guard !hasFolder else { return }
     hasFolder = true
@@ -468,8 +468,8 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
   /// - `.staticCommand`: decode the FFI `command_kind` and funnel through
   ///   `CommandDispatcher` (the SAME funnel every other command uses).
   /// - `.switchWindow`: raise the window at `windowIndex` (a no-op if it closed).
-  /// - `.openRecent`: raise the window already rooted at that folder if one
-  ///   exists, else chdir this window there (matching File > Open Recent).
+  /// - `.openRecent`: Open Folder on that folder from this view
+  ///   (`AppDelegate.openFolder(_:from:)`), as File > Open Recent does.
   private func activatePaletteRow(_ row: CommandPaletteRow) {
     switch row.kind {
     case .staticCommand:
@@ -480,11 +480,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
     case .switchWindow:
       coordinator?.raiseWindow(tabId: Int(row.windowIndex))
     case .openRecent:
-      if let existing = coordinator?.controllerForCwd(row.path) {
-        existing.raise()
-      } else {
-        changeDirectory(row.path)
-      }
+      coordinator?.openFolder(row.path, from: self)
     }
   }
 
@@ -527,8 +523,8 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
   }
 
   /// Presents a native `NSOpenPanel` (directories only) as a sheet on this window
-  /// and, on confirmation, changes this window's Neovim working directory to the
-  /// chosen folder (`handle.chdir`) then returns first responder to the editor pane.
+  /// and, on confirmation, hands the chosen folder to Open Folder
+  /// (`AppDelegate.openFolder(_:from:)`) from this view.
   func presentOpenFolderDialog() {
     guard let window else { return }
     let panel = NSOpenPanel()
@@ -540,12 +536,8 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
       panel.directoryURL = URL(fileURLWithPath: cwd)
     }
     panel.beginSheetModal(for: window) { [weak self] response in
-      guard response == .OK, let url = panel.url else { return }
-      self?.handle?.chdir(url.path)
-      // Optimistically transition out of the empty state (the button is the
-      // intended path and always transitions, even to the launch dir).
-      self?.didOpenFolder()
-      self?.refocusEditor()
+      guard response == .OK, let url = panel.url, let self else { return }
+      self.coordinator?.openFolder(url.path, from: self)
     }
   }
 
@@ -559,16 +551,6 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
       result.append(path.as_str().toString())
     }
     return result
-  }
-
-  /// The File > Open Recent action: changes this window's Neovim working
-  /// directory to `path` (`handle.chdir`) then returns first responder to the
-  /// editor pane. Same effect as Open Folder, without a panel.
-  func changeDirectory(_ path: String) {
-    handle?.chdir(path)
-    // Open Recent also transitions out of the empty state optimistically.
-    didOpenFolder()
-    refocusEditor()
   }
 
   /// Closes this window's active pane, a split or the drawer, through
@@ -976,9 +958,11 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
     NSWorkspace.shared.open(u)
   }
 
-  /// Raises and activates this window (the Window-menu dynamic list item's
-  /// action, routed by the coordinator from the item's `windowIndex` tag).
+  /// Raises and activates this window, selecting its tab in its group (the Window menu, Switch
+  /// to Window and Open Folder's focus). A minimized window is deminiaturized first, since
+  /// ordering it front alone leaves it in the Dock.
   func raise() {
+    if window?.isMiniaturized == true { window?.deminiaturize(nil) }
     window?.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
   }

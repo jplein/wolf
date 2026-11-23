@@ -36,10 +36,10 @@
 //!
 //! One directory can therefore produce TWO rows — "Switch to Window: /proj/x" and
 //! "Open Recent Folder: /proj/x" — and that is the honest surface rather than a
-//! duplicate: the first raises the window already editing that project, the second
-//! re-roots THIS window onto it. [`open_recent_candidates`] refuses only the
-//! invoking window's own directory, and refuses it for a reason a second window
-//! does not change.
+//! duplicate: the first raises that window as it stands, the second is Open Folder
+//! (`specs/application-state.md` §6), which focuses the tab §4's rule picks, and
+//! that can be a background tab. [`open_recent_candidates`] refuses the invoking
+//! window's own directory, where Open Folder would focus the tab the user is in.
 //!
 //! A `SwitchWindow` row carrying no window index is still
 //! [`PaletteAction::Unsupported`] and fails [`palette_rows`]' filter rather than
@@ -130,11 +130,11 @@ pub enum PaletteAction {
     /// numbering. Best-effort on Wayland: presenting a backgrounded toplevel is the
     /// compositor's decision, and `cage` declines it.
     SwitchWindow(u16),
-    /// Re-root THIS window at this directory. The payload is a directory and no
-    /// window target: the row acts on the window whose palette it was picked in,
-    /// and raising a different one is [`PaletteAction::SwitchWindow`]'s row.
-    /// `shell::AppShell::on_palette_activation` is the one place that directory
-    /// becomes a window action.
+    /// Open Folder on this directory from THIS window (`specs/application-state.md`
+    /// §6). The payload is a directory and no window target: whether it focuses an
+    /// open tab, fills this window's empty tab or opens a window is
+    /// `crate::open_folder::step`'s decision. `shell::AppShell::on_palette_activation`
+    /// is the one place that directory becomes a window action.
     OpenRecentFolder(PathBuf),
     /// `wolf-gnome` cannot perform this row; the string names why, as a
     /// mid-sentence clause (matching [`crate::command_action`]'s convention).
@@ -144,8 +144,8 @@ pub enum PaletteAction {
 /// The recent directories this palette offers, keeping `recorded`'s newest-first
 /// order among the survivors.
 ///
-/// `recorded` is [`WolfCore::recent_dirs`] verbatim. `live_cwd` is the window's own
-/// working directory ([`WolfCore::live_cwd`]), and `is_dir` is injected rather than
+/// `recorded` is [`WolfCore::recent_dirs`] verbatim. `live_cwd` is the window's selected
+/// tab's working directory ([`WolfCore::live_cwd`]), and `is_dir` is injected rather than
 /// called, in the house style of [`crate::workspace::launch_decision`], so the whole
 /// rule is decidable with no temp directory and no filesystem race. Production
 /// passes [`std::path::Path::is_dir`].
@@ -153,27 +153,21 @@ pub enum PaletteAction {
 /// A directory is kept exactly when all three hold, and each refusal is a row this
 /// front-end would otherwise list with nothing useful behind it:
 ///
-/// * `Some(dir) != live_cwd` — the INVOKING window's own working directory is
-///   refused, because this row re-roots that window and re-rooting it where it
-///   already is changes nothing. It is also the commonest entry in the store, so
-///   without this the top folder row is usually the dead one. A second window
-///   editing that directory does not revive the row: raising that window is
-///   [`PaletteAction::SwitchWindow`]'s job, and re-rooting THIS window onto
-///   another's project would put two Neovims on one swap directory for a raise the
-///   user could have asked for directly.
-/// * `is_dir(dir)` — a directory that has gone is refused, because a failed `:tcd`
-///   is only a `tracing::warn!` in [`wolf_core::input`]: Neovim never reports
-///   `DirChanged`, so `shell`'s pending re-root never settles and the front-end
-///   cell stays wedged until the next successful chdir. A stale row is worse than a
-///   no-op.
+/// * `Some(dir) != live_cwd` — the INVOKING window's selected tab's working
+///   directory is refused. This row is Open Folder, and for that directory §4's
+///   rule picks the tab the user is in, since its window is frontmost and its
+///   selected tab is in it: a no-op. It is also the commonest entry in the store,
+///   so without this the top folder row is usually the dead one.
+/// * `is_dir(dir)` — a directory that has gone is refused, because no tab's
+///   Neovim can start in it, so the row would open nothing.
 /// * `dir.is_absolute()` — a relative path is refused, because
-///   `shell::AppShell::chdir_to` canonicalizes against the application process's
-///   working directory rather than Neovim's, so one could only be a corrupt store
-///   row.
+///   `shell::AppShell::open_folder` canonicalizes against the application
+///   process's working directory rather than Neovim's, so one could only be a
+///   corrupt store row.
 ///
 /// What the store keeps and prunes is core's concern ([`WolfCore::recent_dirs`]);
 /// this seam prunes nothing. The `is_dir` conjunct stays because this seam is
-/// correct for any slice it is given, and a stale row wedges a cell.
+/// correct for any slice it is given.
 ///
 /// Limitation: a directory that exists but is unreadable (mode `000`) still passes
 /// `is_dir` and is still offered.
@@ -753,7 +747,7 @@ mod tests {
     /// join that keeps the two from drifting.
     const NEW_WINDOW_PALETTE_QUERY: &str = "new window";
 
-    /// The query the cage smoke `open_recent_palette_row_reroots_the_window_under_cage`
+    /// The query the cage smoke `open_recent_from_a_folder_tab_opens_a_fresh_window_under_cage`
     /// types into the palette's search entry (its `OPENRECENT_QUERY`, which that file
     /// defines AS its `OPENRECENT_TARGET_DIR` so the two cannot drift there).
     ///
@@ -945,22 +939,15 @@ mod tests {
     ///
     /// ## What each refusal buys, and what its absence costs
     ///
-    /// * **The window's own working directory.** This row acts on the INVOKING
-    ///   window and re-roots it, so for the directory that window is already rooted
-    ///   at it changes nothing. Two consequences follow and neither is the reason:
-    ///   the full sidebar re-traversal would be wasted, and whether Neovim fires
-    ///   `DirChanged` for a same-directory `:tcd` is unestablished, which this design
-    ///   avoids needing to know. It is also the commonest entry in the store, so
-    ///   without this refusal the palette's top folder row is usually the dead one. A
-    ///   SECOND window editing that directory does not revive it either — raising
-    ///   that window is [`PaletteAction::SwitchWindow`]'s row, and re-rooting this
-    ///   one onto another's project would put two Neovims on one swap directory.
+    /// * **The window's own working directory.** This row is Open Folder from the
+    ///   INVOKING window, and for the directory its selected tab is in, §4's rule
+    ///   picks that very tab: the row would focus the tab the user is in. It is also
+    ///   the commonest entry in the store, so without this refusal the palette's top
+    ///   folder row is usually the dead one.
     ///   [`open_recent_targets_the_invoking_window`] is where that shape is named.
     /// * **A directory that has gone.** `WolfCore::recent_dirs` omits one on read,
-    ///   but this seam takes any slice, and a failed `:tcd` in `wolf_core::input`
-    ///   degrades to a `tracing::warn!` — Neovim never fires `DirChanged`, so
-    ///   `shell`'s `pending_reroot` stays set until the next successful chdir. A
-    ///   stale row is therefore worse than a no-op: it wedges a front-end cell.
+    ///   but this seam takes any slice, and no tab's Neovim can start in a directory
+    ///   that has gone, so the row would open nothing.
     /// * **A relative path.** Nothing here resolves one against anything, so it can
     ///   only be a corrupt store row.
     ///
@@ -1066,10 +1053,9 @@ mod tests {
                 got, want,
                 "case: {} — open_recent_candidates(recorded: {:?}, live_cwd: {:?}, is_dir true \
                  for: {:?}) returned {got:?}, expected {want:?}. An EXTRA entry means one of the \
-                 three refusals is gone and the palette will list a folder row that re-roots the \
-                 window to where it already is, or wedges the pending re-root on a directory that \
-                 no longer exists (a failed `:tcd` is only a tracing::warn!, so the sidebar never \
-                 settles). A MISSING entry means a usable directory was refused, and the user \
+                 three refusals is gone and the palette will list a folder row that focuses the \
+                 tab the user is in, or one for a directory that no longer exists, where no tab's \
+                 Neovim can start. A MISSING entry means a usable directory was refused, and the user \
                  cannot reach that project from the palette at all. A REORDERED result means the \
                  store's newest-first order was not preserved, which is the only ranking these \
                  rows have under an empty query.",
@@ -1078,34 +1064,31 @@ mod tests {
         }
     }
 
-    /// Open Recent acts on the window whose palette the row was picked in, with a
-    /// name of its own.
+    /// Open Recent is Open Folder from the window whose palette the row was picked in,
+    /// with a name of its own.
     ///
     /// Three facts are what that means, and no other test states them together:
     ///
     /// 1. A recorded directory that IS the invoking window's working directory is not
-    ///    offered, because re-rooting that window where it already is changes nothing.
+    ///    offered, because Open Folder there would focus the tab the user is in.
     /// 2. A recorded directory that is NOT it classifies to
     ///    [`PaletteAction::OpenRecentFolder`], whose payload is a directory and
-    ///    NOTHING ELSE — no window index, no raise-or-open choice for the shell to
-    ///    make.
-    /// 3. The capability that payload lacks is not missing from the palette: the same
-    ///    directory, seen as ANOTHER window's, is offered as a Switch to Window row
-    ///    and classifies to [`PaletteAction::SwitchWindow`], carrying the window id
-    ///    and no path.
+    ///    NOTHING ELSE — no window index: which tab or window it lands in is
+    ///    `crate::open_folder::step`'s decision, not the palette's.
+    /// 3. The same directory, seen as ANOTHER window's, is also offered as a Switch to
+    ///    Window row and classifies to [`PaletteAction::SwitchWindow`], carrying the
+    ///    window id and no path.
     ///
     /// Half 2's destructuring is the mechanical half of that claim: a variant that
     /// grew a window target would stop compiling here rather than quietly giving the
     /// palette a decision to make. The classification's full domain is
     /// [`palette_action_table`]'s; this asserts only the shape.
     ///
-    /// **Two rows for one directory is the honest surface, not a duplicate.** Raising
-    /// the window already editing a project and re-rooting THIS window onto it are
-    /// different acts with different costs — the second puts a second Neovim on that
-    /// project's swap directory, which is a thing to ask for deliberately rather than
-    /// to be given when a raise was meant. Half 3 is where the pair is pinned
-    /// together, so a later unit that "deduplicates" them has to delete an assertion
-    /// that says why they are two.
+    /// **Two rows for one directory is the honest surface, not a duplicate.** A Switch
+    /// row raises that window as it stands; an Open Recent row focuses the tab §4's
+    /// rule picks, which can be a background tab of it or of a third window. Half 3 is
+    /// where the pair is pinned together, so a later unit that "deduplicates" them has
+    /// to delete an assertion that says why they are two.
     ///
     /// ## It is not an independent discriminator, and must not be dressed as one
     ///
@@ -1133,14 +1116,11 @@ mod tests {
         assert_eq!(
             offered,
             vec![other.clone()],
-            "with the invoking window rooted at {window_cwd:?}, `open_recent_candidates` offered \
-             {offered:?} out of {recorded:?}. This row acts on the window whose palette it was \
-             picked in and re-roots it, so for the directory that window is already rooted at it \
-             does nothing at all — and it is the commonest entry in the store, so the dead row \
-             would usually be the TOP one. Raising a DIFFERENT window that happens to be editing \
-             this directory is not what un-hiding this row would do: that is \
-             `PaletteAction::SwitchWindow`'s row, asserted in half 3, and re-rooting this window \
-             onto another's project would put a second Neovim on that project's swap directory."
+            "with the invoking window's selected tab in {window_cwd:?}, \
+             `open_recent_candidates` offered {offered:?} out of {recorded:?}. This row is Open \
+             Folder from the window whose palette it was picked in, and for that directory it \
+             would focus the tab the user is in — and it is the commonest entry in the store, so \
+             the dead row would usually be the TOP one."
         );
 
         // (2) The offered directory classifies to a directory action with no window target; the
@@ -1154,18 +1134,17 @@ mod tests {
         let PaletteAction::OpenRecentFolder(target) = &action else {
             panic!(
                 "an Open Recent row for {other:?} classified to {action:?}, not \
-                 OpenRecentFolder. The only thing this row does is re-root the invoking window, \
-                 and that is the action that says so; an Unsupported here makes every folder row \
+                 OpenRecentFolder. The only thing this row does is Open Folder from the invoking \
+                 window, and that is the action that says so; an Unsupported here makes every folder row \
                  fail `palette_rows`' filter and the palette offers none at all."
             )
         };
         assert_eq!(
             target, &other,
             "the Open Recent action for {other:?} carries {target:?}. The payload is a DIRECTORY \
-             and nothing else — no window index, because the row's target is the window \
-             `shell::on_palette_activation` was called for and there is nothing to choose. It is \
-             what `AppShell::chdir_to` `:tcd`s to, so a rewritten path re-roots that window \
-             somewhere the user did not pick."
+             and nothing else — no window index, because Open Folder decides where it lands. It \
+             is what `AppShell::open_folder` opens, so a rewritten path opens a folder the user \
+             did not pick."
         );
 
         // (3) The same directory, seen as ANOTHER window's, is a Switch to Window row
@@ -1182,10 +1161,8 @@ mod tests {
             .unwrap_or_else(|| {
                 panic!(
                     "with one other window rooted at {other:?}, `palette_rows` offered NO \
-                     SwitchWindow row. Half 1 refuses to offer a directory as an Open Recent row \
-                     on the ground that raising is SwitchWindow's job; with no switch row the \
-                     directory another window is editing is unreachable from the palette \
-                     altogether, and half 1's justification becomes false. Rows were: {:?}",
+                     SwitchWindow row, so that window cannot be raised as it stands from the \
+                     palette. Rows were: {:?}",
                     rows.iter().map(|row| &row.display).collect::<Vec<_>>()
                 )
             });
@@ -1195,9 +1172,9 @@ mod tests {
             .unwrap_or_else(|| {
                 panic!(
                     "the Open Recent row for {other:?} vanished once a window was editing that \
-                     same directory. The two rows are DIFFERENT acts — raise that window, or \
-                     re-root this one onto its project — and dropping either is a decision to \
-                     make deliberately, not a deduplication. Rows were: {:?}",
+                     same directory. The two rows are DIFFERENT acts — raise that window as it \
+                     stands, or focus the tab §4's rule picks — and dropping either is a decision \
+                     to make deliberately, not a deduplication. Rows were: {:?}",
                     rows.iter().map(|row| &row.display).collect::<Vec<_>>()
                 )
             });
@@ -1212,8 +1189,8 @@ mod tests {
             PaletteAction::SwitchWindow(OTHER_WINDOW),
             "the Switch to Window row {:?} does not classify to SwitchWindow({OTHER_WINDOW}). An \
              Unsupported makes it fail `palette_rows`' filter, so the row disappears and the only \
-             thing the palette offers for {other:?} is the Open Recent row that re-roots THIS \
-             window — the choice half 1 says the user has is then not there.",
+             thing the palette offers for {other:?} is the Open Recent row — the choice this test \
+             says the user has is then not there.",
             switch_row.display
         );
         assert_ne!(
@@ -1222,7 +1199,7 @@ mod tests {
              ({:?}). They perform different acts on different windows, so a user picking between \
              them by sight cannot: `rank_palette` prefixes each with what it does, and a label \
              that dropped the prefix would leave the palette showing one directory twice with no \
-             way to tell which row raises and which re-roots.",
+             way to tell which row raises and which opens the folder.",
             switch_row.display
         );
     }
@@ -1372,7 +1349,7 @@ mod tests {
                 want: WantAction::Unsupported,
             },
             PaletteCase {
-                desc: "OpenRecent + a folder path: re-root the window to that folder",
+                desc: "OpenRecent + a folder path: Open Folder on that folder",
                 kind: PaletteRowKind::OpenRecent,
                 command: None,
                 window_index: None,
@@ -1438,8 +1415,8 @@ mod tests {
                      row fail `palette_rows`' filter, so the palette lists no folder rows at all \
                      and the feature is unreachable; a Dispatch here would hand the shell a \
                      Command it has no folder path for. The PATH must also come through \
-                     unchanged: it is what `shell::chdir_to` `:tcd`s to, so a dropped or \
-                     rewritten path re-roots the window somewhere the user did not pick.",
+                     unchanged: it is what `shell::open_folder` opens, so a dropped or rewritten \
+                     path opens a folder the user did not pick.",
                     case.desc,
                     case.kind,
                     case.command,
@@ -2350,8 +2327,8 @@ mod tests {
             row.path.as_deref(),
             Some(dir.as_path()),
             "the Open Recent row carries path {:?}, not the seeded {dir:?}. That path is what \
-             `shell::chdir_to` `:tcd`s to, so a wrong one re-roots the window somewhere the user \
-             did not pick — and a None makes the row classify as Unsupported and vanish.",
+             `shell::open_folder` opens, so a wrong one opens a folder the user did not pick — \
+             and a None makes the row classify as Unsupported and vanish.",
             row.path
         );
         assert!(
@@ -2400,7 +2377,7 @@ mod tests {
             "the surviving Open Recent row {:?} does not classify to \
              OpenRecentFolder({dir:?}). `PaletteInner::activate_selection` performs whatever this \
              returns, so anything else means pressing Enter on the row prints a refusal (or \
-             dispatches something unrelated) rather than re-rooting the window.",
+             dispatches something unrelated) rather than opening the folder.",
             row.display
         );
     }
@@ -2676,7 +2653,7 @@ mod tests {
     /// [`palette_rows_query_new_ranks_the_new_buffer_row_first`], for the folder
     /// row instead of the command row.
     ///
-    /// `open_recent_palette_row_reroots_the_window_under_cage` seeds ONE directory
+    /// `open_recent_from_a_folder_tab_opens_a_fresh_window_under_cage` seeds ONE directory
     /// into the folder MRU, types that directory's basename, and presses Enter on
     /// whatever `restored_index` selected. If the query ever matched a second row the
     /// smoke would stop being deterministic — it would still pass or fail, but on
@@ -2709,8 +2686,8 @@ mod tests {
         assert!(
             registry_only.is_empty(),
             "the smoke's query {SMOKE_RECENT_QUERY:?} matches {} registry row(s) with NO recent \
-             directories seeded: {:?}. The smoke presses Enter on the top row and asserts the \
-             window re-rooted, so a matching COMMAND row would make which row runs depend on \
+             directories seeded: {:?}. The smoke presses Enter on the top row and asserts a \
+             window opened on the folder, so a matching COMMAND row would make which row runs depend on \
              ranking tie-breaks — and a Close or Quit row would tear the window down instead. \
              Rename the smoke's `OPENRECENT_TARGET_DIR` (which is also its `OPENRECENT_QUERY`) \
              rather than relaxing this.",
@@ -2748,8 +2725,8 @@ mod tests {
             row.kind,
             PaletteRowKind::OpenRecent,
             "the sole row matching {SMOKE_RECENT_QUERY:?} has kind {:?}, not OpenRecent. The \
-             smoke asserts Neovim's working directory CHANGED, which only an Open Recent \
-             activation produces.",
+             smoke asserts a tab's Neovim is in the folder, which only an Open Recent activation \
+             produces.",
             row.kind
         );
         assert_eq!(

@@ -65,6 +65,13 @@ public enum WindowStateCodec {
     public let tabs: [LoadedTab]
   }
 
+  /// One directory's project state, as Open Folder restores it.
+  public struct LoadedProject {
+    /// The stored frame, `nil` when it has no position.
+    public let frame: CGRect?
+    public let tab: LoadedTab
+  }
+
   /// Mirrors wolf-ffi's `mod pane_kind`.
   private enum PaneKind: UInt8 {
     case edit = 0
@@ -96,6 +103,12 @@ public enum WindowStateCodec {
   /// Submits `windows`, in list order, to the shared app-state store, which writes the window
   /// state and the project states in one transaction. It does not flush.
   public static func submit(_ windows: [Window]) {
+    feed(windows)
+    wolf_ffi_app_state_commit()
+  }
+
+  /// Replaces the builder's scratch with `windows`, in list order.
+  private static func feed(_ windows: [Window]) {
     wolf_ffi_app_state_begin()
     for window in windows {
       wolf_ffi_app_state_add_window(
@@ -109,7 +122,27 @@ public enum WindowStateCodec {
         wolf_ffi_app_state_push_recency(UInt32(clamping: index))
       }
     }
-    wolf_ffi_app_state_commit()
+  }
+
+  /// The window and tab indices into `windows` of the tab Open Folder focuses for `directory`,
+  /// by §4's rule, or `nil` when no tab is open on it. Feeds the builder as `submit` does, minus
+  /// the commit, so it writes nothing.
+  public static func projectTab(_ directory: String, windows: [Window]) -> (window: Int, tab: Int)?
+  {
+    feed(windows)
+    let answer = wolf_ffi_app_state_project_tab(directory)
+    guard answer.found() else { return nil }
+    return (Int(answer.window()), Int(answer.tab()))
+  }
+
+  /// Reads a directory's project state, `nil` when it has none.
+  public static func loadProject(_ project: FfiProjectState) -> LoadedProject? {
+    guard project.found() else { return nil }
+    let frame =
+      project.has_position()
+      ? CGRect(x: project.x(), y: project.y(), width: project.width(), height: project.height())
+      : nil
+    return LoadedProject(frame: frame, tab: loadedTab(project.tab()))
   }
 
   /// Reads the saved window state, frontmost first. A window with no tabs is dropped.

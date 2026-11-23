@@ -418,8 +418,8 @@ enum AppMenu {
   /// Rebuilds the dynamic Open Recent `menu` from the recent-directories MRU
   /// (newest-first). Empty -> a single disabled "No Recent Folders" placeholder;
   /// otherwise one item per path, titled with the full path, whose action
-  /// (`AppDelegate.openRecentMenuItem(_:)`) chdirs the key window, carrying the
-  /// list index in its `tag`. Called from `menuNeedsUpdate` at menu-open time.
+  /// (`AppDelegate.openRecentMenuItem(_:)`) opens that folder as Open Folder does,
+  /// carrying the list index in its `tag`. Called from `menuNeedsUpdate` at menu-open time.
   static func rebuildOpenRecentMenu(
     _ menu: NSMenu, recentDirs: [String], target: AppDelegate
   ) {

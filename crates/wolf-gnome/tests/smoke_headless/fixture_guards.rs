@@ -21,6 +21,10 @@ use super::editor::{
 };
 use super::extras::{CV_A_FILE, CV_B_FILE, CV_C_FILE, DZ_FILE, PS_FILE, RV_A_FILE, RV_B_FILE};
 use super::header_bar::{HB_READ_NAME, HB_TARGET_FILE};
+use super::open_folder::{
+    OF_FILL_LEFT_FILE, OF_FILL_READBACK_NAME, OF_FILL_RIGHT_FILE, OF_NEW_BASE_FILE,
+    OF_NEW_LEFT_FILE, OF_NEW_READBACK_NAME, OF_NEW_RIGHT_FILE,
+};
 use super::panes::{
     CHORD_CLOSE_OCR_GONE, CHORD_CLOSE_OCR_KEEP, CLOSE_OCR_GONE, CLOSE_OCR_KEEP, FOCUS_OCR_LEFT,
     FOCUS_OCR_MARKER, FOCUS_OCR_RIGHT, HSPLIT_OCR_BOTTOM, HSPLIT_OCR_TOP, QUIT_OCR_GONE,
@@ -147,7 +151,8 @@ use super::*;
 ///
 /// [`OPENRECENT_OCR_PRESENT`] is the one term in this table whose SUBJECT is a
 /// fixture FILENAME rather than a file's content — the sidebar row for
-/// [`OPENRECENT_TARGET_FILE`] is the observable that proves the sidebar re-rooted,
+/// [`OPENRECENT_TARGET_FILE`] is the observable that proves the new window's sidebar
+/// is rooted at the opened folder,
 /// the same shape [`TREE_OCR`] has. That is why that file is deliberately absent
 /// from [`RELAUNCH_FIXTURE_NAMES`], and why
 /// [`restore_fixture_names_cannot_satisfy_their_own_assertions`] carries a second
@@ -209,6 +214,10 @@ use super::*;
 /// * `three_windows_restore_in_their_stacking_order_under_cage` captures nothing: its
 ///   observables are the count of live `nvim` children and a frozen state database. Its
 ///   fixtures are registered in [`RELAUNCH_FIXTURE_NAMES`] for the generic loop's sake.
+/// * The three Open Folder smokes in `open_folder.rs` capture nothing: their observables are
+///   `getcwd()` and `winnr('$')` readbacks the captive Neovims write, the command MRU and a
+///   frozen state database. Their fixtures and readbacks are registered in
+///   [`RELAUNCH_FIXTURE_NAMES`] for the generic loop's sake.
 /// * `config_font_size_changes_the_grid_under_cage` likewise captures no PNG: its
 ///   two observables are the `winwidth(0)` integers the captive Neovim writes about
 ///   its own grid, so no fixture filename can help or hurt it.
@@ -442,7 +451,7 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
     (
         OPENRECENT_OCR_PRESENT,
         "OPENRECENT_OCR_PRESENT",
-        "open_recent_palette_row_reroots_the_window_under_cage",
+        "open_recent_from_a_folder_tab_opens_a_fresh_window_under_cage",
     ),
     (
         BUFPICK_OCR_PRESENT,
@@ -945,6 +954,42 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         "THREEWIN_C_FILE",
         "three_windows_restore_in_their_stacking_order_under_cage",
     ),
+    // Open Folder fixtures and readbacks: no OCR runs, so these rows serve the generic loop only.
+    (
+        OF_FILL_LEFT_FILE,
+        "OF_FILL_LEFT_FILE",
+        "open_recent_from_an_empty_tab_fills_it_from_the_project_state_under_cage",
+    ),
+    (
+        OF_FILL_RIGHT_FILE,
+        "OF_FILL_RIGHT_FILE",
+        "open_recent_from_an_empty_tab_fills_it_from_the_project_state_under_cage",
+    ),
+    (
+        OF_FILL_READBACK_NAME,
+        "OF_FILL_READBACK_NAME",
+        "open_recent_from_an_empty_tab_fills_it_from_the_project_state_under_cage",
+    ),
+    (
+        OF_NEW_BASE_FILE,
+        "OF_NEW_BASE_FILE",
+        "open_recent_from_a_folder_tab_opens_a_restored_window_under_cage",
+    ),
+    (
+        OF_NEW_LEFT_FILE,
+        "OF_NEW_LEFT_FILE",
+        "open_recent_from_a_folder_tab_opens_a_restored_window_under_cage",
+    ),
+    (
+        OF_NEW_RIGHT_FILE,
+        "OF_NEW_RIGHT_FILE",
+        "open_recent_from_a_folder_tab_opens_a_restored_window_under_cage",
+    ),
+    (
+        OF_NEW_READBACK_NAME,
+        "OF_NEW_READBACK_NAME",
+        "open_recent_from_a_folder_tab_opens_a_restored_window_under_cage",
+    ),
     // Three-tab fixtures and readbacks: no OCR runs, so these rows serve the generic loop only; an
     // exemption block in the guard covers their names.
     (
@@ -975,12 +1020,12 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
     (
         OPENRECENT_START_FILE,
         "OPENRECENT_START_FILE",
-        "open_recent_palette_row_reroots_the_window_under_cage",
+        "open_recent_from_a_folder_tab_opens_a_fresh_window_under_cage",
     ),
     (
         OPENRECENT_READBACK_NAME,
         "OPENRECENT_READBACK_NAME",
-        "open_recent_palette_row_reroots_the_window_under_cage",
+        "open_recent_from_a_folder_tab_opens_a_fresh_window_under_cage",
     ),
     (
         BUFPICK_FILE_TARGET,
@@ -1950,14 +1995,14 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 ///
 /// The Open Recent smoke needs the same treatment for the same reason and one
 /// more. Its subject is [`OPENRECENT_TARGET_FILE`]'s NAME — the sidebar row is
-/// what proves the sidebar re-rooted — so that file must CONTAIN
+/// what proves the new window's sidebar is rooted at the folder — so that file must CONTAIN
 /// [`OPENRECENT_OCR_PRESENT`] and is likewise absent from
 /// [`RELAUNCH_FIXTURE_NAMES`], whose generic loop forbids exactly that property.
 /// The crossed half is the one that matters: the header bar draws
 /// `~/`[`OPENRECENT_TARGET_DIR`] on every capture of that smoke, so a target
 /// DIRECTORY carrying the asserted term would satisfy its OCR assertion from the
-/// title alone — with the sidebar never re-rooting and `settle_reroot`
-/// never firing. The fourth block below asserts both halves, plus that neither
+/// title alone — with the new window in the empty state and no sidebar drawn
+/// at all. The fourth block below asserts both halves, plus that neither
 /// name carries any OTHER asserted term.
 ///
 /// The sidebar-toggle smoke is the third, and its crossed pair is the sharpest of
@@ -2200,7 +2245,7 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         "OPENRECENT_TARGET_FILE = {OPENRECENT_TARGET_FILE:?} no longer contains \
          OPENRECENT_OCR_PRESENT = {OPENRECENT_OCR_PRESENT:?}. That FILENAME is the subject of the \
          smoke's OCR assertion — the tree sidebar draws it, and it is the only observable proving \
-         `settle_reroot` -> `tree_view::reroot` restarted the traversal at the new root. \
+         the new window's sidebar is rooted at the opened folder. \
          If the two stop agreeing the smoke asserts on a word nothing draws and fails with no \
          visible cause."
     );
@@ -2213,9 +2258,8 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
          `~/{OPENRECENT_TARGET_DIR}` on EVERY capture of that smoke (the target directory is a \
          child of the app's HOME, which is what pins the title to a constant string), so a target \
          directory whose name carried the asserted term would satisfy the smoke's OCR assertion \
-         from the TITLE alone — with the sidebar never re-rooting, `settle_reroot` never \
-         firing and `tree_view::reroot` never running. The smoke would then pass green against \
-         exactly the build its revert produces. Rename the DIRECTORY; do NOT change \
+         from the TITLE alone — with the new window in the empty state and no sidebar drawn. \
+         The smoke would then pass green against exactly the build its falsifier S4c produces. Rename the DIRECTORY; do NOT change \
          OPENRECENT_OCR_PRESENT and do NOT touch the assertion."
     );
     for &(term, term_const, smoke) in ASSERTED_OCR_TERMS {

@@ -31,14 +31,15 @@
 //! - [`mod@search_panel`]: the search panel's guard, rows, Enter rule, open route and status line.
 //! - [`mod@sidebar`]: which of the sidebar's two pages may refresh.
 //! - [`mod@sidebar_toggles`]: the header bar's Files/Search toggle state and its click rule.
-//! - [`launch_decision`] / [`workspace::reroot_ready`] / [`workspace::reroot_decision`]:
-//!   whether a project is open, where Neovim starts, and when the sidebar re-roots.
+//! - [`launch_decision`] / [`workspace::reroot_decision`]: whether a project is open, where
+//!   Neovim starts, and when the sidebar re-roots.
 //! - [`mod@tree_gate`]: when the sidebar's file tree may refresh and rebuild.
 //! - [`mod@refresh_coalescer`]: the sidebar's trailing refresh over a burst of batches.
 //! - [`window_title`]: the working directory rendered as a window title ([`title`]).
 //! - [`mod@titlebar_background`]: the header bar's and tab bar's background from `WolfTitlebar`
 //!   and `Normal`.
 //! - [`mod@pane_layout`]: the codec between the live pane layout and the persisted tree.
+//! - [`mod@open_folder`]: Open Folder's step for a directory, and the plan of the tab it opens.
 //! - [`restore_plans`]: one launch plan per saved window, and the write-side rules
 //!   ([`state_seam`]).
 //! - [`mod@liveness_ui`]: the crash and stall recovery rules.
@@ -129,6 +130,7 @@ pub mod layout;
 pub mod liveness_ui;
 pub mod mouse;
 pub mod nav_ui;
+pub mod open_folder;
 pub mod other_pane_seam;
 mod overlay_style;
 pub mod palette;

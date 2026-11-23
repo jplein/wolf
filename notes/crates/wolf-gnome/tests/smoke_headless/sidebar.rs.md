@@ -14,13 +14,15 @@ The content terms are `projsearch*`. `PROJSEARCH_QUERY` is a third vocabulary: i
 
 ## Open Recent fixtures
 
-The scenario is the palette scenario plus the buffer picker's `wait_file` helper: open a base file, Ctrl+Shift+P, type the target directory's basename, Enter, then read `getcwd()` back. `make_temp_cwd` returns `<unique>/project` and `cage_command` passes `<unique>` as `HOME`, so the target `<unique>/orzulu` is drawn as the constant `~/orzulu`. A target directly under `std::env::temp_dir()` draws a run-varying path in the header and brings back the OCR flake `make_temp_cwd` describes.
+The scenario opens a base file in the launch window, presses Ctrl+Shift+P, types the target directory's basename and Enter, then polls a `getcwd()` readback from the focused window until it names the target. The activation opens a new window, and under `cage` the newest toplevel holds the keyboard, so a key typed before it maps reaches the launch window. `make_temp_cwd` returns `<unique>/project` and `cage_command` passes `<unique>` as `HOME`, so the target `<unique>/orzulu` is drawn as the constant `~/orzulu`. A target directly under `std::env::temp_dir()` draws a run-varying path in the header and brings back the OCR flake `make_temp_cwd` describes.
 
-`SIDEBAR_FILLER_FILES` go into both directories, because the sidebar re-roots and the target's rows are the only ones on the asserted page. The subject is `ortango.md`'s name, the sidebar row, so that file is the one deliberate exception to "put the asserted word in the content", and like `TREE_FILE_NAME` it is absent from `RELAUNCH_FIXTURE_NAMES`.
+The folder MRU is seeded with the target, then the launch cwd, so the launch cwd is first and the palette, which refuses the invoking window's own directory, offers the target alone. Assertion 6 reads the target first afterwards, which only Open Folder's `record_recent_dir` can put there.
 
-The header draws `~/orzulu` on every capture, so a target directory named after the asserted term would pass from the title alone. The third fixture guard's exemption block asserts both halves. Assertion 5 reads the sidebar because only it proves `settle_reroot` ran `tree_view::reroot`; the title proves no more than assertion 3's readback.
+`SIDEBAR_FILLER_FILES` go into both directories, because the capture shows the new window, whose sidebar lists the target. The subject is `ortango.md`'s name, the sidebar row, so that file is the one deliberate exception to "put the asserted word in the content", and like `TREE_FILE_NAME` it is absent from `RELAUNCH_FIXTURE_NAMES`.
 
-There is no must-not-contain assertion: `InputEvent::Chdir` is `:tcd`, which closes no buffer, so the earlier buffer and `:e` toast may still be painted.
+The header draws `~/orzulu` on every capture, so a target directory named after the asserted term would pass from the title alone, even with the new tab in the empty state. The third fixture guard's exemption block asserts both halves. Assertion 5 reads the sidebar because only a folder tab rooted at the target draws that row; the title proves no more than assertion 3's readback.
+
+The scenario parks no block cursor: an `o` in the new tab would modify its buffer before the quit, and the asserted term is a sidebar row the cursor never covers.
 
 ## Sidebar toggle smoke
 
@@ -56,6 +58,6 @@ The `:cd` is relative because the typed command line is page text and a toast ca
 
 ## Typed cd reverts
 
-Assertion 4's revert: at the top of `shell::settle_reroot`, add `if self.inner.pending_reroot.borrow().is_none() { return; }`, restoring "only a front-end chdir re-roots". Assertion 3 stays green, the sidebar keeps listing `startdir`'s files and `cdtango` never reaches the page. The revert also makes assertion 6 unsatisfiable, but 4 fails first.
+Assertion 4's falsifier, S5a: delete the `settle_reroot` call from `AppShell::on_render_wake`. Assertion 3 stays green, the sidebar keeps listing `startdir`'s files and `cdtango` never reaches the page. The edit also makes assertion 6 unsatisfiable, but 4 fails first.
 
 Assertion 6's revert: in `tree_view`'s root-store rebuild, append `tree::children_of(&entries, "")` instead of the single `root_node(..)`. Assertion 4 stays green because the children still render at top level, so the two rows are independently falsifiable despite sharing one scenario.

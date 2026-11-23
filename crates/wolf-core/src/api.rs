@@ -1396,10 +1396,12 @@ impl WolfCore {
     /// Returns the global recent directories (newest first), capped at
     /// [`crate::RECENT_DIRS_LIMIT`]. See [`RecentDirs::recent`].
     ///
-    /// These are the directories the captive Neovim has changed into (via the
-    /// "open folder" command or a typed `:cd`), recorded from the `wolf_cwd`
-    /// notification into the always-on `folder_mru` table of `<state_dir>/wolf.sqlite`. Returns an
-    /// empty `Vec` when the store is disabled or unreadable.
+    /// These are the directories the captive Neovim has changed into with a typed
+    /// `:cd`, recorded from the `wolf_cwd` notification, and the directories a
+    /// front-end opened a folder on, recorded through
+    /// [`record_recent_dir`](Self::record_recent_dir), all in the always-on
+    /// `folder_mru` table of `<state_dir>/wolf.sqlite`. Returns an empty `Vec` when
+    /// the store is disabled or unreadable.
     ///
     /// An entry that is not an existing directory at read time is omitted, but its
     /// row is never pruned from the store, so a folder that comes back (a remounted
@@ -1412,6 +1414,20 @@ impl WolfCore {
             .into_iter()
             .filter(|p| p.is_dir())
             .collect()
+    }
+
+    /// Records `dir` at the top of the global recent directories, canonicalized
+    /// as the redraw handler canonicalizes a `wolf_cwd` directory, falling back to
+    /// the path as given.
+    ///
+    /// A front-end calls it when Open Folder lands a tab on `dir`
+    /// (`specs/application-state.md` §6). That tab's Neovim starts in `dir`, and
+    /// the launch directory's `wolf_cwd` emit is never recorded, so without this
+    /// call an opened folder would never reach the list. Fire-and-forget, as
+    /// [`RecentDirs::record`] is.
+    pub fn record_recent_dir(&self, dir: &Path) {
+        let canonical = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+        self.recent_dirs.record(&canonical);
     }
 
     /// Returns a clone of the global command-palette MRU handle

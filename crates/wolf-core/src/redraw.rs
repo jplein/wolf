@@ -1055,9 +1055,10 @@ impl RedrawHandler {
     /// the snapshot lock, and does NOT bump `seq` (cwd is not a redraw frame).
     ///
     /// The (already-canonical) target is then recorded into the always-on
-    /// global [`RecentDirs`] MRU, so every directory the user changes into — via
-    /// the "open folder" command OR a typed `:cd` — is moved-or-added to the top of
-    /// the `folder_mru` table. That record is fire-and-forget (a brief internal mutex,
+    /// global [`RecentDirs`] MRU, so every directory the user changes into with a
+    /// typed `:cd` is moved-or-added to the top of the `folder_mru` table. A folder
+    /// a front-end opens starts its Neovim there, and is recorded through
+    /// [`crate::WolfCore::record_recent_dir`] instead. That record is fire-and-forget (a brief internal mutex,
     /// self-healing on corruption) and never bumps `seq` or wakes the front-end.
     ///
     /// The one-shot INITIAL `wolf_cwd` emit (the startup/launch cwd, before any

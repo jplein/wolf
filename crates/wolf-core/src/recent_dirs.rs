@@ -1,10 +1,11 @@
 //! The global "recent directories" MRU (most-recently-used) cache.
 //!
-//! Wolf records every directory the captive Neovim changes into — whether via
-//! the "open folder" command or a typed `:cd`/`:lcd`/`:tcd` — in the
-//! `folder_mru` table of the state database `<state_dir>/wolf.sqlite` (macOS
-//! `~/Library/Application Support/Wolf/wolf.sqlite`), so a future picker can
-//! offer the user's recent project directories. Unlike the per-project file
+//! Wolf records every directory the captive Neovim changes into with a typed
+//! `:cd`/`:lcd`/`:tcd`, and every folder a front-end opens (through
+//! [`crate::WolfCore::record_recent_dir`]), in the `folder_mru` table of the
+//! state database `<state_dir>/wolf.sqlite` (macOS
+//! `~/Library/Application Support/Wolf/wolf.sqlite`), so Open Recent can offer
+//! the user's recent project directories. Unlike the per-project file
 //! [`crate::mru`] cache, this store is GLOBAL (one table under
 //! [`crate::state::state_dir`]), keyed on the directory path, and capped at
 //! [`RECENT_DIRS_LIMIT`] entries newest-first.
@@ -71,8 +72,8 @@ impl RecentDirs {
 
     /// Records `path` as the most-recently-used directory (fire-and-forget).
     ///
-    /// `path` is stored as-given via `to_string_lossy` (it is already canonical
-    /// when it arrives from `apply_cwd`, so it is NOT re-canonicalized here). One
+    /// `path` is stored as-given via `to_string_lossy` (its callers canonicalize
+    /// it, so it is NOT re-canonicalized here). One
     /// transaction moves-or-adds the row to the top (a monotonic `MAX(seq)+1`
     /// stamp with an upsert) and prunes any rows beyond [`RECENT_DIRS_LIMIT`].
     /// Errors are swallowed (self-healing on corruption); a directory change is

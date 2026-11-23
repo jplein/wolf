@@ -14,9 +14,8 @@
 //! [`crate::workspace`]), where the sidebar is hidden and there is nothing to
 //! walk. [`TreeHandle::reroot`] then starts (or restarts) it, driven from
 //! [`crate::shell`]'s ONE settle point over the pure
-//! [`crate::workspace::reroot_decision`]. That covers both a front-end directory
-//! change (the Open Folder dialog, an Open Recent palette row) and a `:cd` typed
-//! into Neovim. This module reads no cwd of its own: the shell knows where the
+//! [`crate::workspace::reroot_decision`]. That covers a `:cd` typed into Neovim, a
+//! tab switch, and a tab Open Folder fills. This module reads no cwd of its own: the shell knows where the
 //! sidebar is rooted and passes the label in.
 //!
 //! The sidebar is per window while every tab runs its own Neovim, so the search

@@ -619,24 +619,23 @@ exit 0
 // See notes/crates/wolf-gnome/tests/smoke_headless/sidebar.rs.md#open-recent-fixtures
 
 /// Open Recent smoke: the file opened in the LAUNCH cwd before the chord fires.
-/// Nothing asserts on it — it exists so the editor pane is not blank and so the
-/// scenario's early steps are the palette smoke's, step for step.
+/// Nothing asserts on it — it exists so the launch window's pane is not blank and so
+/// the scenario's early steps are the palette smoke's, step for step.
 pub(crate) const OPENRECENT_START_FILE: &str = "orbase.md";
 
 /// Heading written into [`OPENRECENT_START_FILE`]. Not an `ASSERTED_OCR_TERMS`
-/// entry: `:tcd` closes no buffer, so this heading is still on screen after a
-/// PERFECTLY CORRECT re-root and asserting its absence would assert something the
-/// feature does not do.
+/// entry: it is drawn in the launch window, which the capture of the newest
+/// toplevel does not show, and nothing asserts on it either way.
 const OPENRECENT_START_HEADING: &str = "# ZZORBASE";
 
 /// Basename of the directory seeded into the folder MRU, and — as
 /// [`OPENRECENT_QUERY`] — the string typed into the palette. It is a sibling of the
-/// launch cwd and a child of the app's `HOME`, so after the chdir the header bar
-/// renders the constant `~/orzulu`.
+/// launch cwd and a child of the app's `HOME`, so the new window's header bar
+/// renders the constant `~/orzulu`, and so does its sidebar's root row.
 ///
 /// Because it IS drawn, it must not contain [`OPENRECENT_OCR_PRESENT`]: the title
-/// would then satisfy assertion 5 with the sidebar never re-rooting. That crossed
-/// pair is asserted in `restore_fixture_names_cannot_satisfy_their_own_assertions`.
+/// would then satisfy assertion 5 with no sidebar rooted there. That crossed pair is
+/// asserted in `restore_fixture_names_cannot_satisfy_their_own_assertions`.
 pub(crate) const OPENRECENT_TARGET_DIR: &str = "orzulu";
 
 /// The file dropped inside [`OPENRECENT_TARGET_DIR`]. Its **name** is the asserted
@@ -647,8 +646,8 @@ pub(crate) const OPENRECENT_TARGET_DIR: &str = "orzulu";
 pub(crate) const OPENRECENT_TARGET_FILE: &str = "ortango.md";
 
 /// Lowercased substring OCR MUST find: the target directory's own file, drawn as a
-/// tree-sidebar row. It lives outside the launch cwd, so it can only be on the page
-/// once `settle_reroot` re-rooted the sidebar at the new working directory.
+/// tree-sidebar row. It lives outside the launch cwd, so only a window whose sidebar
+/// is rooted at the target draws it.
 pub(crate) const OPENRECENT_OCR_PRESENT: &str = "ortango";
 
 /// Typed into the palette's search entry. Defined AS [`OPENRECENT_TARGET_DIR`] so
@@ -657,9 +656,9 @@ pub(crate) const OPENRECENT_OCR_PRESENT: &str = "ortango";
 /// `palette::tests::palette_rows_query_orzulu_selects_exactly_the_recent_folder_row`.
 const OPENRECENT_QUERY: &str = OPENRECENT_TARGET_DIR;
 
-/// Name of the file the captive Neovim writes its `getcwd()` into, in the LAUNCH
-/// cwd. Pixel-independent: OCR is structurally incapable of answering "is Neovim's
-/// working directory now exactly this path".
+/// Name of the file the focused window's Neovim writes its `getcwd()` into, in the
+/// LAUNCH cwd. Pixel-independent: OCR is structurally incapable of answering "is
+/// Neovim's working directory now exactly this path".
 pub(crate) const OPENRECENT_READBACK_NAME: &str = "orcwd.txt";
 
 /// The shared SQLite database under a state directory, whose tables hold
@@ -672,69 +671,78 @@ const STATE_DB_NAME: &str = "wolf.sqlite";
 
 /// The OPEN RECENT scenario, run as a single `sh -c` string inside `cage`.
 ///
-/// `PALETTE_SCENARIO`'s structure with `BUFPICK_SCENARIO`'s `wait_file` helper:
-/// launch + poll, settle, `:e` the base file, fire Ctrl+Shift+P, type the folder
-/// query, Enter, settle TWICE, read `getcwd()` back, park the block cursor, settle,
-/// screenshot.
+/// `PALETTE_SCENARIO`'s structure with a polled readback: launch + poll, settle, `:e` the base
+/// file, fire Ctrl+Shift+P, type the folder query, Enter, then poll `getcwd()` from the focused
+/// window until it names the target, settle for the new window's tree, screenshot, quit with
+/// `Ctrl+Shift+Q` and freeze the save.
 ///
-/// ## Why TWO settles after the Enter
+/// ## Why the readback is polled
 ///
-/// One activation has to travel four hops before the assertion's observable exists:
-/// Neovim applies the `:tcd` and emits `DirChanged`; core tracks it into `live_cwd`;
-/// the shell's next render wake sees `workspace::reroot_ready` and settles the
-/// pending re-root; and the sidebar's FRESH `FileSearch` then streams the new root's
-/// entries into the list. Only the last of those puts [`OPENRECENT_OCR_PRESENT`] on
-/// the page — and it is a full directory traversal, the same one [`TITLE_SCENARIO`]
-/// buys a `TREE_SETTLE` for on top of its `SETTLE`. Nothing here has been measured to
-/// fit inside one `SETTLE`, and the cost of guessing wrong is an INTERMITTENT smoke
-/// rather than a red one, so the budget is doubled deliberately. If assertion 5 ever
-/// fails alone while assertion 3 is green, raise these — never weaken the assertion.
+/// The activation opens a NEW window, and under `cage` the newest toplevel holds the keyboard.
+/// A key typed before it maps reaches the launch window, whose `getcwd()` is the launch cwd, so
+/// one readback could read the wrong window. The poll retries up to `READ_TRIES` times and keeps
+/// the last answer, which assertion 3 reads.
 ///
-/// ## The block-cursor park is convention here, not load-bearing
+/// ## Why `TREE_SETTLE` after the readback
 ///
-/// The asserted term is a SIDEBAR row, which the editor's inverted cursor block can
-/// never sit on top of. The `o` + Escape is kept anyway because every scenario in
-/// this binary does it and a reader should not have to work out which ones may skip it
-/// — but do not read it as protecting this assertion.
+/// The new window's sidebar is rooted at the target when it is built, and its `FileSearch` then
+/// streams the root's entries, the traversal [`TITLE_SCENARIO`] buys a `TREE_SETTLE` for. If
+/// assertion 5 ever fails alone while assertion 3 is green, raise it; never weaken the assertion.
+///
+/// ## No block-cursor park
+///
+/// Every other scenario parks the cursor with `o` and Escape. Here that would modify the new
+/// tab's buffer before the quit, and the asserted term is a sidebar row the cursor never covers.
 ///
 /// ## Exit codes
 ///
 /// * `11` — the app died before it was ready for input (the shared convention).
-/// * `14` — the `getcwd()` readback never appeared, which means the palette never
-///   closed and the Ex command was typed into its `SearchEntry` instead. That is a
-///   DISTINCT cause from "the wrong row ran", which exits 0 and fails assertion 3.
+/// * `12` — the app was still alive after `Ctrl+Shift+Q`.
+/// * `13` — the app exited non-zero.
+/// * `14` — the `getcwd()` readback never appeared, which means the palette never closed and
+///   the Ex command was typed into its `SearchEntry` instead. That is a DISTINCT cause from "no
+///   window opened", which exits 0 and fails assertion 3.
+/// * `16` — the app left no `wolf.sqlite`.
 const OPENRECENT_SCENARIO: &str = r#"
 set -eu
 
 # SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
-# How many WAIT_INTERVAL polls to allow for the readback file.
-FILE_TRIES=100
+# The new window's FileSearch traversal; matches TREE_SCENARIO.
+TREE_SETTLE=1.5
+QUIT_TRIES=75
+# Readback attempts, and the polls each one waits for its file.
+READ_TRIES=15
+READ_FILE_TRIES=25
+
+cleanup() {
+    set +e
+    if [ -n "${app_pid:-}" ]; then
+        kill "$app_pid" 2>/dev/null
+        wait "$app_pid" 2>/dev/null
+    fi
+}
+trap cleanup EXIT INT TERM HUP
+
+read_once() {
+    t=0
+    while [ "$t" -lt "$READ_FILE_TRIES" ]; do
+        if [ -s "$OPENRECENT_READBACK" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    return 1
+}
 
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
 wait_ready "$app_pid" 11 "wolf-gnome open-recent smoke"
 
-# Poll for a readback file the captive Neovim writes. Nothing downstream may read a
-# file we merely hope is there. (The BUFPICK_SCENARIO body, verbatim.)
-wait_file() {
-    f=$1
-    t=0
-    while [ "$t" -lt "$FILE_TRIES" ]; do
-        if [ -s "$f" ]; then
-            return 0
-        fi
-        t=$((t + 1))
-        sleep "$WAIT_INTERVAL"
-    done
-    echo "wolf-gnome open-recent smoke: readback file $f never appeared (or stayed empty)." >&2
-    return 1
-}
-
-# Open the base file so the pane is not blank. Nothing asserts on it: `:tcd` closes
-# no buffer, so it is still painted after a perfectly correct re-root.
+# Open the base file so the launch window's pane is not blank. Nothing asserts on it.
 wtype -- ":e $OPENRECENT_START_FILE"
 wtype -k Return
 
@@ -745,11 +753,6 @@ sleep "$SETTLE"
 # controller resolves it through `actions::action_for_key`, activates
 # `win.command-palette`, and the shell performs UiAction::OpenCommandPalette --
 # which snapshots the recent-directories store through `open_recent_candidates`.
-#
-# Note: `-M <mod>` / `-m <mod>` press / release a modifier and `-k <key>`
-# presses+releases a key while the held modifiers apply, exactly as in the picker,
-# new-buffer, palette and buffer-picker scenarios. Chord delivery is isolated to
-# this single line.
 wtype -M ctrl -M shift -k p -m shift -m ctrl
 
 # Let the palette map and grab keyboard focus on its search entry.
@@ -758,46 +761,75 @@ sleep "$SETTLE"
 # Type the target directory's basename so the ranked list narrows to its folder row.
 wtype -- "$OPENRECENT_QUERY"
 
-# Let the SearchEntry's own search delay fire and the list re-rank. That delay lives
-# inside this budget, exactly as it does in PICKER_SCENARIO.
+# Let the SearchEntry's own search delay fire and the list re-rank.
 sleep "$SETTLE"
 
 # Activate the sole row: records its MRU key, closes the palette, and hands
-# PaletteAction::OpenRecentFolder to the shell, which performs it through chdir_to.
+# PaletteAction::OpenRecentFolder to the shell, which performs it through open_folder.
 wtype -k Return
-
-# TWO settles, and both are load-bearing -- see the doc comment above. The first
-# covers nvim applying the :tcd and core tracking the DirChanged into live_cwd; the
-# second covers the shell settling the pending re-root on a render wake and the
-# sidebar's FRESH FileSearch streaming the new root's entries into the list. Only
-# that last step puts the asserted sidebar row on the page.
-sleep "$SETTLE"
 sleep "$SETTLE"
 
 # --- The readback: Neovim's OWN answer about its working directory -----------
 #
-# Pixel-independent. OCR cannot answer "is the working directory exactly this
-# path", and the header-bar title only shows what refresh_title read.
-wtype -- ":call writefile([getcwd()], '$OPENRECENT_READBACK')"
-wtype -k Return
-wait_file "$OPENRECENT_READBACK" || exit 14
+# Polled until the focused window's Neovim reports the target, since a key typed
+# before the new window maps reaches the launch window. The last answer is kept.
+n=0
+while :; do
+    rm -f "$OPENRECENT_READBACK"
+    wtype -- ":call writefile([getcwd()], '$OPENRECENT_READBACK')"
+    wtype -k Return
+    if read_once; then
+        got=$(sed -n 1p "$OPENRECENT_READBACK")
+        if [ "${got##*/}" = "$OPENRECENT_QUERY" ]; then
+            break
+        fi
+        echo "wolf-gnome open-recent smoke: readback $n: getcwd() = $got" >&2
+    fi
+    n=$((n + 1))
+    if [ "$n" -ge "$READ_TRIES" ]; then
+        break
+    fi
+    sleep "$SETTLE"
+done
+if [ ! -s "$OPENRECENT_READBACK" ]; then
+    exit 14
+fi
 
-# Park the block cursor off the buffer's first row, as every scenario here does. The
-# asserted term is a SIDEBAR row, so this is convention rather than protection -- see
-# the doc comment. These keystrokes also corroborate that the palette really closed.
-wtype -- o
-wtype -k Escape
-
-# Let the redraw land before capturing.
+# Let the new window's sidebar traverse its root before capturing.
 sleep "$SETTLE"
+sleep "$TREE_SETTLE"
 
-# Capture the live window to the output PNG.
+# Capture the window cage shows: the newest toplevel.
 grim "$OUT_PNG"
 
-# Best-effort teardown: the app may already be gone.
-set +e
-kill "$app_pid" 2>/dev/null
-wait "$app_pid" 2>/dev/null
+wtype -M ctrl -M shift -k q -m shift -m ctrl
+tries=0
+gone=0
+while [ "$tries" -lt "$QUIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        gone=1
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+if [ "$gone" -ne 1 ]; then
+    echo "wolf-gnome open-recent smoke: the app (pid $app_pid) is still alive after Ctrl+Shift+Q." >&2
+    exit 12
+fi
+rc=0
+wait "$app_pid" || rc=$?
+if [ "$rc" -ne 0 ]; then
+    echo "wolf-gnome open-recent smoke: the app (pid $app_pid) exited $rc, not 0." >&2
+    exit 13
+fi
+app_pid=
+
+if ! freeze_state "$OPENRECENT_STATE_SRC" "$OPENRECENT_STATE_COPY"; then
+    echo "wolf-gnome open-recent smoke: the app left no wolf.sqlite in $OPENRECENT_STATE_SRC." >&2
+    exit 16
+fi
+
 exit 0
 "#;
 
@@ -999,10 +1031,9 @@ const CD_STATE_DIR: &str = "cdstate";
 /// working directory now exactly this path".
 pub(crate) const CD_READBACK_NAME: &str = "cdcwd.txt";
 
-/// The TYPED-`:cd` scenario, run as a single `sh -c` string inside `cage` (the
-/// [`OPENRECENT_SCENARIO`] shape): launch + poll, settle, `:e` the base file, type
-/// **`:cd ..`**, settle three times, read `getcwd()` back, park the block cursor,
-/// settle, screenshot.
+/// The TYPED-`:cd` scenario, run as a single `sh -c` string inside `cage`: launch +
+/// poll, settle, `:e` the base file, type **`:cd ..`**, settle three times, read
+/// `getcwd()` back, park the block cursor, settle, screenshot.
 ///
 /// ## Why the `:cd` is relative
 ///
@@ -1017,10 +1048,9 @@ pub(crate) const CD_READBACK_NAME: &str = "cdcwd.txt";
 /// the shell's next render wake settles the re-root; and the sidebar's FRESH
 /// `FileSearch` then streams the new root's entries into the list. Only the last of
 /// those puts [`CD_OCR_ROOTED`] on the page, and it is a full directory traversal —
-/// hence the [`TREE_SCENARIO`] `TREE_SETTLE` on top of the two `SETTLE`s
-/// [`OPENRECENT_SCENARIO`] already found necessary for the same four hops. If
-/// assertion 4 ever fails alone while assertion 3 is green, raise these; never weaken
-/// an assertion.
+/// hence the [`TREE_SCENARIO`] `TREE_SETTLE` on top of two `SETTLE`s for the first
+/// three hops. If assertion 4 ever fails alone while assertion 3 is green, raise
+/// these; never weaken an assertion.
 ///
 /// ## The block-cursor park
 ///
@@ -1056,7 +1086,7 @@ app_pid=$!
 wait_ready "$app_pid" 11 "wolf-gnome typed-cd smoke"
 
 # Poll for a readback file the captive Neovim writes. Nothing downstream may read a
-# file we merely hope is there. (The OPENRECENT_SCENARIO body, verbatim.)
+# file we merely hope is there. (The BUFPICK_SCENARIO body, verbatim.)
 wait_file() {
     f=$1
     t=0
@@ -1817,93 +1847,66 @@ fn window_title_shows_the_working_directory_under_cage() {
     );
 }
 
-/// Activating an **Open Recent** palette row re-roots the whole window: Neovim's
-/// working directory changes, and the front-end settles the pending re-root and
-/// restarts the sidebar traversal at the new root.
+/// Activating an **Open Recent** palette row for a folder with no project state, from a
+/// folder tab, opens a NEW window holding one fresh folder tab on it
+/// (`specs/application-state.md` §6, step 3 with no project state), records the folder
+/// first in the recent-directories list, and leaves the launch window as it was.
 ///
 /// ## What it covers that no other smoke does
 ///
-/// The only end-to-end path from the recent-directories store to a re-rooted window.
-/// `PaletteInner::open` reads `WolfCore::recent_dirs()` and filters it through
-/// `palette::open_recent_candidates`; `rank_palette` builds an `OpenRecent` row from
-/// what survives; `palette_action_for` classifies it as
-/// `PaletteAction::OpenRecentFolder`; and `shell::on_palette_activation` performs it
-/// through the very same `AppShell::chdir_to` the native Open Folder dialog uses —
-/// `InputEvent::Chdir` (`:tcd`), then `settle_reroot` on a later render wake,
-/// then `tree_view::reroot`.
-///
-/// That last leg is why this is not a duplicate of
-/// `command_palette_chord_runs_the_selected_command_under_cage`: that smoke proves
-/// a palette row dispatches a `Command`, and an Open Recent row is not a `Command` at
-/// all. It is also the only cage coverage of the Open Folder settle path, which
-/// `tests/README.md` lists under "Deliberate test gaps" for the DIALOG because no
-/// portal backend exists under `cage` — the dialog itself is unreachable there; its
-/// downstream half is reachable through this smoke.
+/// The end-to-end path from the recent-directories store to a window opened on a folder
+/// with no project state. `PaletteInner::open` reads `WolfCore::recent_dirs()` and
+/// filters it through `palette::open_recent_candidates`; `rank_palette` builds an
+/// `OpenRecent` row from what survives; `palette_action_for` classifies it as
+/// `PaletteAction::OpenRecentFolder`; and `shell::on_palette_activation` hands it to
+/// `AppShell::open_folder`, the route the native Open Folder dialog takes too. The
+/// coordinator finds no tab on the folder and a current tab with a directory, so it opens
+/// a window whose tree sidebar is rooted at the folder when it is built, and records the
+/// folder through `WolfCore::record_recent_dir`. The dialog itself is unreachable under
+/// `cage`, which has no portal backend; `tests/README.md` lists it under "Deliberate test
+/// gaps". `smoke_headless/open_folder.rs` drives the other two steps and the project
+/// state.
 ///
 /// ## The premise, and where it is measured
 ///
-/// The store is seeded with exactly ONE directory and the query is that directory's
-/// basename, so the palette holds exactly one row. That premise is not asserted here
-/// — a screenshot cannot count palette rows, since the overlay is closed before
-/// `grim` fires — and is instead pinned in the fast suite by
-/// `palette::tests::palette_rows_query_orzulu_selects_exactly_the_recent_folder_row`,
-/// which also pins the `open_recent:<path>` key shape assertion 4 reads back.
+/// The folder MRU is seeded with the target and then the launch cwd, so the launch cwd is
+/// first. The palette refuses the invoking window's own directory, so the query yields
+/// exactly one row, which the fast suite pins in
+/// `palette::tests::palette_rows_query_orzulu_selects_exactly_the_recent_folder_row`. The
+/// launch cwd on top is what lets assertion 6 tell Open Folder's record from the seed.
 ///
-/// Two facts make "exactly one candidate" true of the RUN rather than merely of the
-/// seed, and neither is asserted here either: `cage_command` hands the app a fresh
-/// per-run `WOLF_STATE_DIR`, so the folder MRU starts empty; and
-/// `wolf_core::redraw::apply_cwd` never records the LAUNCH working directory (the
-/// initial `wolf_cwd` emit is flagged), so nothing is added before the chord fires.
-/// If either changed, the palette would hold a second folder row and this smoke would
-/// become stochastic rather than red — which is what assertion 0 is watching for from
-/// the other side.
+/// Two facts make the seed the whole store, and neither is asserted here:
+/// `cage_command` hands the app a fresh per-run `WOLF_STATE_DIR`, and
+/// `wolf_core::redraw::apply_cwd` never records a launch working directory, so neither
+/// window's Neovim adds a row by starting.
 ///
 /// ## Assertions, classified
 ///
-/// A precondition gets NO revert: inventing one would manufacture a discriminator this
-/// smoke does not have. The `measured` column is from an actual red run, per
-/// `tests/README.md`'s "A red-run demonstration is a deliverable, not a formality".
+/// A precondition gets NO falsifier: inventing one would manufacture a discriminator this
+/// smoke does not have.
 ///
-/// | # | assertion | kind | revert | measured |
-/// | --- | --- | --- | --- | --- |
-/// | 0 | the seeded store reads the canonical target back | **precondition** — `RecentDirs::record` is fire-and-forget and swallows every error, so without this a failed seed surfaces as a mysterious empty palette hundreds of lines later | none; do not invent one | n/a |
-/// | 0b | the TEST process has no `WOLF_STATE_DIR`, and the developer's real `wolf.sqlite` is byte-identical across the run | **precondition** — the isolation proof, the same two checks `single_pane_file_survives_relaunch_under_cage` opens with, aimed at the database the stores share | none; do not invent one | n/a |
-/// | 1 | `status.success()` | precondition — the cage scenario ran to completion | none; do not invent one | n/a |
-/// | 2 | [`assert_png_present`] | precondition — grim produced an image | none; do not invent one | n/a |
-/// | 3 | the `getcwd()` readback canonicalizes to the seeded target | **discriminator** — Neovim's working directory really changed | in `shell::on_palette_activation`, replace `self.chdir_to(path)` with an `eprintln!` and no send. The chord still opens the palette, the row still ranks, Enter still closes it and records the MRU key — but nothing is sent to Neovim, so the readback is the launch cwd. | RED. `assertion `left == right` failed: open_recent_palette_row_reroots_the_window_under_cage: after the Open Recent activation the captive Neovim's working directory is /tmp/nix-shell.kFZSo6/wolf-gnome-smoke-2578175-1785817088670263436/project, not the seeded target /tmp/nix-shell.kFZSo6/wolf-gnome-smoke-2578175-1785817088670263436/orzulu.`, `left: ".../project"`, `right: ".../orzulu"`, then `test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 34 filtered out; finished in 8.00s`. The stubbed arm's own `eprintln!` printed the correct target path, so the row WAS activated and classified to `OpenRecentFolder` — what the readback reports is the launch cwd purely because nothing was sent. Restored, green. |
-/// | 4 | the command MRU holds `open_recent:<canonical target>` | **discriminator** — the row was ACTIVATED, it was an Open Recent row, and it carried core's key shape. Independent of the pixels entirely: nothing but a palette activation writes that store. | in `palette::activate_selection`, delete the `mru.record(&mru_key)` call → the key is absent and the store reads back empty. | RED. `open_recent_palette_row_reroots_the_window_under_cage: the command MRU at /tmp/nix-shell.HA9znD/wolf-gnome-smoke-2579118-1785817109092969527/project-state/wolf.sqlite does not hold "open_recent:/tmp/nix-shell.HA9znD/wolf-gnome-smoke-2579118-1785817109092969527/orzulu"; it holds [].`, then `test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 34 filtered out; finished in 7.98s`. Isolated: the panic is at assertion 4, so assertion 3 was green — Neovim did chdir and only the MRU write is gone. Restored, green. |
-/// | 5 | OCR contains [`OPENRECENT_OCR_PRESENT`] | **discriminator** — the FRONT-END settled the re-root and restarted the sidebar traversal at the new root | In `shell::settle_reroot`, delete the `self.inner.tree.reroot(..)` call from the `Reroot` arm, keeping `set_empty_state` and the `rooted_cwd` write — see the note below for why it is this call and not `chdir_to`. Neither producer then re-roots the sidebar: `ortango` is absent, and assertions 3 and 4 stay GREEN. | RED. `open_recent_palette_row_reroots_the_window_under_cage: OCR did not contain "ortango" — the name of ortango.md, which lives inside the target directory and can therefore only be drawn once the tree sidebar re-rooted there.`, then `test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 37 filtered out; finished in 8.15s`. Isolated: the panic is at assertion 5, so assertions 3 and 4 were green, and the captured page carries `~/orzulu` in the header bar — the title followed the live cwd — while the sidebar still draws the launch root `project` with `orbase.md` under it. Restored, green. |
+/// | # | assertion | kind | falsifier |
+/// | --- | --- | --- | --- |
+/// | 0 | the seeded store lists the launch cwd, then the target | **precondition** — `RecentDirs::record` swallows every error | none |
+/// | 0b | the TEST process has no `WOLF_STATE_DIR`, and the developer's real `wolf.sqlite` is byte-identical across the run | **precondition** — the isolation proof | none |
+/// | 1 | `status.success()` | precondition — the scenario ran to completion | none |
+/// | 2 | [`assert_png_present`] | precondition — grim produced an image | none |
+/// | 3 | the focused window's `getcwd()` readback canonicalizes to the target | **discriminator** — a window opened on the target and holds the keyboard | S4b: in `AppShell::on_palette_activation`, replace the `OpenRecentFolder` arm's `open_folder` call with an `eprintln!` |
+/// | 4 | the command MRU holds `open_recent:<canonical target>` | **discriminator** — the row was activated, and it was the Open Recent row | S4d: in `palette::activate_selection`, delete `mru.record(&mru_key)` |
+/// | 5 | OCR contains [`OPENRECENT_OCR_PRESENT`] | **discriminator** — the new window is a folder tab whose sidebar is rooted at the target | S4c: give a tab with no project state `empty: true` (G7a) |
+/// | 6 | the folder MRU's first entry is the target | **discriminator** — Open Folder recorded the folder | S4a: delete the `record_recent_dir` call in `Coordinator::open_folder` |
+/// | 7 | the save holds the launch window on the launch cwd and a window on the target, one tab each | **discriminator** — a new window opened, and the launch tab was not replaced | S4c, after assertion 5 |
 ///
-/// ## Why assertion 5's revert deletes the `tree.reroot` call
+/// ## Why assertion 5 reads the sidebar
 ///
-/// It deletes `tree.reroot(..)` from `settle_reroot`'s `Reroot` arm rather than
-/// replacing `chdir_to` with a bare `InputEvent::Chdir` send, because the bare send
-/// leaves this smoke GREEN: `workspace::reroot_decision`'s `pending == None,
-/// live != rooted` arm re-roots on Neovim's live working directory whichever producer
-/// set the pending flag, so removing the pending record removes nothing observable.
-/// A revert row that does not redden is worse than no row at all — it is a documented
-/// claim that is false. Deleting the one call BOTH producers share is the smallest
-/// edit that removes the behaviour this assertion names.
-///
-/// Assertion 5 reads the SIDEBAR rather than the header-bar title on purpose. The
-/// title would only prove `AppShell::refresh_title` read the new `live_cwd`, which
-/// assertion 3 already implies; the sidebar row is the only observable that proves
-/// the settle point ran through to `tree_view::reroot`. [`OPENRECENT_TARGET_FILE`] lives
-/// OUTSIDE the launch cwd, so it can reach the page only after the re-root — and the
-/// crossed-pair guard in
-/// `restore_fixture_names_cannot_satisfy_their_own_assertions` is what stops the
-/// header bar (which draws `~/orzulu` on every capture) satisfying it instead.
-///
-/// ## No must-NOT-contain assertion, deliberately
-///
-/// `InputEvent::Chdir` is `:tcd`: it closes no buffer and reloads nothing, so
-/// [`OPENRECENT_START_HEADING`] is still painted after a perfectly correct re-root and
-/// the cmdline strip may still carry the earlier `:e` toast. An absence assertion
-/// here would assert something the feature does not guarantee — which is also why
-/// that heading is not an `ASSERTED_OCR_TERMS` entry.
+/// The new window's header bar draws `~/orzulu` from its Neovim's cwd, which assertion 3
+/// already shows. The sidebar row for [`OPENRECENT_TARGET_FILE`] is drawn only by a
+/// folder tab whose tree is rooted at the target; the empty state hides the sidebar. The
+/// crossed-pair guard in `restore_fixture_names_cannot_satisfy_their_own_assertions` is
+/// what stops the header bar satisfying it instead.
 #[test]
-fn open_recent_palette_row_reroots_the_window_under_cage() {
-    const SMOKE: &str = "open_recent_palette_row_reroots_the_window_under_cage";
+fn open_recent_from_a_folder_tab_opens_a_fresh_window_under_cage() {
+    const SMOKE: &str = "open_recent_from_a_folder_tab_opens_a_fresh_window_under_cage";
 
     // Assertion 0b, first part: checked first, since `state_dir()` resolves `WOLF_STATE_DIR` ahead of
     // everything and an override here would make the isolation check self-referential.
@@ -1943,9 +1946,15 @@ fn open_recent_palette_row_reroots_the_window_under_cage() {
         &cwd,
         &[(OPENRECENT_START_FILE, OPENRECENT_START_HEADING)],
     );
+    let launch_canon = std::fs::canonicalize(&cwd).unwrap_or_else(|e| {
+        panic!(
+            "{SMOKE}: failed to canonicalize the launch cwd {}: {e}",
+            cwd.display()
+        )
+    });
 
-    // The target is the cwd's sibling, drawn as `~/orzulu`, with its own fillers since the sidebar
-    // re-roots. See notes/crates/wolf-gnome/tests/smoke_headless/sidebar.rs.md#open-recent-fixtures
+    // The target is the cwd's sibling, drawn as `~/orzulu`, with its own fillers for the new window.
+    // See notes/crates/wolf-gnome/tests/smoke_headless/sidebar.rs.md#open-recent-fixtures
     let target_dir = smoke_home(&cwd).join(OPENRECENT_TARGET_DIR);
     std::fs::create_dir_all(&target_dir).unwrap_or_else(|e| {
         panic!(
@@ -1959,37 +1968,39 @@ fn open_recent_palette_row_reroots_the_window_under_cage() {
         &[(OPENRECENT_TARGET_FILE, SIDEBAR_FILLER_BODY)],
     );
 
-    // Canonical: `chdir_to` canonicalizes, `RecentDirs` stores as given, and /tmp may be a symlink.
+    // Canonical: tab directories and store keys are canonical, and /tmp may be a symlink.
     let target_canon = std::fs::canonicalize(&target_dir).unwrap_or_else(|e| {
         panic!(
             "{SMOKE}: failed to canonicalize the Open Recent target dir {}: {e}. Every comparison \
              below is against the canonical path, because /tmp may be a symlink and the app \
-             canonicalizes before it sends InputEvent::Chdir.",
+             canonicalizes the folder before it acts on it.",
             target_dir.display()
         )
     });
 
     // The state dir `cage_command` hands the app as WOLF_STATE_DIR: the store this
-    // test seeds, and the one assertion 4 reads the command MRU back out of.
+    // test seeds, and the one the assertions read back.
     let smoke_state = smoke_state_dir(&cwd);
 
     // The scoped block drops the connection and its WAL handle before the app opens the same file.
     {
-        RecentDirs::open(&smoke_state).record(&target_canon);
+        let recent = RecentDirs::open(&smoke_state);
+        recent.record(&target_canon);
+        recent.record(&launch_canon);
     }
 
     // Assertion 0 (precondition): `RecentDirs::record` swallows every error, so a failed seed would
     // otherwise surface as assertion 3 blaming the shell.
     let seeded = RecentDirs::open(&smoke_state).recent();
-    assert!(
-        seeded.iter().any(|dir| dir == &target_canon),
-        "{SMOKE}: the seeded recent-directories store at {} does not hold {}; it holds {seeded:?}. \
-         `RecentDirs::record` swallows every error, so an empty list means the seed silently \
-         failed (an unwritable state dir, or a corrupt store the self-heal could not recreate) and \
-         the app under cage would open a palette with NO folder rows at all. Nothing below is \
-         about the feature until this is green.",
-        smoke_state.join(STATE_DB_NAME).display(),
-        target_canon.display()
+    assert_eq!(
+        seeded,
+        vec![launch_canon.clone(), target_canon.clone()],
+        "{SMOKE}: the seeded recent-directories store at {} must list the launch cwd, then the \
+         target. `RecentDirs::record` swallows every error, so an empty list means the seed \
+         silently failed, and the app under cage would open a palette with NO folder rows. The \
+         target first would let assertion 6 pass on the seed alone. Nothing below is about the \
+         feature until this is green.",
+        smoke_state.join(STATE_DB_NAME).display()
     );
 
     let readback = cwd.join(OPENRECENT_READBACK_NAME);
@@ -1997,6 +2008,7 @@ fn open_recent_palette_row_reroots_the_window_under_cage() {
     for path in [&readback, &out_png] {
         clear_evidence(path, SMOKE);
     }
+    let frozen = frozen_state_dir(&runtime_dir, "wolf_gnome_open_recent_state", SMOKE);
 
     let status = cage_command(OPENRECENT_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
@@ -2004,6 +2016,8 @@ fn open_recent_palette_row_reroots_the_window_under_cage() {
         .env("OPENRECENT_START_FILE", OPENRECENT_START_FILE)
         .env("OPENRECENT_QUERY", OPENRECENT_QUERY)
         .env("OPENRECENT_READBACK", &readback)
+        .env("OPENRECENT_STATE_SRC", &smoke_state)
+        .env("OPENRECENT_STATE_COPY", &frozen)
         .status()
         .expect("failed to spawn `cage` for the headless Open Recent smoke scenario");
 
@@ -2013,20 +2027,22 @@ fn open_recent_palette_row_reroots_the_window_under_cage() {
         "{SMOKE}: the cage Open Recent scenario exited unsuccessfully ({status}). Exit 11: the app \
          died before it was ready for input — a LAUNCH failure, and nothing below is about Open \
          Recent. Exit 14: the `getcwd()` readback never appeared, which means the palette never \
-         CLOSED and the Ex command was typed into its SearchEntry — a distinct cause from \"the \
-         wrong row ran\", which exits 0 and fails assertion 3 instead. Otherwise wtype or grim \
-         failed. Screenshot expected at {}.",
+         CLOSED and the Ex command was typed into its SearchEntry — a distinct cause from \"no \
+         window opened\", which exits 0 and fails assertion 3 instead. Exit 12 or 13: the quit \
+         hung or was not clean. Exit 16: the app left no wolf.sqlite in {}. Otherwise wtype or \
+         grim failed. Screenshot expected at {}.",
+        smoke_state.display(),
         out_png.display()
     );
 
     // --- Assertion 2 (precondition): grim produced an image -------------------
     assert_png_present(SMOKE, &out_png);
 
-    // Assertion 3 (discriminator): Neovim's own cwd, which no page text or OCR can produce.
+    // Assertion 3 (discriminator): the focused window's Neovim is in the target. No pixel says so.
     let got_cwd = read_trimmed(&readback, SMOKE);
     let got_canon = std::fs::canonicalize(&got_cwd).unwrap_or_else(|e| {
         panic!(
-            "{SMOKE}: the captive Neovim reported its working directory as {got_cwd:?}, which \
+            "{SMOKE}: the focused Neovim reported its working directory as {got_cwd:?}, which \
              could not be canonicalized: {e}. The scenario writes `getcwd()` verbatim, so a \
              non-existent path here means Neovim is sitting in a directory that has since gone — \
              not a comparison problem."
@@ -2035,16 +2051,12 @@ fn open_recent_palette_row_reroots_the_window_under_cage() {
     assert_eq!(
         got_canon,
         target_canon,
-        "{SMOKE}: after the Open Recent activation the captive Neovim's working directory is {}, \
-         not the seeded target {}. The LAUNCH cwd here means nothing reached Neovim at all: the \
-         palette row was never activated, or `shell::on_palette_activation` has no \
-         PaletteAction::OpenRecentFolder arm, or `chdir_to` sent nothing. Assertion 4 below is \
-         pixel-independent and says whether the ROW was activated, so read the two together — an \
-         activated row with an unchanged cwd points squarely at the shell's arm. A THIRD \
-         directory would mean the palette activated a different folder row than the one seeded, \
-         which the fast suite's \
-         `palette_rows_query_orzulu_selects_exactly_the_recent_folder_row` would also have caught. \
-         PNG kept at {}.",
+        "{SMOKE}: after the Open Recent activation the focused window's Neovim is in {}, not the \
+         target {}. The LAUNCH cwd means no window opened on the target, so the keys still reach \
+         the launch window: the row was never activated, or `shell::on_palette_activation`'s \
+         OpenRecentFolder arm does not reach `open_folder`. Assertion 4 says whether the ROW was \
+         activated, so read the two together. The scenario polls this readback, so it is not an \
+         early read. PNG kept at {}.",
         got_canon.display(),
         target_canon.display(),
         out_png.display()
@@ -2062,33 +2074,66 @@ fn open_recent_palette_row_reroots_the_window_under_cage() {
          is the only thing that sets WOLF_STATE_DIR). A NON-empty list holding a `new_buffer`-style \
          registry id means the palette activated a COMMAND row rather than the folder row, so the \
          query stopped being unique — the fast suite's \
-         `palette_rows_query_orzulu_selects_exactly_the_recent_folder_row` pins that. A key with \
-         the right prefix and a different path means a different recent directory was offered and \
-         chosen.",
+         `palette_rows_query_orzulu_selects_exactly_the_recent_folder_row` pins that.",
         smoke_state.join(STATE_DB_NAME).display()
     );
 
-    // Assertion 5 (discriminator): the front-end re-rooted. `ortango.md` is outside the launch cwd, and
-    // the guard asserts the `~/orzulu` title cannot satisfy it.
+    // Assertion 5 (discriminator): the new window's sidebar is rooted at the target. `ortango.md` is
+    // outside the launch cwd, and the guard asserts the `~/orzulu` title cannot satisfy it.
     let ocr_text = ocr_to_lowercase(&out_png);
     assert!(
         ocr_text.contains(OPENRECENT_OCR_PRESENT),
         "{SMOKE}: OCR did not contain {OPENRECENT_OCR_PRESENT:?} — the name of \
-         {OPENRECENT_TARGET_FILE}, which lives inside the target directory and can therefore only \
-         be drawn once the tree sidebar re-rooted there. With assertion 3 GREEN (Neovim did \
-         chdir), the likely causes in order: (a) the settle point did not run through to \
-         `tree_view::reroot`, so the sidebar kept its old root — this is the documented revert for \
-         this row, and it leaves assertion 3 green exactly as you see it. Note that a MISSING \
-         pending re-root is NOT among them: `workspace::reroot_decision` re-roots on Neovim's \
-         live working directory even with no pending request, which is why this row's revert \
-         deletes the `tree.reroot` call both producers share; (b) the re-root fired but the \
-         sidebar's fresh `FileSearch` had not streamed its \
-         entries by the time `grim` ran, which is a TIMING problem and is fixed by raising the \
-         scenario's two post-activation SETTLEs, never by weakening this assertion; (c) the row \
-         rendered and OCR misread it — check the retained PNG before touching anything. Note the \
-         launch cwd's own rows are expected to be GONE from the capture, since the sidebar \
-         re-roots rather than merging. PNG kept at {} for inspection. OCR output was:\n{ocr_text}",
+         {OPENRECENT_TARGET_FILE}, which lives inside the target directory and is drawn only by a \
+         sidebar rooted there. With assertion 3 GREEN (the focused window is on the target), the \
+         likely causes in order: (a) the new tab opened in the empty state, which hides the \
+         sidebar, so Open Folder planned it as an empty tab rather than a folder tab on the \
+         target; (b) the sidebar's `FileSearch` had not streamed its entries by the time `grim` \
+         ran, a TIMING problem fixed by raising the scenario's TREE_SETTLE, never by weakening \
+         this assertion; (c) the row rendered and OCR misread it — check the retained PNG before \
+         touching anything. PNG kept at {}. OCR output was:\n{ocr_text}",
         out_png.display()
+    );
+
+    // Assertion 6 (discriminator): Open Folder records the folder; the seed put the launch cwd first.
+    let folders = RecentDirs::open(&smoke_state).recent();
+    assert_eq!(
+        folders.first(),
+        Some(&target_canon),
+        "{SMOKE}: the folder MRU's first entry must be the target {} after Open Folder; it lists \
+         {folders:?}. The launch cwd first means nothing recorded the folder: the new tab's \
+         Neovim starts in it, and core never records a launch directory, so only \
+         `record_recent_dir` can.",
+        target_canon.display()
+    );
+
+    // Assertion 7 (discriminator): a second window, and the launch window's tab untouched.
+    let saved = frozen_window_state(&frozen, SMOKE, "the save at the quit");
+    let mut dirs: Vec<Vec<String>> = saved
+        .windows
+        .iter()
+        .map(|window| {
+            window
+                .tabs
+                .iter()
+                .map(|tab| tab.directory.clone())
+                .collect()
+        })
+        .collect();
+    dirs.sort();
+    let mut want: Vec<Vec<String>> = [&launch_canon, &target_canon]
+        .iter()
+        .map(|dir| vec![dir.to_string_lossy().into_owned()])
+        .collect();
+    want.sort();
+    assert_eq!(
+        dirs,
+        want,
+        "{SMOKE}: the save must hold the launch window, one tab on the launch cwd, and a window \
+         with one tab on the target. An empty directory for the target's tab means Open Folder \
+         opened it in the empty state; one window means the launch tab was replaced, which §6 \
+         forbids for a tab with a directory. Frozen copy: {}",
+        frozen.display()
     );
 
     // Assertion 0b, second part: last, so it covers the whole run, and in bytes, since `record` can
@@ -2308,16 +2353,16 @@ fn sidebar_toggle_chord_hides_the_file_tree_under_cage() {
 ///    `children_of(entries, "")`, auto-expanded once its first non-empty batch
 ///    arrives. Assertion 6 reads that row.
 /// 2. **The re-root on Neovim's OWN working directory.** A directory change typed
-///    into Neovim re-roots the sidebar with no front-end `chdir_to` and no
-///    `pending_reroot` record behind it: `workspace::reroot_decision`'s
-///    `pending == None, live != rooted` arm acts on Neovim's live working
-///    directory alone. Assertion 4 reads the re-rooted listing.
+///    into Neovim re-roots the sidebar with nothing on the front-end side asking for
+///    it: the settle point, `AppShell::settle_reroot` on a render wake, compares the
+///    selected tab's live cwd with the rooted one through
+///    `workspace::reroot_decision(live, rooted)` and re-roots on any difference.
+///    Assertion 4 reads the re-rooted listing.
 ///
-/// It is the only cage coverage of either.
-/// [`open_recent_palette_row_reroots_the_window_under_cage`] drives the OTHER
-/// producer — a front-end `chdir_to` — through the same settle point, so the two are
-/// complementary rather than overlapping: that smoke proves a PENDING re-root still
-/// settles, this one proves a re-root with NO pending request happens at all.
+/// It is the only cage coverage of either. No Open Folder route chdirs a tab's
+/// Neovim, so a typed `:cd` is the one route that moves a live tab's cwd under it;
+/// a window Open Folder opens has its tree rooted when it is built, which
+/// [`open_recent_from_a_folder_tab_opens_a_fresh_window_under_cage`] reads.
 ///
 /// ## Why the two rows are folded into one scenario (it is forced, not convenient)
 ///
@@ -2354,7 +2399,7 @@ fn sidebar_toggle_chord_hides_the_file_tree_under_cage() {
 /// | 1 | `status.success()` | precondition — the cage scenario ran to completion | none; do not invent one | n/a |
 /// | 2 | [`assert_png_present`] | precondition — grim produced an image | none; do not invent one | n/a |
 /// | 3 | the `getcwd()` readback canonicalizes to [`CD_ROOT_DIR`] | **precondition** — the typed `:cd` reached Neovim at all. It is NOT a discriminator: no front-end revert can break it, because nothing in `wolf-gnome` sits between `wtype` and Neovim's own `:cd`. | none; **do not invent one** | n/a |
-/// | 4 | OCR contains [`CD_OCR_ROOTED`] | **discriminator, the re-root row** | in `shell::settle_reroot`, add `if self.inner.pending_reroot.borrow().is_none() { return; }` at the top — restoring "only a front-end chdir re-roots". Assertion 3 stays green; the sidebar goes on listing `startdir`'s files and `cdtango` never reaches the page. | RED. `typed_cd_reroots_the_sidebar_under_cage: OCR did not contain "cdtango" — the name of cdtango.md, which exists ONLY inside the directory the `:cd` moved to and is therefore drawable only as a child row under a re-rooted, EXPANDED synthetic root.`, then `test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 37 filtered out; finished in 7.63s`. Assertion 3 was green, so the attribution held. NOT ISOLATED, as the section below predicts: the OCR dump read `v startdir` over the launch cwd's own files with `cdrootzulu` ALSO absent, i.e. cause (a) by the message's own discriminator — so assertion 6 was never evaluated under this revert. What makes the two rows independently falsifiable is the other direction, measured in row 6. |
+/// | 4 | OCR contains [`CD_OCR_ROOTED`] | **discriminator, the re-root row** | S5a: delete the `settle_reroot` call from `AppShell::on_render_wake`. Assertion 3 stays green; the sidebar goes on listing `startdir`'s files and `cdtango` never reaches the page. | Predicted: RED at assertion 4 with assertion 3 green. NOT ISOLATED, as the section below says: with no re-root the sidebar keeps the launch root label, so `cdrootzulu` is absent too and assertion 6 is never evaluated under this revert. What makes the two rows independently falsifiable is the other direction, measured in row 6. |
 /// | 5 | OCR does **not** contain [`CD_OCR_UNABBREVIATED`] | **precondition guard for assertion 6**, asserted BEFORE it deliberately: a title that failed to abbreviate draws the whole path, which contains both this term and [`CD_OCR_ROOT_NODE`], and would satisfy assertion 6 spuriously | none of ours; it fires only if `title::display_title` or `workspace::home_dir` regressed | n/a |
 /// | 6 | OCR contains [`CD_OCR_ROOT_NODE`] | **discriminator, the synthetic-root row** | in `tree_view`'s root-store rebuild, append `tree::children_of(&entries, "")` instead of the single `root_node(..)`. Assertion 4 stays GREEN — the children still render, just at top level — but no row bears the cwd basename. Isolated. | RED, and ISOLATED as claimed. `typed_cd_reroots_the_sidebar_under_cage: OCR did not contain "cdrootzulu" — the basename of the working directory, which the sidebar's SYNTHETIC ROOT ROW must draw.`, then `test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 37 filtered out; finished in 7.66s`. The panic is at assertion 6, so assertions 3, 4 and 5 were all green, and the captured OCR carries `cdtango.md` — the re-rooted listing rendered, at top level, with no row bearing the cwd basename. Restored, green. |
 ///

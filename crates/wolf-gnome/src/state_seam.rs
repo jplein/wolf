@@ -199,20 +199,7 @@ fn plan_for_window(
                 LaunchDecision::Folder { cwd } => (cwd, false),
                 LaunchDecision::EmptyState { nvim_cwd } => (nvim_cwd, true),
             };
-            let (sidebar_page, search) = restored_sidebar(&tab.content.sidebar);
-            let drawer_share = tab
-                .content
-                .drawer
-                .map_or_else(DrawerShare::new, |d| DrawerShare::restored(d.share));
-            TabPlan {
-                cwd,
-                empty,
-                sidebar_visible: tab.content.sidebar.visible,
-                saved: Some(tab.clone()),
-                sidebar_page,
-                search,
-                drawer_share,
-            }
+            saved_tab_plan(tab, cwd, empty)
         })
         .collect();
     let active_tab = if window.active_tab < tabs.len() {
@@ -236,18 +223,42 @@ fn fresh_plan(decision: LaunchDecision) -> RestorePlan {
         LaunchDecision::EmptyState { nvim_cwd } => (nvim_cwd, true),
     };
     RestorePlan {
-        tabs: vec![TabPlan {
-            cwd,
-            empty,
-            sidebar_visible: true,
-            saved: None,
-            sidebar_page: SidebarPage::Files,
-            search: SearchFields::default(),
-            drawer_share: DrawerShare::new(),
-        }],
+        tabs: vec![fresh_tab_plan(cwd, empty)],
         active_tab: 0,
         window_size: None,
         minimized: false,
+    }
+}
+
+/// The plan of a tab restored from `tab`, its Neovim starting in `cwd`: its saved
+/// sidebar preference, page, search fields and drawer share, and `tab` as its seed.
+pub(crate) fn saved_tab_plan(tab: &Tab, cwd: PathBuf, empty: bool) -> TabPlan {
+    let (sidebar_page, search) = restored_sidebar(&tab.content.sidebar);
+    let drawer_share = tab
+        .content
+        .drawer
+        .map_or_else(DrawerShare::new, |d| DrawerShare::restored(d.share));
+    TabPlan {
+        cwd,
+        empty,
+        sidebar_visible: tab.content.sidebar.visible,
+        saved: Some(tab.clone()),
+        sidebar_page,
+        search,
+        drawer_share,
+    }
+}
+
+/// The plan of a fresh tab with nothing saved, its Neovim starting in `cwd`.
+pub(crate) fn fresh_tab_plan(cwd: PathBuf, empty: bool) -> TabPlan {
+    TabPlan {
+        cwd,
+        empty,
+        sidebar_visible: true,
+        saved: None,
+        sidebar_page: SidebarPage::Files,
+        search: SearchFields::default(),
+        drawer_share: DrawerShare::new(),
     }
 }
 

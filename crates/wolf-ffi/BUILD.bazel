@@ -949,6 +949,15 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
+rust_test(
+    name = "open_folder",
+    srcs = ["tests/open_folder.rs"],
+    crate_root = "tests/open_folder.rs",
+    size = "small",
+    edition = "2021",
+    deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
+)
+
 # Headless (no nvim). wolf-core is a direct dep so the test can name FONT_LICENSE_NOTICES.
 rust_test(
     name = "font_license_notices",

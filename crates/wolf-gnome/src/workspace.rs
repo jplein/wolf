@@ -36,14 +36,12 @@
 //! [`reroot_decision`] is the TOTAL decision behind "where is the sidebar rooted,
 //! and does this settle move it". Its authority is `rooted` — the directory the
 //! sidebar is CURRENTLY rooted at — compared against `live`, the working directory
-//! nvim last reported. A front-end request ([`reroot_ready`]'s `pending`) decides only whether
-//! that request's flag may be discarded in the same settle; it never decides WHERE
-//! to root, so a stuck request (a failed `:tcd`, which core degrades to a warning)
-//! blocks nothing and a typed `:cd` moves the sidebar with no request at all.
+//! nvim last reported. No front-end request takes part: Open Folder never chdirs a
+//! tab, so the live cwd moves only by a typed `:cd`, a tab switch or a filled tab,
+//! and each settles the same way.
 //!
-//! One `chdir` is exactly ONE re-root: while nvim has not applied it `live ==
-//! rooted` and the answer is [`RerootAction::Stay`]; the settle that re-roots also
-//! updates `rooted`, after which the same inputs answer `Stay` forever.
+//! One directory change is exactly ONE re-root: the settle that re-roots also
+//! updates `rooted`, after which the same inputs answer [`RerootAction::Stay`].
 //!
 //! **No project predicate is applied to a re-root.** [`is_usable_project`] guards a
 //! launch-time GUESS about a directory the user did not choose; a typed `:cd /` is an
@@ -124,88 +122,38 @@ fn is_usable_project(path: &Path, home: Option<&Path>, is_dir: &impl Fn(&Path) -
     is_dir(path) && Some(path) != home && path != Path::new(FALLBACK_CWD)
 }
 
-/// Whether a pending re-root for `pending` is satisfied by the core's live cwd.
-///
-/// `false` unless BOTH are `Some` and equal. A front-end directory change — the
-/// Open Folder dialog or an Open Recent palette row — sets `pending` and then
-/// waits: `start_file_search` resolves its root from `live_cwd()`, which only
-/// updates once nvim reports `DirChanged`, so re-rooting the sidebar before this
-/// returns `true` would re-root it at the OLD cwd.
-#[must_use]
-pub fn reroot_ready(pending: Option<&Path>, live: Option<&Path>) -> bool {
-    // A plain `==`: `Path` equality compares components, so a trailing separator is ignored, but it
-    // resolves no `.`, `..` or symlinks, which is why callers canonicalize both sides.
-    match (pending, live) {
-        (Some(pending), Some(live)) => pending == live,
-        _ => false,
-    }
-}
-
 /// What one settle should do about the sidebar's root.
 ///
 /// Returned by [`reroot_decision`]. The lifetime is the LIVE cwd's: a
-/// [`RerootAction::Reroot`] always targets the directory nvim reported, never the
-/// one a front-end request asked for.
+/// [`RerootAction::Reroot`] always targets the directory nvim reported.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RerootAction<'a> {
     /// Do nothing at all: nvim has reported no directory, or the sidebar is
-    /// already rooted where nvim is and no request has been satisfied.
+    /// already rooted where nvim is.
     Stay,
-    /// The sidebar is already rooted where nvim is and a front-end request for
-    /// exactly that directory has been satisfied: discard the request, move
-    /// nothing. This is what makes one `chdir` exactly one re-root.
-    ClearPending,
-    /// Re-root the sidebar at `target`.
-    Reroot {
-        /// Where to root: always the LIVE cwd.
-        target: &'a Path,
-        /// Whether the front-end request may be discarded in the same settle.
-        clear_pending: bool,
-    },
+    /// Re-root the sidebar at `target`, the LIVE cwd.
+    Reroot { target: &'a Path },
 }
 
-/// Decides what one settle does about the sidebar's root, from the front-end's
-/// `pending` request, nvim's `live` working directory, and the directory the
-/// sidebar is currently `rooted` at.
+/// Decides what one settle does about the sidebar's root, from nvim's `live`
+/// working directory and the directory the sidebar is currently `rooted` at.
 ///
-/// Three exhaustive rules, in order:
+/// Two exhaustive rules, in order:
 ///
-/// 1. `live` is `None` — nvim has reported no directory, so there is nowhere to
-///    root: [`RerootAction::Stay`].
-/// 2. `live == rooted` — the sidebar is already where nvim is:
-///    [`RerootAction::ClearPending`] when [`reroot_ready`] holds, else
-///    [`RerootAction::Stay`]. This arm is the ANTI-DOUBLE-RE-ROOT rule.
-/// 3. otherwise (including `rooted == None`) — [`RerootAction::Reroot`] at `live`,
-///    clearing the request iff [`reroot_ready`] holds.
+/// 1. `live` is `None`, or `live == rooted` — nvim has reported no directory, or
+///    the sidebar is already where nvim is: [`RerootAction::Stay`]. The second
+///    half is the ANTI-DOUBLE-RE-ROOT rule.
+/// 2. otherwise (including `rooted == None`) — [`RerootAction::Reroot`] at `live`.
 ///
-/// All three paths canonicalize before calling, so the comparisons are plain
-/// `==`; see the module docs.
+/// Callers canonicalize before calling, so the comparison is a plain `==`; see
+/// the module docs.
 #[must_use]
-pub fn reroot_decision<'a>(
-    pending: Option<&Path>,
-    live: Option<&'a Path>,
-    rooted: Option<&Path>,
-) -> RerootAction<'a> {
-    // Rule 1: silence is not a move.
-    let Some(live) = live else {
-        return RerootAction::Stay;
-    };
-    // The front-end request decides only whether its flag may be discarded — never
-    // where to root.
-    let satisfied = reroot_ready(pending, Some(live));
-    if rooted == Some(live) {
-        // Rule 2.
-        if satisfied {
-            RerootAction::ClearPending
-        } else {
-            RerootAction::Stay
-        }
-    } else {
-        // Rule 3.
-        RerootAction::Reroot {
-            target: live,
-            clear_pending: satisfied,
-        }
+pub fn reroot_decision<'a>(live: Option<&'a Path>, rooted: Option<&Path>) -> RerootAction<'a> {
+    match live {
+        // Silence is not a move, and neither is the directory already rooted.
+        None => RerootAction::Stay,
+        Some(live) if rooted == Some(live) => RerootAction::Stay,
+        Some(live) => RerootAction::Reroot { target: live },
     }
 }
 
@@ -460,79 +408,8 @@ mod tests {
         }
     }
 
-    /// One `reroot_ready` table row.
-    struct RerootCase {
-        desc: &'static str,
-        pending: Option<&'static str>,
-        live: Option<&'static str>,
-        expected: bool,
-    }
-
-    #[test]
-    fn reroot_ready_table() {
-        let cases = [
-            // --- nothing to settle -------------------------------------------
-            RerootCase {
-                desc: "no pending re-root => not ready",
-                pending: None,
-                live: Some(PROJECT),
-                expected: false,
-            },
-            RerootCase {
-                desc: "core has no live cwd yet => not ready",
-                pending: Some(PROJECT),
-                live: None,
-                expected: false,
-            },
-            RerootCase {
-                desc: "neither side known => not ready",
-                pending: None,
-                live: None,
-                expected: false,
-            },
-            // --- the settle ---------------------------------------------------
-            RerootCase {
-                desc: "pending == live => ready",
-                pending: Some(PROJECT),
-                live: Some(PROJECT),
-                expected: true,
-            },
-            RerootCase {
-                // nvim has not applied the :tcd yet: still the OLD cwd.
-                desc: "live is still the OLD cwd => not ready",
-                pending: Some(PROJECT),
-                live: Some(HOME),
-                expected: false,
-            },
-            // --- what `Path` equality does and does not normalize -------------
-            RerootCase {
-                // `Path` equality compares components and a trailing separator adds none, so a plain `==`
-                // covers this; do not hand-roll a byte comparison.
-                desc: "a trailing separator is not a difference (Path compares components)",
-                pending: Some("/projects/wolf/"),
-                live: Some(PROJECT),
-                expected: true,
-            },
-            RerootCase {
-                // ...but `..` is NOT resolved by `Path` equality, which is exactly
-                // why the callers canonicalize before calling.
-                desc: "an unnormalized `..` IS a difference (callers must canonicalize)",
-                pending: Some("/projects/wolf/../wolf"),
-                live: Some(PROJECT),
-                expected: false,
-            },
-        ];
-
-        for case in &cases {
-            let pending = case.pending.map(Path::new);
-            let live = case.live.map(Path::new);
-            let got = reroot_ready(pending, live);
-            assert_eq!(got, case.expected, "case: {}", case.desc);
-        }
-    }
-
     // === reroot_decision ===
-    // Three distinct absolute directories, named for the role each plays in a settle.
+    // Two distinct absolute directories, named for the role each plays in a settle.
 
     /// Where the sidebar is already rooted in most rows.
     const DIR_A: &str = "/a";
@@ -540,15 +417,9 @@ mod tests {
     /// The directory nvim has moved to — the LIVE cwd in the re-rooting rows.
     const DIR_B: &str = "/b";
 
-    /// A THIRD directory, distinct from both, so one row can tell "re-root at the
-    /// LIVE cwd" apart from "re-root at the PENDING one" — a rule that re-rooted
-    /// at `pending` would send the sidebar somewhere nvim is not.
-    const DIR_C: &str = "/c";
-
     /// One `reroot_decision` table row.
     struct DecisionCase {
         desc: &'static str,
-        pending: Option<&'static str>,
         live: Option<&'static str>,
         rooted: Option<&'static str>,
         expected: RerootAction<'static>,
@@ -560,129 +431,64 @@ mod tests {
     /// failure identifies which:
     ///
     /// - A `Stay` where a `Reroot` was due means the sidebar never follows the
-    ///   working directory nvim reports, so a typed `:cd` leaves it on the old
-    ///   project — the behaviour this rule exists to replace.
-    /// - A `Reroot` where a `Stay` or `ClearPending` was due means the sidebar
-    ///   re-roots at a directory it is ALREADY rooted at, which drops the running
-    ///   traversal and restarts it on every settle.
+    ///   working directory nvim reports, so a typed `:cd`, a tab switch or a filled
+    ///   tab leaves it on the old project.
+    /// - A `Reroot` where a `Stay` was due means the sidebar re-roots at a directory
+    ///   it is ALREADY rooted at, which drops the running traversal and restarts it
+    ///   on every settle.
     ///
-    /// Reverts that must redden it: (i) making the `live != rooted` rule return
-    /// `Stay` when `pending.is_none()` fails rows 3 and 5; (ii) making the
-    /// `live == rooted` rule return `Reroot` unconditionally fails rows 4 and 7;
-    /// (iii) deleting the `ClearPending` arm fails row 9.
+    /// Reverts that must redden it: (i) answering `Stay` whenever `rooted` is `Some`
+    /// fails row 4; (ii) dropping the `live == rooted` arm fails row 3.
     #[test]
     fn reroot_decision_table() {
         let cases = [
-            // --- nvim has reported no directory: there is nowhere to root ------
             DecisionCase {
                 desc: "no live cwd and nothing rooted yet => nothing to do",
-                pending: None,
                 live: None,
                 rooted: None,
                 expected: RerootAction::Stay,
             },
             DecisionCase {
                 desc: "no live cwd leaves an already-rooted sidebar alone; silence is not a move",
-                pending: None,
                 live: None,
                 rooted: Some(DIR_A),
                 expected: RerootAction::Stay,
             },
-            // --- the live cwd differs from where the sidebar is rooted ---------
+            DecisionCase {
+                desc: "already rooted where nvim is => stay put",
+                live: Some(DIR_A),
+                rooted: Some(DIR_A),
+                expected: RerootAction::Stay,
+            },
+            DecisionCase {
+                desc: "the live cwd moved away from the root (a typed :cd, a switch, a filled \
+                       tab) => re-root at the live cwd",
+                live: Some(DIR_B),
+                rooted: Some(DIR_A),
+                expected: RerootAction::Reroot {
+                    target: Path::new(DIR_B),
+                },
+            },
             DecisionCase {
                 desc: "the first report with nothing rooted yet roots the sidebar",
-                pending: None,
                 live: Some(DIR_A),
                 rooted: None,
                 expected: RerootAction::Reroot {
                     target: Path::new(DIR_A),
-                    clear_pending: false,
                 },
-            },
-            DecisionCase {
-                desc: "already rooted where nvim is, with no pending request => stay put",
-                pending: None,
-                live: Some(DIR_A),
-                rooted: Some(DIR_A),
-                expected: RerootAction::Stay,
-            },
-            DecisionCase {
-                // THE TYPED `:cd`. No front-end request exists, so nothing but the
-                // live cwd can drive this.
-                desc: "a typed :cd moves the live cwd away from the root => re-root, nothing to \
-                       clear",
-                pending: None,
-                live: Some(DIR_B),
-                rooted: Some(DIR_A),
-                expected: RerootAction::Reroot {
-                    target: Path::new(DIR_B),
-                    clear_pending: false,
-                },
-            },
-            DecisionCase {
-                // The Open Folder / Open Recent path, settling: nvim has applied
-                // the request, so the SAME settle re-roots and clears the flag.
-                desc: "a settled front-end request re-roots ONCE and clears its pending flag",
-                pending: Some(DIR_B),
-                live: Some(DIR_B),
-                rooted: Some(DIR_A),
-                expected: RerootAction::Reroot {
-                    target: Path::new(DIR_B),
-                    clear_pending: true,
-                },
-            },
-            DecisionCase {
-                // Anti-premature re-root: the request is out but nvim is still in the old directory, where the
-                // sidebar already is; re-rooting now would re-root at the old cwd.
-                desc: "a pending request nvim has not applied yet => stay at the old root",
-                pending: Some(DIR_B),
-                live: Some(DIR_A),
-                rooted: Some(DIR_A),
-                expected: RerootAction::Stay,
-            },
-            DecisionCase {
-                // A stuck pending request must not decide where to root; the live cwd does. Rooting at
-                // `pending` would show /b while nvim sits in /c.
-                desc: "the target is the LIVE cwd, never the pending one, and the flag stays set",
-                pending: Some(DIR_B),
-                live: Some(DIR_C),
-                rooted: Some(DIR_A),
-                expected: RerootAction::Reroot {
-                    target: Path::new(DIR_C),
-                    clear_pending: false,
-                },
-            },
-            DecisionCase {
-                // The second settle after the row-6 re-root: `rooted` has caught up, so only the flag is
-                // discarded. This makes one chdir exactly one re-root.
-                desc: "a satisfied request against the directory already rooted just clears the \
-                       flag",
-                pending: Some(DIR_A),
-                live: Some(DIR_A),
-                rooted: Some(DIR_A),
-                expected: RerootAction::ClearPending,
-            },
-            DecisionCase {
-                desc: "a pending request with no live cwd at all cannot move anything",
-                pending: Some(DIR_B),
-                live: None,
-                rooted: Some(DIR_A),
-                expected: RerootAction::Stay,
             },
         ];
 
         for (index, case) in cases.iter().enumerate() {
-            let pending = case.pending.map(Path::new);
             let live = case.live.map(Path::new);
             let rooted = case.rooted.map(Path::new);
-            let got = reroot_decision(pending, live, rooted);
+            let got = reroot_decision(live, rooted);
             assert_eq!(
                 got,
                 case.expected,
-                "row {}: reroot_decision(pending = {:?}, live = {:?}, rooted = {:?}) must be \
-                 {:?} but was {:?} — {}",
+                "row {}: reroot_decision(live = {:?}, rooted = {:?}) must be {:?} but was {:?} \
+                 — {}",
                 index + 1,
-                case.pending,
                 case.live,
                 case.rooted,
                 case.expected,

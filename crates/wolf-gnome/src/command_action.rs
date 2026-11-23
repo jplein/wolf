@@ -55,7 +55,7 @@ pub enum UiAction {
     OpenFilePicker,
     /// Open a native `gtk::FileDialog` to open a single file.
     OpenFileDialog,
-    /// Open a native `gtk::FileDialog` to select a folder (re-roots the project).
+    /// Open a native `gtk::FileDialog` to select a folder, which Open Folder opens.
     OpenFolderDialog,
     /// Create a new untitled Markdown buffer in the focused pane.
     NewUntitledBuffer,
@@ -338,7 +338,7 @@ mod tests {
             want: Want::Exact(UiAction::OpenFileDialog),
         },
         Case {
-            desc: "7 OpenFolder: native folder dialog (re-roots the project)",
+            desc: "7 OpenFolder: native folder dialog (opens the folder)",
             command: Command::OpenFolder,
             want: Want::Exact(UiAction::OpenFolderDialog),
         },

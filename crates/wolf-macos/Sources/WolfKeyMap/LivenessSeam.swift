@@ -127,7 +127,7 @@ public enum LivenessSeam {
   /// The restore steps for a captured tab whose Neovim was launched at `launchCwd`.
   ///
   /// A restart respawns Neovim in its launch directory, so a tab whose cwd moved
-  /// since, such as a folder opened from the empty state, is re-rooted with
+  /// since, such as a typed `:cd` out of the empty state, is re-rooted with
   /// `.chdir` before its files open; a non-empty cwd equal to `launchCwd` needs
   /// none. The opens follow wolf-gnome's `reopen_order`: every file but the active
   /// one in captured order, then the active one, even when `files` lacks it, so

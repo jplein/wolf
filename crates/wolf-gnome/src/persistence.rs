@@ -153,7 +153,7 @@ impl StateHandle {
     ///
     /// Called when the shell moves this tab out of the empty state, so the persisted
     /// directory follows the empty state rather than being frozen at whatever launch
-    /// decided — opening a folder into an empty tab must start persisting that folder.
+    /// decided — a typed `:cd` out of an empty tab must start persisting that folder.
     pub fn set_empty(&self, empty: bool) {
         self.inner.empty.set(empty);
     }
@@ -216,6 +216,23 @@ impl StateHandle {
     #[must_use]
     pub fn launch_cwd(&self) -> &Path {
         &self.inner.launch_cwd
+    }
+
+    /// This tab's live directory, by [`state_seam::snapshot_cwd`]'s rule: `""` while
+    /// the tab is empty, else its Neovim's live cwd, the launch cwd until one is
+    /// reported. Ungated, unlike [`StateHandle::cached_tab`]'s directory, which a shut
+    /// gate can leave naming another directory.
+    #[must_use]
+    pub fn live_directory(&self) -> String {
+        let live = {
+            let core_ref = self.inner.core.borrow();
+            core_ref.as_ref().and_then(WolfCore::live_cwd)
+        };
+        state_seam::snapshot_cwd(
+            self.inner.empty.get(),
+            &self.inner.launch_cwd,
+            live.as_deref(),
+        )
     }
 
     /// This tab's contribution to its window's entry: the last [`Tab`] a gather

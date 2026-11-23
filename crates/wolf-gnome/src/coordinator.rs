@@ -63,12 +63,13 @@ use std::time::Duration;
 
 use adw::prelude::*;
 use gtk::gio;
-use wolf_core::app_state::WindowState;
+use wolf_core::app_state::{ProjectState, WindowState};
 use wolf_core::{AppStateStore, PaletteWindow, WolfConfig};
 
 use crate::actions;
 use crate::app;
 use crate::command_action::{ui_action_for, UiAction};
+use crate::open_folder::{self, Step};
 use crate::ready_seam::{self, Blocker, ReadyStep, WindowReadiness};
 use crate::stacking::StackingOrder;
 use crate::state_seam::{self, CloseCommit, RestorePlan};
@@ -399,6 +400,68 @@ impl Coordinator {
                 "wolf-gnome: the new window's tab failed to start its core; no window was opened"
             );
         }
+    }
+
+    /// Open Folder from window `from`, for every entry point: applies
+    /// `specs/application-state.md` §6 to `directory`, which is canonical.
+    ///
+    /// Here rather than in a window because it spans windows. [`open_folder::step`]
+    /// decides over every window's live tabs in stacking order: a focus selects the
+    /// tab §4's rule picks and presents its window; a fill replaces `from`'s empty
+    /// selected tab with one from `directory`'s project state; otherwise a new window
+    /// opens from it. The project state is read, and so marked used, only by the last
+    /// two. Then the core of the tab that ends on `directory` records it in the recent
+    /// directories, since that tab's Neovim starts there and core records no launch
+    /// directory.
+    pub fn open_folder(&self, app: &gtk::Application, from: WindowId, directory: PathBuf) {
+        let handles = self.handles();
+        let windows: Vec<_> = handles.iter().map(WindowHandle::live_window).collect();
+        let invoking = handles.iter().find(|handle| handle.id() == from);
+        let current_empty = invoking.is_some_and(WindowHandle::selected_is_empty);
+        let step = {
+            let stacking = self.inner.stacking.borrow();
+            open_folder::step(
+                &directory.to_string_lossy(),
+                &windows,
+                &stacking,
+                current_empty,
+            )
+        };
+        let landed = match step {
+            Step::Focus { window, tab } => handles
+                .iter()
+                .find(|handle| handle.id() == window)
+                .and_then(|handle| handle.focus_tab(tab)),
+            Step::FillCurrent => {
+                let plan = open_folder::plan(&directory, self.project_state(&directory).as_ref());
+                invoking.and_then(|handle| handle.fill_selected_tab(&plan))
+            }
+            Step::NewWindow => {
+                let plan = open_folder::plan(&directory, self.project_state(&directory).as_ref());
+                self.open_window(app, &plan, true)
+                    .and_then(|handle| handle.selected_core())
+            }
+        };
+        let Some(core) = landed else {
+            eprintln!(
+                "wolf-gnome: Open Folder opened nothing for {}: its tab's core did not start",
+                directory.display()
+            );
+            return;
+        };
+        // Last, so the borrow is held across no other call.
+        let core_ref = core.borrow();
+        if let Some(core) = core_ref.as_ref() {
+            core.record_recent_dir(&directory);
+        }
+    }
+
+    /// `directory`'s project state, which the store marks used; `None` without a store.
+    fn project_state(&self, directory: &Path) -> Option<ProjectState> {
+        self.inner
+            .store
+            .as_ref()
+            .and_then(|store| store.project_state(&directory.to_string_lossy()))
     }
 
     /// Builds one window for `plan` and registers it, presenting it when `present`

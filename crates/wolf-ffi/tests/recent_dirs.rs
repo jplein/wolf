@@ -15,6 +15,9 @@
 //! asserts it is omitted while B stays, then recreates A and asserts it is listed
 //! again after B: nothing records A in between, so its return proves the row was kept.
 //!
+//! Last, `WolfCoreHandle::record_recent_dir(path)`, the record Open Folder makes for a tab whose
+//! Neovim starts in the folder, puts the launch cwd, which no `chdir` recorded, at rank 0.
+//!
 //! This drives the RUST half against a REAL, hermetic Neovim — NO mocks, per the
 //! project testing policy. It is modeled on `tests/file_actions.rs` (chdir +
 //! poll-`cwd()`) and `tests/state.rs` (staging `WOLF_STATE_DIR` to a tempdir
@@ -228,7 +231,31 @@ fn recent_dirs_reports_chdir_targets_newest_first() {
          ({canonical_b:?}, idx {idx_b}); A first means it was re-recorded. Got {after_recreate:?}"
     );
 
-    // --- 7. Shutdown: clean teardown ---------------------------------------
+    // --- 7. record_recent_dir: Open Folder's record of the launch dir, which apply_cwd skips.
+    let canonical_launch = tmp_cwd
+        .path()
+        .canonicalize()
+        .expect("failed to canonicalize the launch cwd");
+    let before_record: Vec<PathBuf> = handle
+        .recent_dirs()
+        .iter()
+        .map(|p| canonicalize(p))
+        .collect();
+    assert!(
+        !before_record.contains(&canonical_launch),
+        "precondition: the launch cwd ({canonical_launch:?}) must be unrecorded before \
+         record_recent_dir, or its arrival on top proves nothing. Got {before_record:?}"
+    );
+    handle.record_recent_dir(tmp_cwd.path().to_string_lossy().into_owned());
+    let after_record = handle.recent_dirs();
+    assert_eq!(
+        after_record.first().map(|p| canonicalize(p)),
+        Some(canonical_launch.clone()),
+        "record_recent_dir must put the launch cwd ({canonical_launch:?}) at rank 0; B on top \
+         means the handle recorded nothing. Got {after_record:?}"
+    );
+
+    // --- 8. Shutdown: clean teardown ---------------------------------------
     handle.shutdown();
 
     std::env::remove_var("WOLF_STATE_DIR");

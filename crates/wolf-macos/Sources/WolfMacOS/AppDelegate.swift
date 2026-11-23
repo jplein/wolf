@@ -598,12 +598,109 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
       .map { (index: $0.tabId, cwd: $0.persistedCwd) }
   }
 
-  /// The first live controller whose PERSISTED cwd equals `path`, or `nil` when
-  /// no open window is rooted there — used by the palette's "Open Recent Folder"
-  /// action to raise an existing window instead of re-chdiring. Uses the per-tab
-  /// `persistedCwd`, which is `""` for an empty-state tab.
-  func controllerForCwd(_ path: String) -> WolfWindowController? {
-    controllers.first { $0.persistedCwd == path }
+  /// Open Folder, for every entry point: applies `specs/application-state.md` §6 to `path`,
+  /// from `current`, the key window's view, `nil` when no Wolf window is key.
+  ///
+  /// `OpenFolderSeam.step` decides over every live tab's directory. A focus raises the tab §4's
+  /// rule picks; a fill replaces the empty current tab with one from the folder's project state;
+  /// otherwise a new window opens from it. The landed tab's core records the folder in the
+  /// recent directories, since its Neovim starts there and core records no launch directory.
+  func openFolder(_ path: String, from current: WolfWindowController?) {
+    guard metrics != nil, config != nil else { return }
+    let directory = OpenFolderSeam.canonicalDirectory(path)
+    let windows = liveGroups().map { group in
+      OpenFolderSeam.LiveWindow(
+        tabs: group.members.map {
+          OpenFolderSeam.LiveTab(id: $0.tabId, directory: $0.persistedCwd)
+        },
+        selected: group.selected?.tabId)
+    }
+    let invoking = current.flatMap { view in
+      view.isTornDown ? nil : OpenFolderSeam.LiveTab(id: view.tabId, directory: view.persistedCwd)
+    }
+    let landed: WolfWindowController?
+    switch OpenFolderSeam.step(
+      directory: directory, current: invoking, windows: windows, stacking: stacking)
+    {
+    case .focus(let tab):
+      landed = controllers.first { $0.tabId == tab && !$0.isTornDown }
+      landed?.raise()
+    case .fill:
+      landed = current.flatMap { fill($0, from: directory) }
+    case .newWindow:
+      landed = openWindow(at: directory)
+    }
+    guard let landed else { return }
+    refreshTabFocus()
+    rebuildWindowMenu()
+    scheduleStateSnapshot()
+    landed.tabCore.handle.record_recent_dir(directory)
+  }
+
+  /// §6 step 2: opens a tab on `directory` from its project state at `empty`'s position in its
+  /// window, selects it, then closes `empty`. The stored frame applies only when `empty` was its
+  /// window's only tab. `nil`, with `empty` kept, when the core fails to start.
+  ///
+  /// A replacement rather than a chdir of the empty tab's Neovim: core's cwd moves only when
+  /// Neovim reports it, so a rebuild racing the chdir would start its shells in the old
+  /// directory, and a snapshot between the two would write the empty tab over the project state.
+  private func fill(_ empty: WolfWindowController, from directory: String)
+    -> WolfWindowController?
+  {
+    guard let emptyWindow = empty.nsWindow, let tabCore = startTabCore(launchCwd: directory)
+    else { return nil }
+    let windowTabs = emptyWindow.tabGroup?.windows.count ?? 1
+    let project = WindowStateCodec.loadProject(wolf_ffi_app_state_project_state(directory))
+    let controller = makeController(
+      tabId: mintTabId(), tabCore: tabCore, restoredTab: Self.restoredTab(project, at: directory),
+      anchorFrame: nil, hasFolder: true)
+    controller.build()
+    if let newWindow = controller.nsWindow {
+      emptyWindow.addTabbedWindow(newWindow, ordered: .above)
+      if let frame = OpenFolderSeam.fillFrame(
+        stored: project?.frame, windowTabs: windowTabs,
+        screenVisibleFrames: NSScreen.screens.map(\.visibleFrame))
+      {
+        newWindow.setFrame(frame, display: true)
+      }
+      newWindow.makeKeyAndOrderFront(nil)
+    }
+    controllers.append(controller)
+    // Deferred: the dialog calls in from the empty window's own sheet completion.
+    DispatchQueue.main.async { emptyWindow.close() }
+    return controller
+  }
+
+  /// §6 step 3: a new window holding one tab on `directory`, from its project state at the
+  /// stored frame when it intersects a screen, else a fresh tab at the default size. `nil` when
+  /// the core fails to start.
+  private func openWindow(at directory: String) -> WolfWindowController? {
+    guard let tabCore = startTabCore(launchCwd: directory) else { return nil }
+    let project = WindowStateCodec.loadProject(wolf_ffi_app_state_project_state(directory))
+    let frame = project?.frame.flatMap { stored in
+      StateSeam.restoredWindowFrame(
+        x: stored.origin.x, y: stored.origin.y, width: stored.size.width,
+        height: stored.size.height, screenVisibleFrames: NSScreen.screens.map(\.visibleFrame))
+    }
+    let controller = makeController(
+      tabId: mintTabId(), tabCore: tabCore, restoredTab: Self.restoredTab(project, at: directory),
+      anchorFrame: frame, hasFolder: true)
+    controller.build()
+    controllers.append(controller)
+    return controller
+  }
+
+  /// The restored tab a project state opens as, on `directory`; `nil` with no project state.
+  private static func restoredTab(
+    _ project: WindowStateCodec.LoadedProject?, at directory: String
+  ) -> RestoredTabState? {
+    guard let project else { return nil }
+    let saved = project.tab.saved
+    return RestoredTabState(
+      saved: RestoreSeam.SavedTab(
+        cwd: directory, sidebarVisible: saved.sidebarVisible, layout: saved.layout,
+        focused: saved.focused, sidebar: saved.sidebar, drawer: saved.drawer),
+      rebuild: project.tab.rebuild)
   }
 
   /// Raises the tab whose `tabId` equals `tabId` (the palette's "Switch to
@@ -665,40 +762,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   /// `orphanWindows` in. `SessionSeam.committedWindows` decides whether anything is
   /// committed at all: `nil` commits nothing.
   private func gatherTree() -> [WindowStateCodec.Window]? {
+    let gathered = liveGroups().map { group in
+      let frame =
+        group.selected?.normalFrame ?? group.members.lazy.compactMap(\.normalFrame).first
+        ?? group.selectedWindow.frame
+      return SessionSeam.LiveWindow(
+        frame: frame,
+        tabs: group.members.map { SessionSeam.LiveTab(id: $0.tabId, tab: $0.persistedTab()) },
+        selected: group.selected?.tabId)
+    }
+    return SessionSeam.committedWindows(
+      liveViews: controllers.filter { !$0.isTornDown }.count,
+      windows: SessionSeam.windowState(live: gathered, stacking: stacking, orphans: orphanWindows))
+  }
+
+  /// One live OS window: its views in tab order, its selected view and its selected window.
+  private struct LiveGroup {
+    let members: [WolfWindowController]
+    let selected: WolfWindowController?
+    let selectedWindow: NSWindow
+  }
+
+  /// The live views that are not torn down, grouped by their native tab group (a solo window is
+  /// its own group), each group's members in `tabGroup.windows` order.
+  private func liveGroups() -> [LiveGroup] {
     let live = controllers.filter { !$0.isTornDown }
-    var gathered: [SessionSeam.LiveWindow] = []
+    var groups: [LiveGroup] = []
     var seenGroups = Set<ObjectIdentifier>()
     for controller in live {
       guard let window = controller.nsWindow else { continue }
-
-      // The ordered windows of this controller's group (a solo window when
-      // it is not in a multi-window tab group).
       let groupWindows: [NSWindow]
       if let tabGroup = window.tabGroup {
-        let id = ObjectIdentifier(tabGroup)
-        if seenGroups.contains(id) { continue }
-        seenGroups.insert(id)
+        guard seenGroups.insert(ObjectIdentifier(tabGroup)).inserted else { continue }
         groupWindows = tabGroup.windows
       } else {
         groupWindows = [window]
       }
-
       let members = groupWindows.compactMap { tabWindow in live.first { $0.owns(tabWindow) } }
       let selectedWindow = window.tabGroup?.selectedWindow ?? window
-      let selected = members.first { $0.owns(selectedWindow) }
-      let frame =
-        selected?.normalFrame ?? members.lazy.compactMap(\.normalFrame).first
-        ?? selectedWindow.frame
-      gathered.append(
-        SessionSeam.LiveWindow(
-          frame: frame,
-          tabs: members.map { SessionSeam.LiveTab(id: $0.tabId, tab: $0.persistedTab()) },
-          selected: selected?.tabId))
+      groups.append(
+        LiveGroup(
+          members: members, selected: members.first { $0.owns(selectedWindow) },
+          selectedWindow: selectedWindow))
     }
-
-    return SessionSeam.committedWindows(
-      liveViews: live.count,
-      windows: SessionSeam.windowState(live: gathered, stacking: stacking, orphans: orphanWindows))
+    return groups
   }
 
   /// Submits `windows` to the window state (`WindowStateCodec.submit`).
@@ -766,15 +873,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     target?.historyJump(index: sender.tag)
   }
 
-  /// The dynamic Open Recent item action: changes the key window's Neovim
-  /// working directory to the recent dir at the item's `tag` (an index into the
-  /// `recentDirs` snapshot captured in `menuNeedsUpdate`). Out-of-range tags are
-  /// ignored.
+  /// The dynamic Open Recent item action: Open Folder (`openFolder(_:from:)`) on the recent dir
+  /// at the item's `tag` (an index into the `recentDirs` snapshot captured in
+  /// `menuNeedsUpdate`), from the key window's view. Out-of-range tags are ignored.
   @objc func openRecentMenuItem(_ sender: NSMenuItem) {
     guard sender.tag >= 0, sender.tag < recentDirs.count else { return }
-    let path = recentDirs[sender.tag]
-    let target = controllers.first { $0.owns(effectiveKeyWindow) } ?? controllers.first
-    target?.changeDirectory(path)
+    openFolder(recentDirs[sender.tag], from: controllers.first { $0.owns(effectiveKeyWindow) })
   }
 
   /// Notified by a controller when its live cwd changed (its Window-menu title

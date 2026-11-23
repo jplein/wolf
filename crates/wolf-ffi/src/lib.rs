@@ -635,6 +635,9 @@ mod ffi {
         fn cwd(&self) -> String;
         // `WolfCore::recent_dirs` as strings; empty once the core is gone.
         fn recent_dirs(&self) -> Vec<String>;
+        // `WolfCore::record_recent_dir`, Open Folder's record of the folder it opened. A no-op once
+        // the core is gone.
+        fn record_recent_dir(&self, path: String);
         // The `WolfTitlebar` group's background, which macOS prefers to `Normal`'s for the titlebar;
         // unset when the group is absent or cleared, or the core is gone.
         fn theme_titlebar_bg(&self) -> FfiColor;
@@ -1113,6 +1116,17 @@ mod ffi {
     }
 
     extern "Rust" {
+        type FfiProjectTab;
+
+        // Whether a tab is open on the directory; `window` and `tab` read 0 when false.
+        fn found(&self) -> bool;
+        // The window's index in the scratch, frontmost first.
+        fn window(&self) -> u32;
+        // The tab's index in that window, in tab-bar order.
+        fn tab(&self) -> u32;
+    }
+
+    extern "Rust" {
         // Clears the app-state scratch: the window state, its recency and the node stack.
         fn wolf_ffi_app_state_begin();
         // Pushes a window; x and y are dropped when `has_position` is false.
@@ -1166,6 +1180,9 @@ mod ffi {
         fn wolf_ffi_app_state_window_state() -> FfiAppState;
         // `directory`'s project state, for Open Folder, which marks it used.
         fn wolf_ffi_app_state_project_state(directory: String) -> FfiProjectState;
+        // The tab Open Folder focuses for `directory`, by `app_state::project_tab` over the
+        // scratch and its recency. Clears nothing and never opens the store.
+        fn wolf_ffi_app_state_project_tab(directory: String) -> FfiProjectTab;
     }
 
     extern "Rust" {
@@ -2049,6 +2066,47 @@ pub fn wolf_ffi_app_state_window_state() -> FfiAppState {
 pub fn wolf_ffi_app_state_project_state(directory: String) -> FfiProjectState {
     let state = shared_app_state().and_then(|store| store.project_state(&directory));
     FfiProjectState { directory, state }
+}
+
+/// The tab Open Folder focuses for `directory`: [`app::project_tab`] over the
+/// scratch's window state and recency, as fed by the builder minus the commit.
+///
+/// Reads the scratch only and never opens the store, so a caller outside the
+/// store's lifetime (a seam test) can ask it.
+#[must_use]
+pub fn wolf_ffi_app_state_project_tab(directory: String) -> FfiProjectTab {
+    let scratch = app_scratch();
+    FfiProjectTab {
+        found: app::project_tab(&scratch.state, &scratch.recency, &directory),
+    }
+}
+
+/// [`wolf_ffi_app_state_project_tab`]'s answer (opaque to Swift): a window index,
+/// frontmost first, and a tab index in that window, or nothing.
+pub struct FfiProjectTab {
+    found: Option<(usize, usize)>,
+}
+
+impl FfiProjectTab {
+    /// Whether a tab is open on the directory.
+    #[must_use]
+    pub fn found(&self) -> bool {
+        self.found.is_some()
+    }
+
+    /// The window's index, 0 when not found.
+    #[must_use]
+    pub fn window(&self) -> u32 {
+        self.found
+            .map_or(0, |(w, _)| u32::try_from(w).unwrap_or(u32::MAX))
+    }
+
+    /// The tab's index in that window, 0 when not found.
+    #[must_use]
+    pub fn tab(&self) -> u32 {
+        self.found
+            .map_or(0, |(_, t)| u32::try_from(t).unwrap_or(u32::MAX))
+    }
 }
 
 /// The saved window state (opaque to Swift), vending its windows.
@@ -2999,6 +3057,17 @@ impl WolfCoreHandle {
             .into_iter()
             .map(|p| p.to_string_lossy().into_owned())
             .collect()
+    }
+
+    /// [`WolfCore::record_recent_dir`] of `path`; a no-op once the core has been
+    /// shut down.
+    ///
+    /// Called by the macOS shell once per Open Folder, on the core of the tab that
+    /// ends on the folder.
+    pub fn record_recent_dir(&self, path: String) {
+        if let Some(core) = self.core.borrow().as_ref() {
+            core.record_recent_dir(std::path::Path::new(&path));
+        }
     }
 
     /// The `WolfTitlebar` theme group's background color, from

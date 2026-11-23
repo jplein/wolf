@@ -361,6 +361,13 @@ impl TabHandle {
         self.inner.state.launch_cwd().to_path_buf()
     }
 
+    /// This tab's live directory, `""` while it is empty; see
+    /// [`crate::persistence::StateHandle::live_directory`].
+    #[must_use]
+    pub fn live_directory(&self) -> String {
+        self.inner.state.live_directory()
+    }
+
     /// Re-gathers this tab's persisted state.
     pub fn refresh_tab(&self) {
         self.inner.state.refresh_tab();
@@ -476,8 +483,8 @@ impl TabsInner {
             .retain(|entry| &entry.inner.page != page);
     }
 
-    /// Opens one tab; see [`TabsHandle::open_tab`].
-    fn open_tab(self: &Rc<Self>, parts: TabParts) -> Option<TabHandle> {
+    /// Opens one tab at page `position`, appended when `None`; see [`TabsHandle::open_tab`].
+    fn open_tab(self: &Rc<Self>, parts: TabParts, position: Option<i32>) -> Option<TabHandle> {
         if self.closing.get() {
             eprintln!("wolf-gnome: new tab not opened: the window is closing");
             return None;
@@ -539,7 +546,10 @@ impl TabsInner {
 
         let id = TabId(self.next_id.get());
         self.next_id.set(id.0 + 1);
-        let page = self.view.append(&overlay);
+        let page = match position {
+            Some(position) => self.view.insert(&overlay, position),
+            None => self.view.append(&overlay),
+        };
         let entry = TabHandle {
             inner: Rc::new(TabInner {
                 id,
@@ -762,7 +772,20 @@ impl TabsHandle {
     /// The entry is registered BEFORE the page is selected, so the selection notify
     /// this triggers finds the tab it is about to switch to rather than nothing.
     pub fn open_tab(&self, parts: TabParts) -> Option<TabHandle> {
-        self.inner.open_tab(parts)
+        self.inner.open_tab(parts, None)
+    }
+
+    /// Replaces `old` with a tab opened from `parts` at `old`'s page position, SELECTED,
+    /// then closes `old` through the ordinary `close-page` path, which shuts its
+    /// Neovim down. `None`, with `old` untouched, when the new tab's core fails to start.
+    ///
+    /// The new tab opens FIRST: closing a window's last page closes the window.
+    /// No core borrow may be held across this call, since the close takes `old`'s
+    /// core out with a `borrow_mut`.
+    pub fn replace(&self, old: &TabHandle, parts: TabParts) -> Option<TabHandle> {
+        let opened = self.inner.open_tab(parts, Some(old.page_position()))?;
+        self.inner.view.close_page(old.page());
+        Some(opened)
     }
 
     /// Selects `tab`'s page, which fires the selection callback as a click would.

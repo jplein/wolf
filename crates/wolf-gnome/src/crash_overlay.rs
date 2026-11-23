@@ -70,9 +70,9 @@ pub struct CrashOverlay {
 /// reveals them via [`CrashOverlay::set_mode`] / [`CrashOverlay::flash_banner`].
 ///
 /// Both widgets are meant to be added with `gtk::Overlay::add_overlay` — the
-/// overlay child AFTER the empty state and the picker (a crashed core must cover
-/// both: the picker's Open and the empty state's Open Folder would each send into
-/// a dead nvim), and the banner LAST so it composites over everything.
+/// overlay child AFTER the empty state and the picker, so a crashed core covers
+/// both (the picker's Open would send into a dead nvim), and the banner LAST so it
+/// composites over everything.
 ///
 /// ## The overlay's internal layout is DERIVABLE, and that is the point
 ///

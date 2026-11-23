@@ -295,10 +295,9 @@ pub fn save_dialog_proposal(path: Option<&Path>, cwd: Option<&Path>) -> SaveProp
 
 /// What a path chosen in the save dialog becomes, or `None` when it may not be used.
 ///
-/// `None` for an empty path, a path with no file name, or a RELATIVE one —
-/// [`crate::shell::AppShell`]'s `chdir_to` records the reason: core would resolve a
-/// relative path against the PROCESS working directory rather than Neovim's, so the
-/// file would land somewhere the user did not choose. `gio::File::path()` is absolute
+/// `None` for an empty path, a path with no file name, or a RELATIVE one: core
+/// would resolve a relative path against the PROCESS working directory rather than
+/// Neovim's, so the file would land somewhere the user did not choose. `gio::File::path()` is absolute
 /// in practice; the rule is stated so a later change of source cannot smuggle one in.
 ///
 /// **The path is passed through VERBATIM — no extension is ever appended.** Proposing
@@ -1866,8 +1865,8 @@ mod tests {
     ///
     /// FALSIFYING EDIT 2 (behaviour 11) — drop the `is_absolute()` filter. The two
     /// relative rows are accepted, and `wolf_core::input` then resolves them against
-    /// the PROCESS working directory rather than Neovim's — `chdir_to`'s recorded
-    /// reason — so the file lands somewhere the user did not choose. MEASURED:
+    /// the PROCESS working directory rather than Neovim's, so the file lands somewhere
+    /// the user did not choose. MEASURED:
     /// `save_as_target("notes.md") must be refused, got Some(SaveAsRequest { path:
     /// "notes.md", force: true })`.
     ///
@@ -1989,9 +1988,8 @@ mod tests {
                 assert_eq!(
                     got, None,
                     "save_as_target({:?}) must be refused, got {got:?} — {}. A relative path is \
-                     resolved by core against the PROCESS working directory rather than Neovim's \
-                     (`chdir_to`'s recorded reason), so the file lands somewhere the user never \
-                     chose and the buffer is renamed to it. A path with no file name names a \
+                     resolved by core against the PROCESS working directory rather than Neovim's, \
+                     so the file lands somewhere the user never chose and the buffer is renamed to it. A path with no file name names a \
                      directory, and `saveas` against one fails in a way the input pump degrades to \
                      a warning nobody sees.",
                     case.chosen, case.desc

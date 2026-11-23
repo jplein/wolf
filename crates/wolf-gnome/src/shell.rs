@@ -81,11 +81,11 @@
 //!
 //! Two palette activations are NOT `Command`s, and [`AppShell::on_palette_activation`]
 //! is the one place each becomes a window action. An Open Recent row carries a
-//! directory and re-roots THIS window, through the same [`AppShell::chdir_to`] the
-//! native Open Folder dialog calls. A Switch to Window row carries another window's
-//! id and leaves this window alone: it goes to the coordinator, which presents that
-//! window. The pair is deliberate — one directory can be offered as both, and the
-//! two rows do opposite things with it.
+//! directory and opens it, through the same [`AppShell::open_folder`] the native
+//! Open Folder dialog calls. A Switch to Window row carries another window's id and
+//! goes to the coordinator, which presents that window as it stands. The pair is
+//! deliberate: for one directory offered as both, Open Recent focuses the tab
+//! `specs/application-state.md` §4's rule picks, which can be a background tab.
 //!
 //! ## Borrow discipline (load-bearing)
 //!
@@ -399,7 +399,7 @@ struct ShellInner {
     buffers: BufferPickerHandle,
     /// The sidebar's search panel, shown and focused by `win.search-in-project`.
     search: SearchPanelHandle,
-    /// The file-tree sidebar, re-rooted once a pending re-root settles.
+    /// The file-tree sidebar, re-rooted by [`AppShell::settle_reroot`].
     tree: TreeHandle,
     /// The sidebar container; hidden in the empty state.
     sidebar: SidebarHandle,
@@ -417,15 +417,6 @@ struct ShellInner {
     search_in_project: RefCell<Option<gio::SimpleAction>>,
     /// The `win.toggle-sidebar` action, stashed for the same reason.
     toggle_sidebar: RefCell<Option<gio::SimpleAction>>,
-    /// A directory the user chose — in the Open Folder dialog or as an Open Recent
-    /// palette row — awaiting nvim's `DirChanged`. Both producers set it through
-    /// [`AppShell::chdir_to`]; a later wake discards it via
-    /// [`workspace::reroot_decision`] once nvim reports that directory.
-    ///
-    /// It records that a request is OUTSTANDING and nothing more: it never decides
-    /// where the sidebar roots, so a `:tcd` nvim refused (core degrades that to a
-    /// `tracing::warn!`) blocks no later re-root.
-    pending_reroot: RefCell<Option<PathBuf>>,
     /// The directory the sidebar is CURRENTLY rooted at, canonical. The authority
     /// [`workspace::reroot_decision`] compares nvim's live cwd against.
     ///
@@ -554,7 +545,6 @@ pub fn build(parts: ShellParts<'_>) -> AppShell {
         go_to_file: RefCell::new(None),
         search_in_project: RefCell::new(None),
         toggle_sidebar: RefCell::new(None),
-        pending_reroot: RefCell::new(None),
         // Canonicalized so the comparison against the core's already-canonical
         // `live_cwd` means what it says; see the field's docs.
         rooted_cwd: RefCell::new(Some(
@@ -1786,7 +1776,7 @@ impl AppShell {
     }
 
     /// Reacts to the end of `tab`'s wake: commits the window's state, and for the
-    /// SELECTED tab settles a pending re-root, refreshes the title, the bars and the
+    /// SELECTED tab settles the sidebar's root, refreshes the title, the bars and the
     /// navigation buttons, then drains and dispatches that tab's queued commands.
     ///
     /// Runs LAST on each wake (after the pane view and the tree), because a drained
@@ -1883,20 +1873,16 @@ impl AppShell {
 
     /// Performs one palette-row activation: a registry command through the same
     /// [`UiAction`] funnel the drain uses, a recent folder through
-    /// [`AppShell::chdir_to`], or another window through the coordinator.
+    /// [`AppShell::open_folder`], or another window through the coordinator.
     ///
-    /// **This is the one place a recent folder becomes a window action.** It
-    /// re-roots THIS window — the window whose palette the row was picked in — and
-    /// it reaches it through `chdir_to` so an Open Recent activation is
-    /// indistinguishable from picking the same folder in the native Open Folder
-    /// dialog: one canonicalization, one [`InputEvent::Chdir`], one pending
-    /// re-root, one settle.
+    /// **This is the one place a recent folder becomes a window action.** It opens
+    /// the folder from THIS window — the window whose palette the row was picked in —
+    /// through `open_folder`, so an Open Recent activation is indistinguishable from
+    /// picking the same folder in the native Open Folder dialog.
     ///
     /// **And the one place a switch row becomes a raise.** It touches this window's
     /// project not at all; the coordinator presents the other window, best-effort
-    /// (see [`crate::coordinator::Coordinator::raise`]). Where a directory is
-    /// offered as both kinds of row, the two are opposites and the user picked
-    /// which one they meant.
+    /// (see [`crate::coordinator::Coordinator::raise`]).
     ///
     /// Exhaustive with no `_` arm, so a new [`PaletteAction`] variant is a compile
     /// error here. The `Unsupported` arm is unreachable while
@@ -1906,7 +1892,7 @@ impl AppShell {
     fn on_palette_activation(&self, action: PaletteAction) {
         match action {
             PaletteAction::Dispatch(command) => self.dispatch_command(command),
-            PaletteAction::OpenRecentFolder(path) => self.chdir_to(path),
+            PaletteAction::OpenRecentFolder(path) => self.open_folder(path),
             PaletteAction::SwitchWindow(index) => self.raise_window(index),
             PaletteAction::Unsupported(reason) => {
                 eprintln!("wolf-gnome: palette activation not performed: {reason}");
@@ -2227,13 +2213,8 @@ impl AppShell {
         coordinator.quit(&app);
     }
 
-    /// Opens a native folder chooser; on success `:tcd`s the selected tab's core there and records
-    /// the choice as a pending re-root.
-    ///
-    /// The sidebar is NOT re-rooted synchronously: `start_file_search` resolves its
-    /// root from `live_cwd()`, which only updates once nvim reports `DirChanged`,
-    /// so an immediate re-root would re-root at the OLD cwd. See
-    /// [`AppShell::settle_reroot`].
+    /// Opens a native folder chooser; on success opens the chosen folder through
+    /// [`AppShell::open_folder`].
     fn open_folder_dialog(&self) {
         let dialog = gtk::FileDialog::builder()
             .title(OPEN_FOLDER_DIALOG_TITLE)
@@ -2251,7 +2232,7 @@ impl AppShell {
                 // which is not a condition worth reporting.
                 if let Ok(file) = result {
                     if let Some(path) = file.path() {
-                        shell.chdir_to(path);
+                        shell.open_folder(path);
                     }
                 }
             },
@@ -2282,42 +2263,54 @@ impl AppShell {
         );
     }
 
-    /// Changes the selected tab's core's working directory to `path` and records the pending
-    /// re-root (canonicalized, because `reroot_ready` compares it against the
-    /// core's already-canonical `live_cwd`).
+    /// Open Folder from this window: canonicalizes `path`, falling back to it as
+    /// given, and hands it to [`crate::coordinator::Coordinator::open_folder`], which
+    /// spans windows. Reached from the native Open Folder dialog, the empty state's
+    /// button through it, and an Open Recent palette row.
     ///
-    /// Two producers reach this: the native Open Folder dialog and an Open Recent
-    /// palette row ([`AppShell::on_palette_activation`]). Both settle through
-    /// [`AppShell::settle_reroot`], which is what makes an Open Recent activation
-    /// indistinguishable from picking the same folder in the dialog.
-    ///
-    /// A failed `:tcd` leaves the pending re-root set until the next successful
-    /// chdir — `wolf_core::input` degrades a failed apply to a `tracing::warn!`, so
-    /// Neovim never reports `DirChanged`. That stranded flag blocks nothing:
-    /// [`workspace::reroot_decision`] roots at the LIVE cwd regardless of it, and
-    /// discards it the moment nvim ever reports that directory.
-    fn chdir_to(&self, path: PathBuf) {
+    /// Canonicalized here, against the process cwd, so it must be absolute:
+    /// [`crate::palette::open_recent_candidates`] refuses a relative path.
+    fn open_folder(&self, path: PathBuf) {
         let path = std::fs::canonicalize(&path).unwrap_or(path);
-        self.send_input(InputEvent::Chdir { path: path.clone() });
-        *self.inner.pending_reroot.borrow_mut() = Some(path);
+        let Some(app) = self.inner.window.application() else {
+            eprintln!("wolf-gnome: Open Folder not performed: the window has no application");
+            return;
+        };
+        let Some(coordinator) = coordinator::upgrade(&self.inner.coordinator) else {
+            eprintln!("wolf-gnome: Open Folder not performed: the coordinator is gone");
+            return;
+        };
+        coordinator.open_folder(&app, self.inner.window_id, path);
+    }
+
+    /// Shows the selected tab's recorded search fields in the window's panel, running
+    /// the search when [`state_seam::restore_runs_search`] says so: a launch's selected
+    /// tab and a tab Open Folder fills take their record as the panel's.
+    pub fn restore_selected_search(&self) {
+        let Some(tab) = self.inner.tabs.selected() else {
+            return;
+        };
+        let fields = tab.search_fields();
+        let run =
+            state_seam::restore_runs_search(tab.sidebar_page(), tab.is_empty(), &fields.query);
+        self.inner.search.restore(&fields, run);
     }
 
     /// Settles the sidebar's root against `live`, the selected tab's Neovim's working
-    /// directory: clears that tab's empty state and re-roots when they have diverged,
-    /// and discards a satisfied front-end request. Run on every wake of the selected
-    /// tab, BEFORE the command drain.
+    /// directory: clears that tab's empty state and re-roots when they have diverged.
+    /// Run on every wake of the selected tab, BEFORE the command drain.
     ///
-    /// An empty selected tab whose `live` is still its own launch cwd settles nothing,
-    /// whatever is pending: the sidebar may be rooted at another tab's folder, and
-    /// selecting the empty tab must not take it out of the empty state. A typed `:cd`
-    /// or a landed Open Folder moves its `live`, and then it settles as any tab does.
+    /// An empty selected tab whose `live` is still its own launch cwd settles nothing:
+    /// the sidebar may be rooted at another tab's folder, and selecting the empty tab
+    /// must not take it out of the empty state. A typed `:cd` moves its `live`, and
+    /// then it settles as any tab does.
     ///
-    /// **The ONE settle point**, shared by all three producers — the Open Folder
-    /// dialog, an Open Recent palette row, and a `:cd` typed into Neovim — which is
-    /// what stops them diverging in what the sidebar does afterwards. The whole
-    /// decision is the pure [`workspace::reroot_decision`]; this function only
-    /// performs it. The match is exhaustive with no catch-all arm, so a new
-    /// [`workspace::RerootAction`] variant is a compile error here.
+    /// **The ONE settle point** for every way the selected tab's directory changes —
+    /// a typed `:cd`, a tab switch, a tab Open Folder fills — which is what stops
+    /// them diverging in what the sidebar does afterwards. The whole decision is the
+    /// pure [`workspace::reroot_decision`]; this function only performs it. The match
+    /// is exhaustive with no catch-all arm, so a new [`workspace::RerootAction`]
+    /// variant is a compile error here.
     fn settle_reroot(&self, live: Option<&std::path::Path>) {
         let selected = self.inner.tabs.selected();
         if let Some(tab) = selected.as_ref().filter(|tab| tab.is_empty()) {
@@ -2327,24 +2320,14 @@ impl AppShell {
                 return;
             }
         }
-        // Both borrows are cloned out in their own statements: the arms below write
-        // back to `pending_reroot` and call `apply_selected_tab`, which touches widgets.
-        let pending = self.inner.pending_reroot.borrow().clone();
+        // Cloned out in its own statement: the arm below writes `rooted_cwd` back and calls
+        // `apply_selected_tab`, which touches widgets.
         let rooted = self.inner.rooted_cwd.borrow().clone();
-        match workspace::reroot_decision(pending.as_deref(), live, rooted.as_deref()) {
+        match workspace::reroot_decision(live, rooted.as_deref()) {
             workspace::RerootAction::Stay => {}
-            workspace::RerootAction::ClearPending => {
-                *self.inner.pending_reroot.borrow_mut() = None;
-            }
-            workspace::RerootAction::Reroot {
-                target,
-                clear_pending,
-            } => {
-                if clear_pending {
-                    *self.inner.pending_reroot.borrow_mut() = None;
-                }
+            workspace::RerootAction::Reroot { target } => {
                 // Updated in the SAME settle as the re-root, which is what makes the
-                // next settle answer `Stay` and one chdir exactly one re-root.
+                // next settle answer `Stay` and one directory change exactly one re-root.
                 *self.inner.rooted_cwd.borrow_mut() = Some(target.to_path_buf());
                 if let Some(tab) = selected.as_ref() {
                     tab.set_empty(false);

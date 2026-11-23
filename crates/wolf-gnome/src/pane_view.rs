@@ -1049,9 +1049,9 @@ impl PaneInner {
     ///
     ///    **This is a BLOCKING RPC**, one of those this crate issues
     ///    (`notes/wolf-gnome/crash-and-stall-recovery.md`). It is acceptable HERE
-    ///    because it happens on the LAUNCH path only — at most once per restored
-    ///    tab, on that tab's first wake with a window grid and against that tab's
-    ///    own Neovim, bounded by `state_seam::MAX_RESTORE_TABS` and
+    ///    because it runs at most once per restored tab, at launch or after Open
+    ///    Folder, on that tab's first wake with a window grid and against that tab's
+    ///    own Neovim, bounded at launch by `state_seam::MAX_RESTORE_TABS` and
     ///    `state_seam::MAX_RESTORE_NEOVIMS` — and never on the crash/restart path,
     ///    see `shell.rs`'s "never call a `block_on_rpc` on the restart path" rule. A
     ///    wedged nvim at launch marks the core `NotResponding`, and the crash

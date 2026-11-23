@@ -86,13 +86,14 @@ use crate::coordinator::{self, Coordinator, CoordinatorInner, WindowId};
 use crate::crash_overlay;
 use crate::frame_metrics;
 use crate::im_ui;
+use crate::open_folder;
 use crate::palette::{self, PaletteHandle};
 use crate::picker::{self, PickerHandle};
 use crate::ready_seam;
 use crate::search_panel::{self, SearchPanelHandle};
 use crate::shell::{self, AppShell, ShellParts, HISTORY_BACK_ACTION, HISTORY_FORWARD_ACTION};
 use crate::sidebar;
-use crate::state_seam::{self, RestorePlan};
+use crate::state_seam::{self, RestorePlan, TabPlan};
 use crate::tab_view::{self, CoreCell, TabHandle, TabParts, TabsHandle, TabsParts};
 use crate::tabs_ui::TabId;
 use crate::terminal::input as terminal_input;
@@ -366,6 +367,74 @@ impl WindowHandle {
             .unwrap_or_default()
     }
 
+    /// This window as Open Folder's step reads it: its tabs in page order, each with
+    /// its live directory ([`TabHandle::live_directory`]), the selected tab and the
+    /// tab recency.
+    #[must_use]
+    pub fn live_window(&self) -> open_folder::LiveWindow {
+        let mut entries: Vec<(i32, TabHandle)> = self
+            .inner
+            .tabs
+            .entries()
+            .into_iter()
+            .map(|tab| (tab.page_position(), tab))
+            .collect();
+        entries.sort_by_key(|(position, _)| *position);
+        open_folder::LiveWindow {
+            id: self.inner.id,
+            tabs: entries
+                .iter()
+                .map(|(_, tab)| (tab.id(), tab.live_directory()))
+                .collect(),
+            selected: self.inner.tabs.selected().map(|tab| tab.id()),
+            recency: self.inner.tabs.recency(),
+        }
+    }
+
+    /// Whether this window's selected tab is empty: the tab Open Folder fills.
+    #[must_use]
+    pub fn selected_is_empty(&self) -> bool {
+        self.inner.tabs.selected().is_some_and(|tab| tab.is_empty())
+    }
+
+    /// The selected tab's core, or `None` before the first page exists.
+    #[must_use]
+    pub fn selected_core(&self) -> Option<CoreCell> {
+        self.inner.tabs.selected_core()
+    }
+
+    /// Open Folder's focus: selects `tab` and presents this window, best-effort on
+    /// Wayland ([`WindowHandle::present`]). Answers the tab's core, `None` when no
+    /// tab of this window is `tab`.
+    pub fn focus_tab(&self, tab: TabId) -> Option<CoreCell> {
+        let entry = self
+            .inner
+            .tabs
+            .entries()
+            .into_iter()
+            .find(|entry| entry.id() == tab)?;
+        self.inner.tabs.select(&entry);
+        self.present();
+        Some(entry.core().clone())
+    }
+
+    /// Open Folder's fill: replaces the selected tab with the one tab `plan` plans, at
+    /// its page position ([`TabsHandle::replace`]), then gives the window the plan's
+    /// size when the replaced tab was its only one ([`open_folder::fill_size`]), and the
+    /// search panel the new tab's recorded fields. Answers the new tab's core, `None`,
+    /// with the window untouched, when it fails to start.
+    pub fn fill_selected_tab(&self, plan: &RestorePlan) -> Option<CoreCell> {
+        let old = self.inner.tabs.selected()?;
+        let tab = plan.tabs.first()?;
+        let window_tabs = self.inner.tabs.len();
+        let filled = self.inner.tabs.replace(&old, tab_parts(tab))?;
+        if let Some((width, height)) = open_folder::fill_size(plan, window_tabs) {
+            self.inner.window.set_default_size(width, height);
+        }
+        self.inner.shell.restore_selected_search();
+        Some(filled.core().clone())
+    }
+
     /// This window's reading for the test-only readiness predicate
     /// ([`crate::ready_seam::launch_readiness`]).
     ///
@@ -424,17 +493,7 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     let opened: Vec<Option<TabHandle>> = plan
         .tabs
         .iter()
-        .map(|tab| {
-            tabs.open_tab(TabParts {
-                cwd: tab.cwd.clone(),
-                empty: tab.empty,
-                sidebar_shown: tab.sidebar_visible,
-                saved: tab.saved.clone(),
-                sidebar_page: tab.sidebar_page,
-                search: tab.search.clone(),
-                drawer_share: tab.drawer_share,
-            })
-        })
+        .map(|tab| tabs.open_tab(tab_parts(tab)))
         .collect();
     let Some(first) = tabs.entries().first().cloned() else {
         eprintln!(
@@ -583,9 +642,7 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     shell.apply_selected_tab();
     // The panel is per window, so it takes the selected tab's record; a background tab's gives way
     // to it once that tab is selected.
-    let fields = selected.search_fields();
-    let run = state_seam::restore_runs_search(selected.sidebar_page(), empty, &fields.query);
-    search.restore(&fields, run);
+    shell.restore_selected_search();
 
     // Explicit activation, not `action-name`, which renders insensitive while its action is absent.
     // No smoke clicks these: crates/wolf-gnome/tests/README.md#deliberate-test-gaps
@@ -694,6 +751,19 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     }
 
     Some(handle)
+}
+
+/// What [`TabsHandle::open_tab`] needs to open the tab `tab` plans.
+fn tab_parts(tab: &TabPlan) -> TabParts {
+    TabParts {
+        cwd: tab.cwd.clone(),
+        empty: tab.empty,
+        sidebar_shown: tab.sidebar_visible,
+        saved: tab.saved.clone(),
+        sidebar_page: tab.sidebar_page,
+        search: tab.search.clone(),
+        drawer_share: tab.drawer_share,
+    }
 }
 
 /// Whether `window`'s display's default seat exposes a keyboard device — the
