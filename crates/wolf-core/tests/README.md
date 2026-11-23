@@ -543,6 +543,18 @@ Headless: builds `RecentDirs::open(<tempdir>)` directly against real SQLite, so 
 - Ordering comes from a monotonic `seq` column rather than a timestamp, so no case needs a sleep between records.
 - The cap case re-opens a second store on the same dir to prove rows were deleted, not merely capped by the read query's `LIMIT`.
 
+#### `recent_dirs_launch.rs`
+
+Real Neovim: needs `WOLF_NVIM_BIN`, the staged nvim runfiles, and `tags = ["no-sandbox"]`.
+
+**Covers**
+
+- `WolfCore::record_recent_dir`, Open Folder's record: a core launched in `A` leaves `A` unrecorded, and recording `A/sub/..` puts canonical `A` on top, through `recent_dirs()` and a fresh `RecentDirs::open(state_dir)`.
+
+**Gotchas**
+
+- A binary of its own: it sets the process-global `WOLF_STATE_DIR` before the core starts, so it must not share one with `recent_dirs_records.rs`.
+
 #### `recent_dirs_records.rs`
 
 Real Neovim: needs `WOLF_NVIM_BIN`, the staged nvim runfiles, and `tags = ["no-sandbox"]`.

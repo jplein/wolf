@@ -163,6 +163,12 @@ It also covers `terminalRestore(splits:drawerOpen:live:)`: live splits once, asc
 
 **Gotchas** — the cases list the liveness states by hand, so a new `NvimLiveness` case must be added here deliberately. The overlay painting ahead of the automatic respawn is not observable headlessly, and is manual-smoke; [`TabCoreTests`](../WolfMacOSTests/README.md#tabcoretestsswift) drives the rest of `TabCore.onWake` and the respawn's reopen against a real Neovim.
 
+#### `OpenFolderSeamTests.swift`
+
+**Covers** — `OpenFolderSeam.step`: a tab on the directory focused by id, in a background tab of a back window and with no current tab; of two windows whose selected tab is on it, the frontmost by stacking; of two background tabs on it, the more recent. With none on it, an empty current tab fills, and a current tab with a directory, or no current tab, opens a new window. `canonicalDirectory` resolving a symlink, keeping `/private/tmp`, and returning a missing path as given. `fillFrame` applying an on-screen stored frame to a lone tab only.
+
+**Gotchas** — the live windows are passed out of stacking order, and tab ids never equal a tab index, so only the stacking puts the answer right and an index answer names no tab. The lookup runs through wolf-ffi's builder scratch, never the store, so the file needs no `StateDirFence`.
+
 #### `OtherPaneSeamTests.swift`
 
 **Covers** — `OtherPaneSeam.target(active:prefer:tree:width:height:)` over hand-built `PaneTree`s: a single leaf splits on both sides, the preferred-side geometric neighbor wins when it resolves, a missing neighbor falls back to the DFS-adjacent leaf with wrap (edge panes wrap; a vertical stack with no lateral neighbor still finds the other pane), a 2×2 grid resolves the cross-axis-overlap neighbor rather than the diagonal, and a non-leaf active pane — the drawer case, a fresh `PaneId` — yields `nil`.

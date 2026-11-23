@@ -289,6 +289,12 @@ Real-nvim coverage of multi-core identity and wake routing, running two cores at
 - Deliberately one `#[test]`: it installs the process-global wake callback and sets `WOLF_STATE_DIR`, so new cases belong inside that test rather than beside it.
 - Baselines are captured after a settle pause, so a late startup redraw wake is not mistaken for a misrouted one.
 
+#### `open_folder.rs`
+
+**Covers** — `wolf_ffi_app_state_project_tab`, the tab Open Folder focuses, fed through the builder with no commit and read through `FfiProjectTab`: a window whose active tab is in the directory wins over an earlier one holding it in a background tab, and with no active tab in it the pushed recency picks the later of two background tabs. `""` and an unseen directory are not found, and no `wolf.sqlite` appears in `WOLF_STATE_DIR`. Headless — target `//crates/wolf-ffi:open_folder` stages no nvim.
+
+**Gotchas** — one `#[test]` only: the builder's scratch is process-wide, so two tests in one binary would race it.
+
 #### `other_pane.rs`
 
 **Covers**
@@ -359,7 +365,7 @@ Also `preview_buffer(win, bufnr)` — markdown binds and returns the source bufn
 
 #### `recent_dirs.rs`
 
-**Covers** — `WolfCoreHandle::recent_dirs()`, the global folder MRU read back newest-first after driving `:cd`; a deleted folder omitted while the other stays, then listed again in its old place once recreated, which proves the store kept its row. Real nvim; target `//crates/wolf-ffi:recent_dirs` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`).
+**Covers** — `WolfCoreHandle::recent_dirs()`, the global folder MRU read back newest-first after driving `:cd`; a deleted folder omitted while the other stays, then listed again in its old place once recreated, which proves the store kept its row. Last, `record_recent_dir` puts the launch cwd, which no `:cd` recorded, at rank 0. Real nvim; target `//crates/wolf-ffi:recent_dirs` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`).
 
 **Gotchas** — deliberately a single `#[test]`: it sets the process-global `WOLF_STATE_DIR` before start, and the store opens `wolf.sqlite` once at core start, so new cases belong inside that test. The MRU is global, so the test asserts membership and order rather than length. nvim's launch cwd is not in it: `apply_cwd` skips the flagged initial emit.
 

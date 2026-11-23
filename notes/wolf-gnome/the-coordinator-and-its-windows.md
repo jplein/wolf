@@ -36,4 +36,18 @@ Minimized windows are presented at once, and nothing waits on one. The stacking 
 
 Under `cage` the last-mapped window is the one keys reach, and the readiness probe's input window. A window planned minimized gets `minimize()` before `present()`, which GTK 4 documents as minimizing it right after it maps; whether mutter activates such a window first, unmarking it, is unmeasured.
 
-Two tabs on one file share the durable swap directory, and that is left alone deliberately. The swap directory outlives the process on purpose — that is what makes swap recovery work — so scoping it per core would break a shipped feature. `shortmess+=A` keeps a live owner's swap quiet instead ([One Neovim per tab](../../specs/application-state.md#8-one-neovim-per-tab)). Windows are not deduped by working directory for the same reason restore is not grouped.
+Two tabs on one file share the durable swap directory, and that is left alone deliberately. The swap directory outlives the process on purpose — that is what makes swap recovery work — so scoping it per core would break a shipped feature. `shortmess+=A` keeps a live owner's swap quiet instead ([One Neovim per tab](../../specs/application-state.md#8-one-neovim-per-tab)). Restore, New Window and New Tab never dedupe by working directory, for the same reason restore is not grouped. Open Folder alone focuses a tab already open on the folder rather than opening a second, as [§6](../../specs/application-state.md#6-opening-a-folder) asks.
+
+## Opening a folder
+
+Open Folder lives up here because it spans windows: a tab in any window can be the one it focuses. The dialog, the empty state's button through it, and an Open Recent palette row all reach `AppShell::open_folder`, which canonicalizes the path and hands it to `Coordinator::open_folder`. That gathers every window's live tabs and asks [`open_folder.rs`](../../crates/wolf-gnome/src/README.md#open_folderrs) for the step.
+
+A focus selects the tab §4's rule picks in its `adw::TabView` and presents its window, best-effort as above, and reads no project state. A fill and a new window read the folder's project state, which marks it used; a new window opens through the same `open_window` a restored one does.
+
+**A fill replaces the empty tab; it never chdirs its Neovim.** Core's tracked cwd moves only when Neovim reports `DirChanged`, and the drawer's shell and a terminal leaf whose saved directory is gone start in that cwd, so a rebuild racing a `:tcd` would start them in the old directory. A gather between the chdir and the rebuild would also write a one-pane tab over the folder's project state.
+
+So `TabsHandle::replace` opens a tab planned from the folder, its Neovim starting there, at the empty tab's page position, and only then closes the empty one through the ordinary close path, since closing a window's last page closes the window. When the new tab's core fails to start, the empty tab stays and nothing else happens.
+
+A fill gives the window the stored size only when the empty tab was its only tab. It also gives the search panel the new tab's recorded fields, as a launch does, or the next `record_selected_sidebar` would overwrite the restored query with the panel's.
+
+Every Open Folder, a focus included, records the folder through `WolfCore::record_recent_dir` on the core of the tab that ends on it. That tab's Neovim starts in the folder, and core records no launch directory.

@@ -25,7 +25,8 @@ Purpose: The application coordinator: launch setup, the live `WolfWindowControll
 - `windowMinimizedChanged(_:minimized:)` — marks or unmarks the controller's whole tab group there.
 - `scheduleStateSnapshot()` / `snapshotNow()` — throttled versus immediate whole-tree commit to the window state ([write model](../../../../notes/wolf-macos-decisions.md#state-is-a-tree-and-the-front-end-owns-every-write)).
 - `closeCommit(for:)` — a closing view's commit, through [`SessionSeam.CloseBurst`](../WolfKeyMap/Persistence/README.md#sessionseamswift), after capturing its tab group.
-- `otherWindows(excluding:)`, `controllerForCwd(_:)`, `raiseWindow(tabId:)` — the palette's candidates and raise target.
+- `otherWindows(excluding:)`, `raiseWindow(tabId:)` — Switch to Window's rows and raise.
+- `openFolder(_:from:)` — [Open Folder](../../../../notes/wolf-macos-decisions.md#opening-a-folder) from every entry point.
 - `appAppearance(for:)` — a mode's forced `NSApp.appearance`; `nil` under `auto`.
 
 **Decisions**
@@ -33,7 +34,7 @@ Purpose: The application coordinator: launch setup, the live `WolfWindowControll
 - Launch order is fonts, config, metrics: measuring needs the config's font settings, and the bundled families must reach CoreText first.
 - `appearanceObservation` must stay stored: a deallocated `NSKeyValueObservation` invalidates itself, ending auto-mode appearance tracking.
 - Tab focus and the stacking order follow main ([why](../../../../notes/wolf-macos-decisions.md#one-neovim-per-tab)). Its loss rides `didResignActive`, where `NSApp.isActive` reads `false`.
-- The About panel's credits are Linux's attribution preamble, then the `wolf_ffi_*_license_notices()` verbatim, coloured `labelColor`: uncoloured, they render black in dark mode.
+- The About panel's credits are coloured `labelColor`: uncoloured, they render black in dark mode.
 
 **Gotchas**
 
@@ -133,7 +134,7 @@ Purpose: Maps a decoded `CommandKind` to its native AppKit action. Both the menu
 
 #### `CommandPaletteView.swift`
 
-Purpose: The floating command palette — a search field plus a results list backed by an `FfiCommandPalette` session, hosted in a picker panel. `CommandPaletteRow` carries the label plus the payload for one of three actions: dispatch a static command, raise a window, or open-or-raise a recent folder.
+Purpose: The floating command palette — a search field plus a results list backed by an `FfiCommandPalette` session, hosted in a picker panel. `CommandPaletteRow` carries the label plus the payload for one of three actions: dispatch a static command, raise a window, or Open Folder on a recent folder.
 
 **Public API**
 
@@ -200,11 +201,11 @@ Purpose: The window's `contentViewController` — an `NSSplitViewController` wit
 
 #### `EmptyStateView.swift`
 
-Purpose: The "no folder open" overlay — a full-bleed subview of `PaneContainerView` holding one centered "Open folder…" button. `WolfWindowController` toggles it with `isHidden` and hides it once a folder opens.
+Purpose: The "no folder open" overlay — a full-bleed subview of `PaneContainerView` holding one centered "Open folder…" button. `WolfWindowController` toggles it with `isHidden` and hides it on a typed `:cd`; Open Folder replaces the whole tab instead.
 
 **Public API**
 
-- `onOpenFolder: (() -> Void)?` — invoked by the button; the controller wires it to the same Open Folder path as the menu command.
+- `onOpenFolder: (() -> Void)?` — invoked by the button; the controller wires it to the same Open Folder dialog as the menu command.
 
 **Decisions**
 

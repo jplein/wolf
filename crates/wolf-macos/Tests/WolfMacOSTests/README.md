@@ -215,6 +215,12 @@ A split, a close and the shell exiting each unzoom, and so does Toggle Terminal,
 - The share is read as the drawer pane's top against the container's midline, since the drawer's own rect is private.
 - It writes `LiveCore`'s `WOLF_STATE_DIR`, as [`SessionRestoreTests.swift`](#sessionrestoretestsswift) does. The tab-switch and window-close captures, a preview's saved scroll and the sidebar's change writes are manual-smoke, since AppKit routes no event offscreen and no page loads.
 
+#### `OpenFolderRestoreTests.swift`
+
+**Covers** — Open Folder's read of a project state over a live core: a directory's tab, a vertical split of two files, submitted and flushed, then a submit without it, loads back through `WindowStateCodec.loadProject(wolf_ffi_app_state_project_state(_:))` with its window's frame, and its `rebuild` through `requestLayoutRebuild` shows both files in order. A directory with no project state loads `nil`.
+
+**Gotchas** — the second submit is what makes the read the stored project state rather than the window state. It writes `LiveCore`'s `WOLF_STATE_DIR`, as [`SessionRestoreTests.swift`](#sessionrestoretestsswift) does. The AppKit steps of Open Folder, its focus, fill and new window, are manual-smoke.
+
 #### `TerminalDrawerTests.swift`
 
 **Covers** — `toggle_terminal()` showing a terminal view in the drawer strip on the drawer window's session, painting a truecolour background the shell prints, hiding with the session kept, and showing the same session again on the next toggle.

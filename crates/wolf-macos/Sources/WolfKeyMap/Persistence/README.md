@@ -1,10 +1,26 @@
 # wolf-macos/Sources/WolfKeyMap/Persistence
 
-The pure decisions behind the window state of [application-state.md](../../../../../specs/application-state.md): what each live view writes to it, in what order, how a pane layout encodes, and how windows, tabs and layouts come back from it on launch. The directory compiles into the [`WolfKeyMap`](../README.md) module, not a module of its own.
+The pure decisions behind the window state of [application-state.md](../../../../../specs/application-state.md): what each live view writes to it, in what order, how a pane layout encodes, and how windows, tabs and layouts come back from it on launch and on Open Folder. The directory compiles into the [`WolfKeyMap`](../README.md) module, not a module of its own.
 
 Coverage lives in [`Tests/WolfKeyMapTests/`](../../../Tests/WolfKeyMapTests/README.md).
 
 ## Files
+
+#### `OpenFolderSeam.swift`
+
+Purpose: The pure decision behind Open Folder ([§6](../../../../../specs/application-state.md#6-opening-a-folder)): which step a directory takes, its canonical form, and the frame a fill applies. The AppKit glue is `AppDelegate.openFolder(_:from:)` ([why](../../../../../notes/wolf-macos-decisions.md#opening-a-folder)).
+
+**Public API**
+
+- `step(directory:current:windows:stacking:) -> Step` — `.focus(tab:)` names the tab id §4's rule picks, through `WindowStateCodec.projectTab`; else `.fill` when `current`'s directory is `""`, else `.newWindow`. `current` is `nil` when no Wolf window is key. A `LiveTab`'s directory is `""` for an empty tab.
+- `canonicalDirectory(_:)` — `realpath(3)`, falling back to the path as given.
+- `fillFrame(stored:windowTabs:screenVisibleFrames:) -> CGRect?` — `stored`, validated by `StateSeam.restoredWindowFrame`, only when the filled tab is its window's only tab; `nil` keeps the window's frame.
+
+**Decisions**
+
+- The windows are put in `stacking.order` and each takes its selected tab as active, else its most recent one, so the focused tab is §4's and not the first in list order.
+- `step` reads live directories, never a tab's cached contribution, which can name another directory.
+- `canonicalDirectory` never uses Foundation's `resolvingSymlinksInPath`, which maps `/private/tmp` to `/tmp`, while core's `apply_cwd` canonicalizes to `/private/tmp`: tab directories and project-state keys are core's form.
 
 #### `PaneLayoutCodec.swift`
 
@@ -91,12 +107,14 @@ Purpose: The pure decision seams for the macOS state path — tracking a window'
 
 #### `WindowStateCodec.swift`
 
-Purpose: Converts between the front-end's persistence types and the `wolf_ffi_app_state_*` surface, in the shape [application-state.md](../../../../../specs/application-state.md) §2 defines.
+Purpose: Converts between the front-end's persistence types and the `wolf_ffi_app_state_*` surface, in [§2](../../../../../specs/application-state.md#2-the-state-model)'s shape.
 
 **Public API**
 
-- `submit(_:)` — writes `Window`s in list order, frontmost first, each with its normal frame, `activeTab`, `minimized` and `recency`, the tab indices most recently selected first that §4's project-state rule reads. The store writes the window state and the project states in one transaction. It does not flush.
-- `load(_:) -> [LoadedWindow]` — frontmost first, a window with no tabs dropped. A `frame` is `nil` when the saved one has no position. Each `LoadedTab` carries `saved`, the tab as saved, which a view caches, and `rebuild`, the layout, bridge tab, focus and drawer after `FfiAppTab.restored()`, `nil` with no root.
+- `submit(_:)` — writes `Window`s frontmost first, each `recency` most recently selected first, which §4's project-state rule reads. One transaction writes the window state and the project states, unflushed.
+- `load(_:) -> [LoadedWindow]` — frontmost first, a window with no tabs dropped, a `frame` `nil` without a position. Each `LoadedTab` carries `saved`, as saved, which a view caches, and `rebuild`, the tab after `FfiAppTab.restored()`, `nil` with no root.
+- `projectTab(_:windows:)` — the tab §4's rule picks for Open Folder, `nil` when none is open. It feeds the builder without committing.
+- `loadProject(_:)` — a directory's project state, read as `load` reads a window, else `nil`.
 
 **Decisions**
 

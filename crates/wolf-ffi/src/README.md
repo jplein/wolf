@@ -151,6 +151,7 @@ Core's tabpage API, for a front-end whose tabs are tabpages of one Neovim. A mac
 - `current_file(&self) -> String` — `""` for an unnamed buffer.
 - `new_buffer(&self)` — An empty markdown-typed buffer named the next free `Untitled N.md`, not written to disk.
 - `recent_dirs(&self) -> Vec<String>` — [`WolfCore::recent_dirs`](../../wolf-core/src/README.md#apirs) as strings, empty once the core is gone. Drives File > Open Recent.
+- `record_recent_dir(&self, path: String)` — [`WolfCore::record_recent_dir`](../../wolf-core/src/README.md#apirs), Open Folder's record of the folder it opened, on the core of the tab that lands there. A no-op once the core is gone.
 - `wolf_ffi_ancestors_to_reveal(rel_path: String) -> Vec<String>` — A free function, no session needed: the ancestor directories the sidebar expands before revealing a file.
 
 ### Commands and the command palette
@@ -269,6 +270,7 @@ The builder, submit and readers over core's [`AppStateStore`](../../wolf-core/sr
 - `wolf_ffi_app_state_commit()` — Submits the state with its recency; an unchanged tree writes nothing. `wolf_ffi_app_state_flush() -> bool` blocks until the pending write has been attempted, bounded by an internal timeout, and is true when it was in time or no store exists.
 - `wolf_ffi_app_state_window_state() -> FfiAppState` — The launch read. Empty with no store, nothing saved, or a table from a newer build.
 - `wolf_ffi_app_state_project_state(directory) -> FfiProjectState` — The Open Folder read, which marks the row used. `found` is false when there is none, and `tab().directory()` is the directory asked for.
+- `wolf_ffi_app_state_project_tab(directory) -> FfiProjectTab` — The tab Open Folder focuses, by `app_state::project_tab` over the scratch as the builder fed it, without a commit. It clears nothing and never opens the store, so a seam test can ask it outside the store's lifetime. `FfiProjectTab::found()` is false when no tab is open on `directory`; `window()`, frontmost first, and `tab()`, in tab-bar order, then read 0.
 - `FfiAppState::windows`, `FfiAppWindow`, `FfiAppTab`, `FfiAppNode` — Accessors over core's model. A field that was not saved or does not apply reads 0, `""`, `false`, `UNSET` or `NONE`, with a `has_…` accessor wherever 0 is also a real value. A missing root and an out-of-range `child` read as an empty edit pane. `FfiAppWindow::minimized` is the saved flag.
 - `FfiAppTab::restored() -> FfiAppTab` — The tab as [`app_state::restored_tab`](../../wolf-core/src/README.md#app_staters) restores it, with the same directory: a missing file becomes an empty pane in place, and a zoom on it is dropped. The front-end reads its saved tab as is and rebuilds this one.
 
@@ -316,7 +318,7 @@ These `u8` values are the ABI: Swift decodes raw integers, so the numbers are co
 | 4     | `MINIMIZE_WINDOW`       | Minimize the focused window.                                                                    |
 | 5     | `GO_TO_FILE`            | Open the file-picker overlay.                                                                   |
 | 6     | `OPEN_FILE`             | Native open-file dialog.                                                                        |
-| 7     | `OPEN_FOLDER`           | Native dialog to change the working directory.                                                  |
+| 7     | `OPEN_FOLDER`           | Native dialog to open a folder.                                                                 |
 | 8     | `CLOSE_PANE`            | Close the current split, not the buffer.                                                        |
 | 9     | `NEW_BUFFER`            | New empty buffer in the current window.                                                         |
 | 10    | `RESET_FONT_SIZE`       | Back to the configured default size.                                                            |

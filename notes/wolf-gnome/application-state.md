@@ -32,7 +32,7 @@ That is affordable because two coalescers already sit beneath it: the store is a
 
 The window's one sidebar, its toggle group and the `win.` actions the empty state disables follow the selected tab, re-applied on every real selection change. A toggle changes the selected tab's preference alone, and New Tab inherits the selected tab's preference, empty state, directory and drawer share. The sidebar's root stays per window and follows the selected tab through the one settle point.
 
-An empty selected tab whose live cwd is still its own canonical launch cwd neither re-roots nor leaves the empty state, whatever is pending, or selecting it beside a folder tab would un-empty it. A typed `:cd` or a landed Open Folder moves its cwd and un-empties that tab alone.
+An empty selected tab whose live cwd is still its own canonical launch cwd neither re-roots nor leaves the empty state, or selecting it beside a folder tab would un-empty it. A typed `:cd` moves its cwd and un-empties that tab alone; Open Folder replaces the empty tab with a folder tab instead ([why](the-coordinator-and-its-windows.md#opening-a-folder)).
 
 **The stacking order is kept from events, because Wayland lets a client query neither which window is in front nor which is minimized.** The coordinator's `stacking::StackingOrder` moves a window to the front when its `is-active` turns true. GTK 4 never sets `GDK_TOPLEVEL_STATE_MINIMIZED` on Wayland, and `xdg_toplevel`'s `suspended` state also means occluded or on another workspace (GTK merge request 6013), so only Wolf's own Minimize marks a window minimized, and any focus unmarks it. A window not yet ranked, such as a New Window before it gains focus, ranks after every ranked window of its class, in registry order.
 
@@ -48,7 +48,7 @@ A folder tab also writes [§2](../../specs/application-state.md#tab)'s extras: i
 
 **The sidebar's page and the search panel's fields are recorded per tab, while the widgets stay per window.** The selected tab's record follows the widgets: the shell records it before every gather of the window and into the tab a switch leaves, and New Tab records the window's live page and fields, so nothing on screen changes. A switch shows the selected tab's recorded page and leaves the panel's query, toggles and rows alone, since the panel is per window ([Window structure](window-structure.md)).
 
-At launch the panel takes the selected tab's record, and runs its search only on the Search page, in a tab with a project, for a query that is not blank. An empty tab's search would be rooted at its Neovim's home directory. A background tab's saved query and toggles therefore give way to the panel's once that tab is selected, which is the price of one panel per window.
+At launch, and when Open Folder fills a tab, the panel takes the selected tab's record, and runs its search only on the Search page, in a tab with a project, for a query that is not blank. An empty tab's search would be rooted at its Neovim's home directory. A background tab's saved query and toggles therefore give way to the panel's once that tab is selected, which is the price of one panel per window.
 
 ## Capture moments
 

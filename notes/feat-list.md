@@ -110,13 +110,13 @@ On both platforms project search is a sidebar panel switched with the file tree,
 
 Both front-ends surface the per-pane navigation history as two toolbar buttons and as menu items — `⌘[` / `⌘]` on macOS, `Alt+Left` / `Alt+Right` on Linux. The one difference left is the jump list: the macOS History menu also lists the active pane's recently visited files, where the GTK menu carries Back and Forward alone, for the reason recorded in [Present limitations](wolf-gnome/present-limitations.md).
 
-The GTK command palette lists the registry commands `wolf-gnome` performs, one Open Recent row per usable recent directory, and one Switch to Window row per other open window. An Open Recent row re-roots the invoking window through the same path the Open Folder dialog takes; a Switch to Window row leaves that window alone and raises the other one, so a single directory can honestly appear as both. Raising is best-effort on Wayland: a client cannot raise itself, and the headless compositor the smokes run under declines it.
+The GTK command palette lists the registry commands `wolf-gnome` performs, one Open Recent row per usable recent directory, and one Switch to Window row per other open window. An Open Recent row is Open Folder, as the dialog is, and can focus a background tab of another window; a Switch to Window row raises the other window as it stands, so a single directory can honestly appear as both. Raising is best-effort on Wayland: a client cannot raise itself, and the headless compositor the smokes run under declines it.
 
 On Linux all three dialogs are native. Save and Save As are front-end-only action rows carrying no registry command, so they reach the user from the primary menu and — Save alone — `Ctrl+Shift+S`, and not from the command palette, whose rows come from the registry.
 
 On macOS the native dialogs are Open File and Open Folder: there is no save panel, no Save or Save As menu item, and ⌘S reaches Neovim as an unmapped `<D-s>`, so saving is `:w` typed inside Neovim. Adding `Command::Save` and `Command::SaveAs` is a cross-platform change: the Swift `CommandKind` port and `CommandDispatcher`'s `default`-free switch would both need arms, and macOS has no save UI to point them at.
 
-The GTK sidebar re-roots from one settle point, on the working directory Neovim reports, so a `:cd` typed into Neovim moves it exactly as the Open Folder dialog and an Open Recent row do, and none of the three can move it twice.
+The GTK sidebar re-roots from one settle point, on the working directory Neovim reports, so a `:cd` typed into Neovim, a tab switch and a tab Open Folder fills move it alike, and none can move it twice.
 
 ## Windows, tabs, commands
 

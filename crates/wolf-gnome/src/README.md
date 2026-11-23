@@ -194,7 +194,7 @@ Purpose: the process-scoped layer above the windows, and their ordered registry.
 **Public API**
 
 - `build() -> Coordinator`, then `install_app_actions(app)` and `restore_session(app)`.
-- `open_new_window(app)`, `commit(waking)`, `on_window_closing(id)`, `quit(app)`, `raise(id)`, `palette_windows(exclude)`, `register(handle)`, `window_count()`, `on_window_focused(id)`, `on_window_minimized(id)`.
+- `open_new_window(app)`, `open_folder(app, from, directory)`, `commit(waking)`, `on_window_closing(id)`, `quit(app)`, `raise(id)`, `palette_windows(exclude)`, `register(handle)`, `window_count()`, `on_window_focused(id)`, `on_window_minimized(id)`.
 - `next_free_id(next, live) -> WindowId`, and `upgrade(&weak)` for window-side closures.
 - `ready_pending()`, `next_paint_ordinal()`, `check_ready()` — the readiness probe.
 
@@ -204,7 +204,7 @@ Purpose: the process-scoped layer above the windows, and their ordered registry.
 - `install_app_actions` runs before the first window exists, so the menu and the chord controller resolve `app.quit` from the first frame. Each window's [`shell.rs`](#shellrs) registers their accelerators, idempotently, so the menu draws the chord.
 - Quit and New Window funnel through here from a drained command, a palette row or a chord. A window that has lost its application or its coordinator opens nothing, and quits by closing itself.
 - `quit` captures every window's panes before any Neovim exits, and closes every window the _application_ holds: a transient toplevel such as About would keep the process alive. A close captures only on `KeepSubtree` ([why](../../../notes/wolf-gnome/application-state.md#capture-moments)).
-- `next_free_id` is free because the registry cannot reach the wrap it guards; a reused id deregisters and raises the wrong window.
+- `next_free_id` is free because the registry cannot reach the wrap it guards; a reused id targets the wrong window.
 - The readiness probe judges nothing until `restore_session` has opened every launch window, so no window is judged alone.
 - `restore_session` maps the windows backmost first, each after the one behind it ([why](../../../notes/wolf-gnome/the-coordinator-and-its-windows.md)).
 
@@ -511,6 +511,23 @@ Purpose: the pure, GTK-free rulebook for per-pane navigation — which window a 
 
 - The buttons desensitize while the `gio` actions stay enabled — the opposite of `win.go-to-file`'s empty-state treatment, for the reason in [The accelerator namespace](../../../notes/wolf-gnome/the-accelerator-namespace.md).
 
+#### `open_folder.rs`
+
+Purpose: the pure, GTK-free seam of Open Folder ([§6](../../../specs/application-state.md#6-opening-a-folder)): which step a directory takes, the plan of the tab it fills or opens, and the size a fill applies. [`coordinator.rs`](#coordinatorrs)'s `open_folder` gathers the windows and acts ([why there](../../../notes/wolf-gnome/the-coordinator-and-its-windows.md#opening-a-folder)).
+
+**Public API**
+
+- `step(directory, windows, stacking, current_empty) -> Step` — `Focus { window, tab }` for the tab §4's rule picks, else `FillCurrent` when the invoking tab is empty, else `NewWindow`. `directory` is already canonical; a `LiveWindow`'s tabs are in page order, `""` for an empty one.
+- `plan(directory, project) -> RestorePlan` — one tab on `directory`, from `project`'s saved tab and stored size, or a fresh tab with no size.
+- `fill_size(plan, window_tabs)` — the plan's size only when the filled tab is its window's only one.
+
+**Decisions**
+
+- `step` puts the windows in stacking order and hands them, directory-only, to `wolf_core::app_state::project_tab`, so the focus is §4's and not list order.
+- Its directories are live (`TabHandle::live_directory`), never a tab's cached contribution, which a shut gate can leave naming another directory.
+- A planned tab is a folder tab whatever `launch_decision` would say of `directory`: opening a folder is an explicit act, as a typed `:cd /` is.
+- `plan` shares `state_seam`'s per-tab plan helpers with the launch restore, so the two cannot drift.
+
 #### `other_pane_seam.rs`
 
 Purpose: the pure, GTK-free rule for which pane Preview or Edit in Another Pane binds into: an existing pane of the pane tree, or a split core makes for the bind. [`pane_view.rs`](#pane_viewrs) resolves the answer to a Neovim window, and [`shell.rs`](#shellrs) passes it to core.
@@ -558,8 +575,8 @@ Purpose: the command-palette overlay — registry commands, one Open Recent row 
 
 **Decisions**
 
-- One directory can yield both a Switch to Window row and an Open Recent row: the first raises that window, the second re-roots this one.
-- `open_recent_candidates` refuses three directories: the selected tab's own, where re-rooting changes nothing; a relative path, which `chdir_to` would canonicalize against the process cwd rather than Neovim's; and one `is_dir` rejects, since a failed `:tcd` is only a `tracing::warn!` in core. What the store keeps is [`WolfCore::recent_dirs`](../../wolf-core/src/README.md#apirs)'s concern; the seam rechecks because it takes any slice.
+- One directory can yield a Switch to Window row and an Open Recent row: one raises that window as it stands, the other is Open Folder, which can focus a background tab.
+- `open_recent_candidates` refuses three directories: the selected tab's own, which Open Folder would focus as it is; a relative path, which `AppShell::open_folder` canonicalizes against the process cwd, not Neovim's; and one `is_dir` rejects, where no Neovim starts. What the store keeps is [`WolfCore::recent_dirs`](../../wolf-core/src/README.md#apirs)'s concern; the seam rechecks because it takes any slice.
 - The window list is a closure taken fresh at each open over each window's cached entry, so the open touches no other core and adds no RPC.
 - The label is `PaletteRow::display` unchanged: [`title.rs`](#titlers)'s home abbreviation would rank one string and show another, and a query matching the visible `~` would return nothing.
 - Ranking runs unbounded and `max` applies after the classification filter, since `rank_palette` truncates first and undispatched rows would otherwise eat the budget.
@@ -639,7 +656,7 @@ Purpose: the glue that gathers one tab's contribution to the saved window state,
 **Public API**
 
 - `build(parts) -> StateHandle` — a value constructor that installs no closures and gathers nothing of its own; `StateParts::saved` is held for the seed, not for the rebuild.
-- `set_empty(empty)`, `set_sidebar_shown(shown)`, `record_sidebar(page, search)`, `is_empty()`, `sidebar_shown()`, `sidebar_page()`, `search_fields()`, `launch_cwd()`, `refresh_tab()`, `cached_tab() -> Option<Tab>`.
+- `set_empty(empty)`, `set_sidebar_shown(shown)`, `record_sidebar(page, search)`, `is_empty()`, `sidebar_shown()`, `sidebar_page()`, `search_fields()`, `launch_cwd()`, `live_directory()`, `refresh_tab()`, `cached_tab() -> Option<Tab>`.
 
 **Decisions**
 
@@ -862,18 +879,18 @@ Purpose: the glue for the action namespace — `gio` actions, the primary menu, 
 
 - `build_menu_model()`, `build_empty_state()`, `build(parts) -> AppShell`; `ShellParts` carries a `Weak` coordinator and [`TitlebarStyle`](#titlebar_backgroundrs).
 - `install_actions(app)` — the `win.` rows, before `present()`, so the menu resolves them.
-- `apply_selected_tab()`, `record_selected_sidebar()`, `on_tab_wake(tab)`, `on_liveness_wake(tab) -> bool`, `on_render_wake(tab)`.
+- `apply_selected_tab()`, `record_selected_sidebar()`, `on_tab_wake(tab)`, `on_liveness_wake(tab) -> bool`, `on_render_wake(tab)`, `restore_selected_search()`.
 
 **Decisions**
 
 - The chord controller matches keys itself: GTK's keymap-aware matching does not fire under the smokes' keystroke injector. Accelerators are registered only for the menu's labels, `app.` rows included ([`coordinator.rs`](#coordinatorrs)).
 - The controller lives on the window, ahead of any overlay's, and needs no open-overlay guard: no overlay key is a bound chord.
-- One settle point moves the sidebar's root, over [`workspace.rs`](#workspacers)'s `reroot_decision`, so `chdir_to` and a typed `:cd` cannot diverge.
+- One settle point, over [`workspace.rs`](#workspacers)'s `reroot_decision`, moves the sidebar's root for a typed `:cd`, a switch and a filled tab alike.
 - Each Markdown-preview press reads one `preview_shape` pass, since two would describe no window that existed, and is a blocking RPC gated by [`preview_ui.rs`](#preview_uirs).
 - Save and Save As read one `save_shape` pass each for the same reason and issue no blocking call; the dialog carries out [`save_ui.rs`](#save_uirs)'s proposal.
 - `sidebar.set_visible` has one caller, over [`state_seam.rs`](#state_seamrs)'s `sidebar_is_shown`, or a tab switch would undo a user toggle. The search chord and a [toggle click](#sidebar_togglesrs) reveal it through that preference.
 - A switch first records the sidebar into, and captures, the tab it leaves ([why](../../../notes/wolf-gnome/application-state.md#the-extras)).
-- Actions resolve the selected tab's core per use, and commands drain from it alone; [Window structure](../../../notes/wolf-gnome/window-structure.md) owns the boundary.
+- Actions resolve the selected tab's core per use, and commands drain from it alone ([why](../../../notes/wolf-gnome/window-structure.md)).
 
 #### `sidebar.rs`
 
@@ -969,28 +986,27 @@ Purpose: the per-pane statusbar's rulebook, decidable from values.
 
 #### `tab_view.rs`
 
-Purpose: the GTK glue for native tabs — an `adw::TabBar` over an `adw::TabView`, where every tab owns its `WolfCore`, wake drain, restart state, [`pane_view.rs`](#pane_viewrs) and [`persistence.rs`](#persistencers) handle. Every decision it acts on is [`tabs_ui.rs`](#tabs_uirs)'s.
+Purpose: the GTK glue for native tabs — an `adw::TabBar` over an `adw::TabView`, where every tab owns its `WolfCore`, wake drain, restart state, [`pane_view.rs`](#pane_viewrs) and [`persistence.rs`](#persistencers) handle. Its decisions are [`tabs_ui.rs`](#tabs_uirs)'s.
 
 **Public API**
 
 - `build(TabsParts) -> TabsHandle` — no page exists until `open_tab`.
-- `TabsHandle::open_tab(TabParts) -> Option<TabHandle>` — starts the tab's core and selects it; `None` after one message.
+- `TabsHandle::open_tab(TabParts) -> Option<TabHandle>` — starts the tab's core and selects it; `None` after one message. `replace(old, parts)` does so at `old`'s position, then closes `old`; hold no core borrow across it.
 - `select`, `selected`, `selected_core`, `core_source`, `entries`, `len`, `focus_target`, `shutdown_all`, `view_widget`, `bar_widget`.
 - `seed_recency()`, `recency()`.
-- `connect_selected`, given the tab left, `connect_wake`, every drain's body, and `connect_closing`, run before a closing tab's shutdown.
+- `connect_selected`, given the tab left, `connect_wake`, every drain's body, and `connect_closing`, before a closing tab's shutdown.
 - `sync_ui_focus(window_active)`, the `:checktime` trigger; `active_terminal()` and `sync_terminal_focus(window_active)` ([how](../../../notes/wolf-gnome/terminal-panes.md)).
-- `TabHandle`'s `core`, `liveness`, `restart`, `wake`, `refresh`, `capture_viewports` and `shutdown`; its `set_empty`, `is_empty`, `sidebar_shown`, `record_sidebar`, `sidebar_page`, `search_fields` and `launch_cwd`; `CoreSource` and `with_core`.
+- `TabHandle`'s `core`, `liveness`, `restart`, `wake`, `refresh`, `capture_viewports` and `shutdown`; its `set_empty`, `is_empty`, `sidebar_shown`, `record_sidebar`, `sidebar_page`, `search_fields`, `launch_cwd` and `live_directory`; `CoreSource` and `with_core`.
 
 **Decisions**
 
 - A tab's wake channel exists before its core starts, so the startup flush's wake is queued, not lost.
-- Window-level widgets take a `CoreSource`, never a cell, which goes stale at the first switch.
-- `close-page` is a veto: every arm must answer `close_page_finish` and return `Propagation::Stop`, or the page stays on screen forever. Closing the last page closes the window ([Present limitations](../../../notes/wolf-gnome/present-limitations.md)).
+- Window-level widgets take a `CoreSource`, never a cell, stale after a switch.
+- `close-page` is a veto: every arm must answer `close_page_finish` and return `Propagation::Stop`, or the page never leaves. Closing the last page closes the window, so `replace` opens first, keeping `old` when that fails.
 - Both handlers and every drain hold only `Weak`s: a strong reference from one the view or the main loop owns leaks every tab's pane view.
 
 **Gotchas**
 
-- `selected` is the tab window-level widgets act on; persistence reads every tab, through `entries`.
 - `entries` is insertion order, not page order; callers needing the user's arrangement pair each entry with `TabHandle::page_position`.
 
 #### `tabs_ui.rs`
@@ -1104,20 +1120,20 @@ Purpose: one window and everything scoped to it — an `adw::ApplicationWindow` 
 **Public API**
 
 - `build(parts) -> Option<WindowHandle>` — `None` when no planned tab's core starts; a launch whose only window fails exits.
-- `WindowParts`, the construction inputs.
 - `WindowHandle::id`, `present`, `show_after(others)`, `cancel_present`, `refresh_subtree`, recording the selected tab's sidebar first, `capture_viewports`, `cached_window`, `display_cwd` and `readiness`, of the selected tab.
+- `live_window`, `selected_is_empty`, `selected_core`, `focus_tab`, `fill_selected_tab` — [Open Folder](#open_folderrs)'s.
 
 **Decisions**
 
-- The close handler's statement order is load-bearing at both ends. Telling the coordinator comes first, or the gathered entry sees nothing and the session is silently lost; focusing the input method out and clearing its client widget comes last, after every core shuts down, so a focus-out commit finds no core and the context releases the widget tree.
+- The close handler's statement order is load-bearing at both ends. Telling the coordinator comes first, or the gathered entry sees nothing and the session is lost; focusing the input method out and clearing its client widget comes last, after every core shuts down, so a focus-out commit finds no core and the context releases the widget tree.
 - Each tab's first drain is a wake queued after the window registers and installs its close handler: an earlier drain could reach a coordinator unaware of it, or close and orphan every tab's Neovim.
 - `display_cwd` is the cached entry's active `directory`, so the palette and save cannot disagree.
-- The search panel takes the selected tab's record at launch ([why](../../../notes/wolf-gnome/application-state.md#the-extras)).
-- Keys, commits and focus reach the selected tab, a terminal pane per [Terminal panes](../../../notes/wolf-gnome/terminal-panes.md).
+- The search panel takes the selected tab's record at launch or a fill ([why](../../../notes/wolf-gnome/application-state.md#the-extras)).
+- Keys, commits and focus reach the selected tab ([terminal panes](../../../notes/wolf-gnome/terminal-panes.md)).
 
 **Gotchas**
 
-- The key controller carries no propagation phase and offers each press to the window's `gtk::IMMulticontext` before translating, so a bound chord reaches neither Neovim nor the context — [`shell.rs`](#shellrs)'s capture-phase controller has already stopped it ([Window structure](../../../notes/wolf-gnome/window-structure.md)).
+- The key controller carries no propagation phase and offers each press to the window's `gtk::IMMulticontext` before translating, so a bound chord reaches neither Neovim nor the context — [`shell.rs`](#shellrs)'s capture-phase controller has already stopped it.
 
 #### `workspace.rs`
 
@@ -1126,12 +1142,12 @@ Purpose: the pure workspace decisions — is a project open, where does Neovim s
 **Public API**
 
 - `launch_decision(process_cwd, restored, home, is_dir) -> LaunchDecision` — `Folder`, or `EmptyState` carrying the directory Neovim starts in.
-- `reroot_decision(pending, live, rooted) -> RerootAction` — stay, discard a satisfied request, or re-root where Neovim is; `root_label(cwd)` is the root row's text.
-- `reroot_ready(pending, live) -> bool` and `home_dir()`, the one environment read here, which the shell captures once at build time.
+- `reroot_decision(live, rooted) -> RerootAction` — stay, or re-root where Neovim is; `root_label(cwd)` is the root row's text.
+- `home_dir()`, the one environment read here, which the shell captures once at build time.
 
 **Decisions**
 
 - Two candidates are offered and the first to satisfy one shared predicate wins: a directory, not home, not the root. [`state_seam.rs`](#state_seamrs)'s `restore_plans` offers them one at a time: the process cwd alone, because a terminal launch from a project is the Linux idiom, and each saved tab's directory alone. The same predicate on a restored directory stops a hand-edited saved state aiming the file search at the whole filesystem.
-- A re-root's authority is `rooted`, where the sidebar sits, against the cwd Neovim reports; a request decides only whether its own flag is discarded. So a typed `:cd` moves the sidebar with no request, and one `chdir` is exactly one re-root.
+- A re-root's authority is `rooted`, where the sidebar sits, against the cwd Neovim reports, and the settle that re-roots updates `rooted`, so one directory change is exactly one re-root. No front-end request takes part: Open Folder never chdirs a tab.
 - No project predicate guards a re-root: a typed `:cd /` is an explicit act, not the launch-time guess `is_usable_project` judges, with core's search bounds as the backstop.
 - Comparisons are plain equality, so callers canonicalize both sides: a trailing separator is ignored, `..` and symlinks are not.

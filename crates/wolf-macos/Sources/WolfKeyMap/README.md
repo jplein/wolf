@@ -12,7 +12,7 @@ Each compiles into this module and has its own README with the entries for its f
 
 - [`Terminal/`](Terminal/README.md) — a terminal pane's cell styles, damage, sizing and input routing.
 - [`Sidebar/`](Sidebar/README.md) — the file-tree and search panels, their View menu checkmarks and their toolbar control.
-- [`Persistence/`](Persistence/README.md) — what the window state holds, in what order, and how it restores.
+- [`Persistence/`](Persistence/README.md) — what the window state holds, in what order, how it restores, and Open Folder's step.
 
 ## Files
 
@@ -327,7 +327,7 @@ Purpose: The crash/stall recovery rulebook: what a wake does by liveness and res
 - `.notResponding` never auto-restarts: a restart loses what no swap file holds, so that is the user's call.
 - The cap stops a retry loop against a failing respawn, never the user: the button resets the count. `retrying` means an attempt is permitted, not running.
 - Unlike `liveness_ui`, the seam takes the count, so the cap is tested here.
-- A restart respawns Neovim in its launch directory, so a tab whose cwd differs is re-rooted with `.chdir` first: an empty-state window reached its folder only through one. The active file opens last, to land focused.
+- A restart respawns Neovim in its launch directory, so a tab whose cwd differs, after a typed `:cd`, is re-rooted with `.chdir` first. The active file opens last, to land focused.
 
 #### `OtherPaneSeam.swift`
 

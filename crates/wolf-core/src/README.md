@@ -16,12 +16,12 @@ Crate root. Declares every module and flattens the public surface into root re-e
 
 **Public API**
 
-- `CoreConfig.cwd` is nvim's launch directory and the search/MRU root until nvim reports its own cwd (`live_cwd`).
-- `SnapshotReadGuard` outlives `&self`, owning an `Arc` of the lock; hold it for one paint only.
-- The blocking queries (`list_buffers` and siblings) return an empty or zero fallback on any RPC error or timeout, indistinguishable from an empty answer. Among them, `window_cursor(win)` reads any window's own view. The rest is fire-and-forget, on the ordered input channel: `split_pane` splits the window an earlier `focus_win` made current, and `set_window_cursor(win, view)` re-applies a view after a resize ([why](../../../notes/wolf-core-decisions.md#a-saved-view-is-applied-twice)).
-- `restart_nvim` returns `Ok(false)` when no respawn happened (already `Alive` or in flight) and reopens nothing: capture `open_files_for_tabpage` first. After `Ok(true)` the snapshot, intents and history start over ([what carries](../../../notes/wolf-core-decisions.md#liveness-and-restart)).
+- `CoreConfig.cwd` is nvim's launch directory and the search/MRU root until nvim reports its own (`live_cwd`).
+- `SnapshotReadGuard` outlives `&self`, owning an `Arc` of the lock; hold it for one paint.
+- The blocking queries (`list_buffers` and siblings) return an empty or zero fallback on any RPC error or timeout, like an empty answer. Among them, `window_cursor(win)` reads any window's own view. The rest is fire-and-forget, on the ordered input channel: `split_pane` splits the window an earlier `focus_win` made current, and `set_window_cursor(win, view)` re-applies a view after a resize ([why](../../../notes/wolf-core-decisions.md#a-saved-view-is-applied-twice)).
+- `restart_nvim` returns `Ok(false)` when no respawn happened (`Alive` or in flight) and reopens nothing: capture `open_files_for_tabpage` first. After `Ok(true)` the snapshot, intents and history start over ([what carries](../../../notes/wolf-core-decisions.md#liveness-and-restart)).
 - `start` ignores `SIGPIPE` process-wide ([why](../../../notes/wolf-core-decisions.md#liveness-and-restart)).
-- `recent_dirs` omits non-directories (a stat each, on the caller's thread) and never prunes, so a returning folder reappears.
+- `recent_dirs` omits non-directories, statting each on the calling thread, and never prunes, so a returning folder reappears. Open Folder records through `record_recent_dir`.
 
 **Decisions**
 
@@ -423,7 +423,7 @@ Purpose: the recent-files cache — the global `file_mru` table of `wolf.sqlite`
 
 #### `recent_dirs.rs`
 
-Purpose: the recent-directories cache — the global `folder_mru` table of `wolf.sqlite`, opened through [`db.rs`](#dbrs) — recording every directory the captive Neovim changes into, whether through the open-folder command or a typed `:cd`/`:lcd`/`:tcd`.
+Purpose: the recent-directories cache — the global `folder_mru` table of `wolf.sqlite`, opened through [`db.rs`](#dbrs) — recording every directory the captive Neovim changes into with a typed `:cd`/`:lcd`/`:tcd`, and every folder a front-end opens (`WolfCore::record_recent_dir`).
 
 **Public API**
 
@@ -432,7 +432,7 @@ Purpose: the recent-directories cache — the global `folder_mru` table of `wolf
 **Decisions**
 
 - Ordering is a monotonic `seq` column (`MAX(seq)+1` per insert), not a timestamp, so move-to-top and the cap stay deterministic for inserts landing in the same millisecond. That is what lets the tests avoid sleeps.
-- `record` stores the path as given: it arrives already canonical from `apply_cwd`, so canonicalizing again would only add a filesystem hit.
+- `record` stores the path as given: both callers, `apply_cwd` and `record_recent_dir`, canonicalize first, so canonicalizing again would only add a filesystem hit.
 - `recent` neither prunes nor filters vanished directories, unlike `MruStore::recent`: [`WolfCore::recent_dirs`](#apirs) filters them on read, so the store keeps a returning folder's row.
 
 ### Pickers, panes, and preview
