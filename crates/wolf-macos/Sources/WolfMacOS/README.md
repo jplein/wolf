@@ -21,18 +21,18 @@ Purpose: The application coordinator: launch setup, the live `WolfWindowControll
 
 - `makeNewWindow(originatingCwd:)` — an empty-state tab in its own window; the argument serves `CommandDispatcher`'s shared call site.
 - `makeNewTab(from:)` — a tab in `key`'s group, its Neovim launched at `key`'s folder or at home.
-- `refreshTabFocus()` — sends each [`TabFocusSeam`](../WolfKeyMap/README.md#tabfocusseamswift) edge to its tab's core.
-- `scheduleStateSnapshot()` / `snapshotNow()` — throttled versus immediate whole-tree commit to `state.json` ([write model](../../../../notes/wolf-macos-decisions.md#state-is-a-tree-and-the-front-end-owns-every-write)).
-- `closeCommit(for:)` — a closing view's commit; the last live view's commits at once the tree read at its burst's first close, keeping its window's tabs.
+- `refreshTabFocus()` — sends each [`TabFocusSeam`](../WolfKeyMap/README.md#tabfocusseamswift) edge to its tab's core, and focuses the main window's tab in the [stacking order](../WolfKeyMap/Persistence/README.md#stackingorderswift).
+- `windowMinimizedChanged(_:minimized:)` — marks or unmarks the controller's whole tab group there.
+- `scheduleStateSnapshot()` / `snapshotNow()` — throttled versus immediate whole-tree commit to the window state ([write model](../../../../notes/wolf-macos-decisions.md#state-is-a-tree-and-the-front-end-owns-every-write)).
+- `closeCommit(for:)` — a closing view's commit, through [`SessionSeam.CloseBurst`](../WolfKeyMap/Persistence/README.md#sessionseamswift).
 - `otherWindows(excluding:)`, `controllerForCwd(_:)`, `raiseWindow(tabId:)` — the palette's candidates and raise target.
 - `appAppearance(for:)` — a mode's forced `NSApp.appearance`; `nil` under `auto`.
-- `savedPaneNode(from:)`, `pushLayout(_:)` — the restore read's and the commit's layout halves.
 
 **Decisions**
 
 - Launch order is fonts, config, metrics: measuring needs the config's font settings, and the bundled families must reach CoreText first.
 - `appearanceObservation` must stay stored: a deallocated `NSKeyValueObservation` invalidates itself, silently ending auto-mode appearance tracking.
-- Tab focus follows main ([why](../../../../notes/wolf-macos-decisions.md#one-neovim-per-tab)). Its loss rides `didResignActive`, where `NSApp.isActive` reads `false`.
+- Tab focus and the stacking order follow main ([why](../../../../notes/wolf-macos-decisions.md#one-neovim-per-tab)). Its loss rides `didResignActive`, where `NSApp.isActive` reads `false`.
 - The About panel's credits discharge the fonts' and libraries' attribution: Linux's preamble, then `wolf_ffi_font_license_notices()` and `wolf_ffi_library_license_notices()` verbatim. Their `.foregroundColor` stays `labelColor`, since uncoloured credits render black in dark mode.
 
 **Gotchas**
@@ -524,16 +524,17 @@ Purpose: The sidebar body — `FileTreeView` or `SearchView`, one shown at a tim
 
 #### `StatePersistence.swift`
 
-Purpose: Watches one window's geometry, sidebar collapse state, and tab-group membership/selection, calling an injected `onChange` on every change. The owning `WolfWindowController` wires that closure to the coordinator's coalesced whole-tree snapshot, so `state.json` tracks the live UI.
+Purpose: Watches one window's geometry, sidebar collapse state, and tab-group membership/selection, calling an injected `onChange` on every change. The owning `WolfWindowController` wires that closure to the coordinator's coalesced whole-tree snapshot, so the window state tracks the live UI.
 
 **Public API**
 
 - `init(window:sidebarItem:onChange:)` — every UI reference is weak; the controller owns those lifetimes.
 - `install()` — arms the observers. They are torn down in `deinit`, so the object must be kept alive for as long as the window.
+- `normalFrame` — the window's last frame while neither zoomed nor full screen, recorded at install and before each geometry `onChange`, which the window state saves as the window's frame. Exiting full screen is a geometry change, so the frame it returns to is recorded.
 
 **Decisions**
 
-- Trigger-only glue: no file IO, no per-field state writes. Persistence is a whole-tree snapshot the coordinator walks, so writing anything here would duplicate that walk rather than extend it.
+- Trigger-only glue, the normal frame aside: no file IO, no per-field state writes. Persistence is a whole-tree snapshot the coordinator walks, so writing anything here would duplicate that walk rather than extend it.
 - The `didResize` observer bails while `inLiveResize`. A live drag emits it once per frame, and `didEndLiveResize` already catches the final size; the `didResize` registration exists only for discrete resizes such as zoom and a programmatic `setFrame`.
 
 #### `TabCore.swift`
@@ -652,10 +653,11 @@ Purpose: One view — a single tab's whole UI stack, owning its [`TabCore`](#tab
 **Public API**
 
 - `build()` — shows the stack and becomes its core's view.
-- `hasFolder` — false in the empty state, so an empty-state window's sidebar never scans `home`.
+- `hasFolder` — false in the empty state, so its sidebar never scans `home`.
 - `persistedCwd` — the tab's live cwd, `""` in the empty state, unlike `currentCwd`.
 - `persistedTab()` — this view's [`SessionSeam`](../WolfKeyMap/Persistence/README.md#sessionseamswift) contribution, seeded from the restored tab.
-- `canCopy` — whether Copy has anything to copy, as `copy()` decides it. Copy and Paste in a terminal pane use its session.
+- `normalFrame` — [`StatePersistence`](#statepersistenceswift)'s, `nil` before one is recorded.
+- `canCopy` — Copy's gate, as `copy()` decides it; in a terminal pane, Copy and Paste use its session.
 - `drainAndDispatchCommands()` — apart from `onRenderWake()`, so the tab's core drains in every state ([why](../WolfKeyMap/README.md#livenessseamswift)).
 
 **Decisions**

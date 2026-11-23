@@ -156,7 +156,7 @@ What the markers cost the stylesheet is in [`src/markdown/README.md`](../crates/
 
 ## The rebuild-layout wire format
 
-`state::rebuild_layout_spec` renders a saved `PaneNode`, and `app_state::tab_rebuild_spec` a saved tab, into the JSON `_G.wolf_rebuild_layout` decodes, and the shared `runtime/nvim/init.lua` is its one decoder. Both build every leaf and split through `app_state`'s crate-private `leaf_spec` and `layout_spec`, so a change to the shape lands there and in `init.lua` only. GNOME calls `rebuild_layout_spec` directly; macOS hands the `FfiPaneNode` it loaded back across the FFI to `WolfCoreHandle::rebuild_layout`, which renders it in Rust, so no front-end can drift from the other. The shape is documented once, in [`runtime/nvim/README.md`](../runtime/nvim/README.md).
+`state::rebuild_layout_spec` renders a saved `PaneNode`, and `app_state::tab_rebuild_spec` a saved tab, into the JSON `_G.wolf_rebuild_layout` decodes, and the shared `runtime/nvim/init.lua` is its one decoder. Both build every leaf and split through `app_state`'s crate-private `leaf_spec` and `layout_spec`, so a change to the shape lands there and in `init.lua` only. GNOME calls `rebuild_layout_spec` directly; macOS hands the restored `FfiAppTab` back across the FFI to `WolfCoreHandle::rebuild_tab`, which renders it with `tab_rebuild_spec` in Rust, so no front-end can drift from the other. The shape is documented once, in [`runtime/nvim/README.md`](../runtime/nvim/README.md).
 
 The document keeps `preview` and `terminal` booleans rather than the model's `kind`. It is a wire format, separate from both models, and the booleans let both producers share one path in `init.lua` with no second decoding. An edit leaf's `cursor` and `top_line` are emitted only when set, and only `tab_rebuild_spec` sets them, so a document without them is exactly what `rebuild_layout_spec` renders.
 
@@ -166,7 +166,7 @@ Leaf order is the other half of the contract. Children are emitted depth-first, 
 
 ## The persisted zoom mark
 
-A tab's zoomed pane persists as `zoomed: true` on its `PaneNode::Leaf`, not as a tab-level index. The mark travels with its leaf through the depth-first handle zip, so a leaf that is not restored takes its zoom with it, where an index would land on the wrong leaf. The field has the same serde attributes as `terminal`, so a file without it loads unzoomed and an unzoomed file stays byte-identical, and `STATE_VERSION` does not change. Several marks come only from a hand edit, and every reader, `init.lua` and the macOS restore alike, takes the first in depth-first order.
+A tab's zoomed pane persists as `zoomed: true` on its `PaneNode::Leaf`, not as a tab-level index. The mark travels with its leaf through the depth-first handle zip, so a leaf that is not restored takes its zoom with it, where an index would land on the wrong leaf. The field has the same serde attributes as `terminal`, so a file without it loads unzoomed and an unzoomed file stays byte-identical, and `STATE_VERSION` does not change. Several marks come only from a hand edit, and every reader, `init.lua` and GNOME's restore alike, takes the first in depth-first order.
 
 `load_state` clears the mark of an editor or preview leaf whose path is gone, because the restore cannot rebuild that pane, and the contract then restores the tab unzoomed. It keeps the mark on a terminal leaf, which restores whether or not its directory exists, and on an unnamed leaf, which restores as an empty buffer. The clearing drops no leaf and never writes the file.
 

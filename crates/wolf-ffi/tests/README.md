@@ -33,9 +33,9 @@ Where the wolf-core suite panics without a real nvim, these tests skip loudly th
 
 #### `app_state.rs`
 
-**Covers** — the application-state bridge end to end: the `wolf_ffi_app_state_*` builder over two windows, every field set through it read back through the `FfiAppState` family's accessors with unset fields reading `UNSET`, `NONE` or `false`, and `wolf_ffi_app_state_project_state` picking the tab the submitted recency names, or not `found`. Headless — target `//crates/wolf-ffi:app_state` stages no nvim and carries no `no-sandbox` tag; the store opens in `WOLF_STATE_DIR` pointed at a tempdir.
+**Covers** — the application-state bridge end to end: the `wolf_ffi_app_state_*` builder over two windows, every field set through it read back through the `FfiAppState` family's accessors with unset fields reading `UNSET`, `NONE` or `false`, and `wolf_ffi_app_state_project_state` picking the tab the submitted recency names, or not `found`. A second submit pins `wolf_ffi_app_state_window_minimized` marking the last window only, and `FfiAppTab::restored` turning a read-back tab's edit pane on a missing file into an empty edit pane in place and dropping its zoom, while the saved tab keeps both. Headless — target `//crates/wolf-ffi:app_state` stages no nvim and carries no `no-sandbox` tag; the store opens in `WOLF_STATE_DIR` pointed at a tempdir.
 
-**Gotchas** — one `#[test]` only, as in [`state.rs`](#staters): it sets the process-global `WOLF_STATE_DIR` before the process-wide `SHARED_APP_STATE` opens, so a sibling test could race it or find the store open elsewhere. The discriminants are local constants mirroring the bridge's private tables.
+**Gotchas** — one `#[test]` only: it sets the process-global `WOLF_STATE_DIR` before the process-wide `SHARED_APP_STATE` opens, so a sibling test could race it or find the store open elsewhere. The discriminants are local constants mirroring the bridge's private tables.
 
 #### `appearance.rs`
 
@@ -351,11 +351,11 @@ Also `preview_buffer(win, bufnr)` — markdown binds and returns the source bufn
 
 **Gotchas** — the startup buffer is already a markdown `Untitled.md`, so `wait_for_markdown_active(true)` returns instantly across a markdown-to-markdown `:e`; use `wait_for_current_file` as the switch barrier before a synchronous `open_preview`. The temp cwd is nvim's working dir and search root, so keep it alive until after `shutdown()`.
 
-#### `rebuild_layout.rs`
+#### `rebuild_tab.rs`
 
-**Covers** — `WolfCoreHandle::rebuild_layout(&FfiPaneNode)` on a node loaded back from `state.json`: a vertical two-leaf split pushed through the push-builder rebuilds into two distinct window handles in leaf order, each showing its leaf's file; a saved split of an editor leaf and a terminal leaf rebuilds with a session bound into the terminal leaf's window only. Real nvim; target `//crates/wolf-ffi:rebuild_layout` (staged nvim runfiles, `tags = ["no-sandbox"]`).
+**Covers** — `WolfCoreHandle::rebuild_tab(&FfiAppTab)` on a tab committed through the `wolf_ffi_app_state_*` builder, read back and passed through `restored()`, as the macOS launch does: a vertical tab of two edit panes rebuilds into two distinct window handles in leaf order, each showing its pane's file; a tab of an edit pane and a terminal pane rebuilds, on a fresh core, with a session bound into the terminal pane's window only. Real nvim; target `//crates/wolf-ffi:rebuild_tab` (staged nvim runfiles, `tags = ["no-sandbox"]`).
 
-**Gotchas** — one `#[test]` only, for the same `SHARED_STORE` / `WOLF_STATE_DIR` reason as `state.rs`. Paths are matched on their basenames, because nvim reports the temp dir under `/private/var` where the test created it under `/var`.
+**Gotchas** — one `#[test]` only, for the same `WOLF_STATE_DIR` reason as [`app_state.rs`](#app_staters). Paths are matched on their basenames, because nvim reports the temp dir under `/private/var` where the test created it under `/var`.
 
 #### `recent_dirs.rs`
 
@@ -368,12 +368,6 @@ Also `preview_buffer(win, bufnr)` — markdown binds and returns the source bufn
 **Covers** — the content-search bridge: `start_search(query, use_regex, case_sensitive, all_files) -> FfiSearch`, the `files(budget)` file and match rows with their truncation flags and highlight ranges, `ignorecase()`, and `open_at(path, line, col)`. Real nvim plus a real `rg` child; target `//crates/wolf-ffi:search`, which additionally stages `//bazel/rg:rg_tree` and wires `WOLF_RG_BIN`, and skips loudly when either binary is missing.
 
 **Gotchas** — The seeded `notes.txt` is there to prove the non-`all_files` filter drops it.
-
-#### `state.rs`
-
-**Covers** — the state-persistence bridge end to end: the snapshot-builder free functions, the pane-layout push-builder (terminal and zoomed leaves included), the read side (`wolf_ffi_load_state` through the `FfiState` / `FfiWindowState` / `FfiTabState` / `FfiPaneNode` accessors), and rejection of an old flat file. Headless — the write side is a pure builder over the shared store, so target `//crates/wolf-ffi:state` stages no nvim and carries no `no-sandbox` tag; everything is driven through `WOLF_STATE_DIR` pointed at a tempdir.
-
-**Gotchas** — one `#[test]` only: it mutates the process-global `WOLF_STATE_DIR` and opens the process-wide `SHARED_STORE` `OnceLock`, so extend that test rather than adding a sibling. The zoomed leaf is the terminal leaf, because the fixture's file paths do not exist and `load_state` would clear a zoom on one of them.
 
 #### `state_isolation.rs`
 

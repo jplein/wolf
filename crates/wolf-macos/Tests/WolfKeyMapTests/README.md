@@ -322,7 +322,7 @@ The `PreviewSeam` reload gate plus the click-to-focus surface. `winsNeedingReloa
 
 **Covers**
 
-`RestoreSeam.plan(windows:home:isDirectory:)`: tabs on one directory, in one window or across windows, each plan a tab of their own at that directory; an empty-state or since-deleted tab launches at `home` with no folder; and every tab keeps its `(groupIndex, positionInGroup, cwd, sidebarVisible)` placement plus its `layout`, verbatim.
+`RestoreSeam.plan(windows:home:isDirectory:)`: tabs on one directory, in one window or across windows, each plan a tab of their own at that directory; an empty-state or since-deleted tab launches at `home` with no folder; and every tab keeps its `(groupIndex, positionInGroup, cwd, sidebarVisible)` placement plus its `layout`, verbatim. `selectedPosition` selects the saved active position when it restored, else the first restored one, and nothing when none did.
 
 **Gotchas**
 
@@ -371,6 +371,8 @@ The `PreviewSeam` reload gate plus the click-to-focus surface. `winsNeedingReloa
 
 **Covers** — the [`SessionSeam`](../../Sources/WolfKeyMap/Persistence/README.md#sessionseamswift) write-side decisions: the three close answers; that a walk with no live view or no window commits nothing; `gatherTab` resolving file, preview, terminal and unnamed leaves with their weights, a lone terminal pane persisting, an empty-state lone pane persisting no layout, the zoomed leaf persisting marked while a zoomed drawer marks none, and refusal on an unreported or missing leaf or a folder view's empty cwd; `contribution` keeping or replacing the cache, never gathering behind a shut gate; both `mayGather` gates; and `orphanedSlots` in saved order.
 
+Of `windowState`, it covers ordering live windows by the stacking order, keeping each window's contributing tabs with their recency, falling back to the most recently focused one for an active tab that contributes nothing, dropping a window with none, and putting a non-minimized orphan ahead of a minimized live window.
+
 Of `CloseBurst`, it covers that a tab group closed in one turn keeps the tree read once, at its first close, a tab closed alone stays dropped once its burst's end has run, and a terminating close reads, commits and schedules nothing.
 
 **Gotchas** — the seed and live fixtures differ in every field, so an assertion that the cache survived cannot pass on a live tab by coincidence. The burst tests hold every end closure and run it only when a test says the turn is over. The `WolfMacOS` glue that feeds these decisions — `TabCore.onWake`, `teardown`, `AppDelegate.closeBurst`, the live filter in `gatherTree` and `leafContents()` — is compile-verified and manual-smoke.
@@ -393,9 +395,13 @@ Of `CloseBurst`, it covers that a tab group closed in one turn keeps the tree re
 
 **Covers**: `SidebarToolbarSeam`'s selection across the cross product of `sidebarVisible` and `current` (`.tree` / `.search` / `nil`), the visible panel's segment while shown and none while hidden. The click rule: clicking the selected panel hides, clicking the other switches, and clicking either while hidden shows it. Also the segment order with `nil` for an out-of-range index, the symbols, the exact tooltips, and an identifier distinct from Back's and Forward's.
 
+#### `StackingOrderTests.swift`
+
+**Covers**: [`StackingOrder`](../../Sources/WolfKeyMap/Persistence/README.md#stackingorderswift) — a focused window moving to the front; a minimized window ordered behind one ranked below it, and taking its rank back when deminimized; the seed putting each window's active tab first, in seed order rather than input order, with a minimized seed window marked; `recency` listing focused tabs first and unfocused ones after; and a removed tab leaving the list.
+
 #### `StateSeamTests.swift`
 
-**Covers**: two tables. `restoredWindowFrame` accepts a frame intersecting any screen's visible frame (second display, partly past an edge) and returns nil for non-positive width or height (the unset sentinel), a fully offscreen frame, and an empty screen list. `launchDecision` returns `.folder` only for a restored path the injected `isDirectory` closure accepts, and `.emptyState(nvimCwd: home)` for empty, deleted, plain-file, and missing paths.
+**Covers**: three tables. `normalFrame` keeps the previous normal frame while zoomed or full screen, and is nil with none. `restoredWindowFrame` accepts a frame intersecting any screen's visible frame (second display, partly past an edge) and returns nil for non-positive width or height (the unset sentinel), a fully offscreen frame, and an empty screen list. `launchDecision` returns `.folder` only for a restored path the injected `isDirectory` closure accepts, and `.emptyState(nvimCwd: home)` for empty, deleted, plain-file, and missing paths.
 
 **Gotchas**: `isDirectory` is a set lookup, so add a path to the row's `directories` set to make it a directory. Every `launchDecision` row also asserts the result is not the process working directory — a regression guard against polluting the recent-dirs MRU — so keep that when adding rows.
 
@@ -456,3 +462,9 @@ Of `CloseBurst`, it covers that a tab group closed in one turn keeps the tree re
 **Covers**: both gates. Visibility — `requestRefresh` defers while hidden, the first `setVisible(true)` with deferred work catches up once and a second returns false, and a request while already visible proceeds. Version — `shouldReload` fires only when the version differs from the last one recorded, and `resetReloadTracking` clears that memory.
 
 **Gotchas**: one test pins the interaction of the two: requests made while hidden must not advance reload tracking, so the version still reloads after the catch-up. That is what stops a hidden sidebar from silently consuming a snapshot it never rendered.
+
+#### `WindowStateRoundTripTests.swift`
+
+**Covers**: the macOS save and restore of [application-state.md](../../../../specs/application-state.md) §4 and §5 over a real `wolf.sqlite`, through `SessionSeam.windowState`, `WindowStateCodec` and the bridge, with no window or Neovim. A quit is the terminate path's calls, and a relaunch the launch's pure steps followed by another quit. Two windows with several tabs come back in stacking order with their frames, active tabs and zoom, an empty tab without its layout; a minimized window comes back minimized and behind; and the project states of a directory open in two windows follow §4's rule, rule 2 by recency rather than tab order.
+
+**Gotchas**: a private once-per-process fence points `WOLF_STATE_DIR` at a fresh directory before the process-wide store first opens, so every test calls it first, and a new test that touches the store belongs in this file. The store's rows outlive a test, so each test names its directories with a fresh `UUID()`. Every live window list is passed out of stacking order, so only the stacking can put it right.

@@ -177,15 +177,24 @@ Purpose: The vendored Lighthouse's expected colours, for the tests that render u
 
 **Covers** — Zoom Pane through `PaneContainerView.toggleZoom()` over a live core and `/bin/sh`, from two editor panes and a terminal pane with the drawer open. A zoomed pane fills the area and its grid or session grows, while the others keep their windows, sessions and sizes, and unzoom restores every frame and weight after drags and a window resize while zoomed. A hidden preview keeps its web view, hidden, until unzoom.
 
-A split, a close and the shell exiting each unzoom, and so does Toggle Terminal, closing an open drawer or opening and focusing a closed one, or closing a zoomed drawer. `<C-w>l` unzooms onto the neighbour with every frame and weight restored, `:wincmd w` unzooms, the view following Neovim, and `<C-w>h` from the leftmost pane changes nothing. A zoom survives a save and restore through `gatherTab`, `AppDelegate.pushLayout`, `AppDelegate.savedPaneNode` and the layout rebuild.
+A split, a close and the shell exiting each unzoom, and so does Toggle Terminal, closing an open drawer or opening and focusing a closed one, or closing a zoomed drawer. `<C-w>l` unzooms onto the neighbour with every frame and weight restored, `:wincmd w` unzooms, the view following Neovim, and `<C-w>h` from the leftmost pane changes nothing. A zoom survives a save and restore through `gatherTab`, `WindowStateCodec`, `FfiAppTab.restored()` and `rebuild_tab`.
 
 **Gotchas**
 
 - The palette, `CommandDispatcher` and `WolfWindowController` reach no test, so `toggleZoom()` and `toggleTerminal()` are called directly; the [app-launch smoke](../../../../build.md#the-app-launch-smoke) covers the last two.
 - A hidden pane's sizes are compared after a settle: a wrong resize lands a round trip later.
 - A move that must change nothing and a restored zoom are sampled at every wake: Neovim reporting another pane a round trip later unzooms the view.
-- The save and restore test writes the process-wide `WOLF_STATE_DIR` `LiveCore` sets, which no other test here touches.
+- The save and restore test writes `LiveCore`'s `WOLF_STATE_DIR`, as [`SessionRestoreTests.swift`](#sessionrestoretestsswift) does; each submit replaces the whole window state.
 - The drags while zoomed land in the zoomed pane and reach Neovim as clicks.
+
+#### `SessionRestoreTests.swift`
+
+**Covers** — the launch restore of a saved tab over a live core: a vertical split of two files, the second zoomed, submitted through `WindowStateCodec` and flushed, then its second file deleted, loaded back and rebuilt through `requestLayoutRebuild` with the load's `rebuild`. The pane on the kept file shows it in place, the pane on the deleted file shows the startup buffer `Untitled.md` rather than the missing file, and the view stays unzoomed at every wake of a settle.
+
+**Gotchas**
+
+- That an empty-path pane keeps the buffer it was split from is the rebuild helper's premise, which the test measures rather than assumes.
+- It writes `LiveCore`'s `WOLF_STATE_DIR`, as [`ZoomPaneTests.swift`](#zoompanetestsswift) does.
 
 #### `TerminalDrawerTests.swift`
 

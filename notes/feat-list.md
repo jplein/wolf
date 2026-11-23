@@ -130,7 +130,7 @@ The GTK sidebar re-roots from one settle point, on the working directory Neovim 
 | Working directory in the window title        | `feat/status-bar` (`6fd2427`)                             | [x]   | [x]   |
 | Unified toolbar (sidebar toggle, nav, title) | `feat/nav-buttons` (`96d2c97`) / `linux-feat/nav-history` | [x]   | [x]   |
 | Native tabs, one Neovim per tab              | `feat/window-tabs`                                        | [x]   | [x]   |
-| Application state persistence (`state.json`) | `feat/remember-working-directory`                         | [x]   | [x]   |
+| Application state persistence                | `feat/remember-working-directory`                         | [x]   | [x]   |
 | Pane-layout persistence across relaunch      | `feat/macos-pane-dividers` (`5f8becb`)                    | [x]   | [x]   |
 | Single-pane state-persistence fix            | `fix/state-persistence-single-pane-bug`                   | [x]   | [x]   |
 | Copy / paste through the system clipboard    | `feat/copy-paste`                                         | [x]   | [x]   |

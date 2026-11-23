@@ -12,7 +12,7 @@ Each compiles into this module and has its own README with the entries for its f
 
 - [`Terminal/`](Terminal/README.md) — a terminal pane's cell styles, damage, sizing and input routing.
 - [`Sidebar/`](Sidebar/README.md) — the file-tree and search panels, their View menu checkmarks and their toolbar control.
-- [`Persistence/`](Persistence/README.md) — what `state.json` holds, and how it restores.
+- [`Persistence/`](Persistence/README.md) — what the window state holds, in what order, and how it restores.
 
 ## Files
 

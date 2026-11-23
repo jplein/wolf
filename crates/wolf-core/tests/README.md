@@ -47,7 +47,7 @@ Headless (`//crates/wolf-core:app_state_model`: serde only, no nvim, no files).
 
 **Covers**
 
-- The serde shapes of [the state model](../../../specs/application-state.md#2-the-state-model): the spec's JSON example round-trips and parses to its meaning; the optional fields read as `None` when absent and are not written as `null`; `frame.x`/`y`, `root` and `zoomed` are always written; a pane reference is an index or `"drawer"`; a project state is `{"frame", "tab"}` with no `directory`.
+- The serde shapes of [the state model](../../../specs/application-state.md#2-the-state-model): the spec's example round-trips and parses as meant; optional fields read `None` when absent, never written `null`; `frame.x`/`y`, `root` and `zoomed` always written; `minimized` written only when `true`; a pane reference an index or `"drawer"`; a project state `{"frame", "tab"}`, no `directory`.
 
 **Gotchas**
 

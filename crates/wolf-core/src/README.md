@@ -170,7 +170,7 @@ Purpose: the model of [§2](../../../specs/application-state.md#2-the-state-mode
 
 **Public API**
 
-- `Frame::x`/`y`, `root` and `zoomed` are always written, `null` when unset. The fields a front-end may not capture (`cursor`, `top_line`, `scroll`, `focused`, `drawer`, the sidebar's mode, query and toggles) are skipped when `None`, and absent means nothing to restore.
+- `Frame::x`/`y`, `root` and `zoomed` are always written, `null` when unset. The fields a front-end may not capture (`cursor`, `top_line`, `scroll`, `focused`, `drawer`, the sidebar's mode, query and toggles) are skipped when `None`, and absent means nothing to restore. `Window::minimized` is written only when `true`, and absent reads `false`.
 - `project_tab(state, recency, directory)` — [§4's rule](../../../specs/application-state.md#which-tab-becomes-a-directorys-project-state), as `(window, tab)`; `None` for `""`. `recency[w]` lists window `w`'s tabs most recent first. Unlisted tabs, or a missing list, rank after the listed ones in tab order, so empty recency is correct at launch.
 - `project_states(state, recency)` — one entry per distinct non-empty directory: the chosen tab and its window's frame.
 - `restored_tab(content)` — a missing edit file or preview source becomes an empty edit pane in place. A zoom is dropped on such a pane, out of range, on a lone pane with no open drawer, or on a closed drawer. A replaced pane keeps the focus.

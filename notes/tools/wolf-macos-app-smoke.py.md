@@ -46,8 +46,10 @@ The run directory is made under `/tmp` and resolved with `os.path.realpath`, bec
 
 ## The seeded first launch
 
-A fresh first launch is the empty state, Neovim in the home directory with no folder. A scripted `:cd` leaves that state only if a render wake has already recorded `initialCwd` in `WolfWindowController.onRenderWake`, which is a race, and Open Folder needs an `NSOpenPanel`. So `write_fixtures` seeds `state/state.json` instead, in the v1 schema [`state.rs`](../../crates/wolf-core/src/state.rs) owns: one window, one tab with `cwd` the resolved project directory, and a lone `za.md` leaf.
+A fresh first launch is the empty state, Neovim in the home directory with no folder. A scripted `:cd` leaves that state only if a render wake has already recorded `initialCwd` in `WolfWindowController.onRenderWake`, which is a race, and Open Folder needs an `NSOpenPanel`.
 
-The window's width 0 is the unset sentinel, so the window keeps the size it is built at, beside a visible sidebar, which keeps L1 under `PaneContainerView.maxGridCols`. C1 and R2 tell a zoom from none by zb's width reaching L1.w, which needs a split half to be narrower than L1, and C3's `w < L1.w` on both halves checks that premise.
+So `write_fixtures` seeds `state/wolf.sqlite` instead, through Python's `sqlite3`, with the tables [`app_state_store.rs`](../../crates/wolf-core/src/app_state_store.rs) and [`db.rs`](../../crates/wolf-core/src/db.rs) define. The `window_state` row holds the [§2](../../specs/application-state.md#2-the-state-model) JSON of one window, one tab with `directory` the resolved project directory, and a lone edit pane on `za.md`. The `schema` row `('window_state', 1)` is required, because a state table with no version recorded is dropped and recreated empty.
+
+The window's frame has a `null` position and width 0, so restore applies none of it and the window keeps the place and size it is built at, beside a visible sidebar, which keeps L1 under `PaneContainerView.maxGridCols`. C1 and R2 tell a zoom from none by zb's width reaching L1.w, which needs a split half to be narrower than L1, and C3's `w < L1.w` on both halves checks that premise.
 
 The layout rebuild `:edit`s `za.md`, so `za.md` showing proves the view was built, its first pane bound and the rebuild run. That, the socket answering and `exists(':WolfZoomPane') == 2` together are the readiness signal, so the app needs no readiness file like the GNOME front-end's `WOLF_READY_FILE`.

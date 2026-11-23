@@ -82,7 +82,7 @@ The four `extern "C"` wake registrations (`wolf_ffi_set_wake`, `wolf_ffi_set_fil
 - `focus_win(&self, win: i64)` — Click-to-focus and resolved focus-direction moves.
 - `close_pane(&self)` — `:close`, which closes the split rather than the buffer.
 - `split_horizontal(&self)`, `split_vertical(&self)` — Stacked (`:split`) and side-by-side (`:vsplit`) splits of Neovim's current window, through `WolfCore::split_pane`.
-- `rebuild_layout(&self, layout: &FfiPaneNode) -> Vec<i64>` — Realizes a saved split tree, the node `FfiTabState::layout` returned, in the current tabpage's lone window, returning the window handles in leaf order. Rust renders it with `wolf_core::state::rebuild_layout_spec`, so no front-end renders the spec. nvim supplies only count, topology, and per-window buffer; sizes come from the front-end's weights. When it returns, `win_buffer` and `previews` already report every returned window, so a state commit straight after it reads the restored files rather than the startup buffer. A terminal leaf's window already shows its new session. When the node marks a zoomed leaf, Neovim's current window and `active_win` are already the first such leaf's.
+- `rebuild_tab(&self, tab: &FfiAppTab) -> Vec<i64>` — Realizes a saved tab's root in the current tabpage's lone window, returning the window handles in leaf order; empty when the tab has no root or the core is gone. Rust renders it with `wolf_core::app_state::tab_rebuild_spec`, so no front-end renders the spec, and it checks no file, so pass it `FfiAppTab::restored`'s output. Sizes come from the front-end's weights. When it returns, `win_buffer` and `previews` already report every returned window, so a state commit straight after it reads the restored files rather than the startup buffer. A terminal pane's window already shows its new session, and when the tab zooms a pane, Neovim's current window and `active_win` are already that pane's.
 - `pane_status_for_grid(&self, grid: u64) -> FfiPaneStatus` — The statusbar strings for the window drawing into `grid`.
 - `win_buffer(&self, win: i64) -> FfiWinBuffer` — What window `win` shows, read from core's `win_buffers` by handle. That map spans every tabpage, so a window on a tabpage that is not current is still reported, where `pane_status_for_grid` joins through the current-tabpage `windows` map and answers `[No Name]`. The front-end reads persisted leaf paths through it.
 - `toggle_full_width(&self)` — Flips `b:wolf_full_width` on the effective buffer, which for a preview scratch is the source buffer.
@@ -252,41 +252,23 @@ Core's tabpage API, for a front-end whose tabs are tabpages of one Neovim. A mac
 - `wolf_ffi_font_license_notices() -> String` — A free function, no live core needed. Returns `wolf_core::FONT_LICENSE_NOTICES` verbatim; the macOS About panel's credits carry it.
 - `wolf_ffi_library_license_notices() -> String` — The same for `wolf_core::LIBRARY_LICENSE_NOTICES`, which the credits carry after the font notices.
 
-### Saved state
-
-The read side loads a saved tree; the write side pushes a fresh one through free functions, since a recursive tree cannot cross a scalar bridge as one value.
-
-- `wolf_ffi_load_state() -> FfiState` — The pre-start restore read. It never creates or modifies the file and never opens the live store; an absent, corrupt, or unresolvable state all yield an empty window list.
-- `FfiState::windows() -> Vec<FfiWindowState>` — Empty when nothing was saved.
-- `FfiWindowState::x/y/width/height/tabs` — Points. A width or height at or below 0 means unset — do not restore it.
-- `FfiTabState::cwd/sidebar_visible/has_layout/layout` — `has_layout` is false only for an empty-state lone pane; a lone pane showing a file, a preview or a terminal still persists a single leaf.
-- `FfiPaneNode::is_leaf/is_preview/is_terminal/is_zoomed/leaf_path/orientation/child_count/weight/child` — Recursion happens through repeated opaque returns from `child`, which keeps the bridge on scalar, String, and opaque returns. A preview leaf's `leaf_path` is the source file's absolute path, and a terminal leaf's the directory its shell starts in.
-- `wolf_ffi_state_snapshot_begin()` — Clears the write-side scratch tree.
-- `wolf_ffi_state_snapshot_add_window(x, y, width, height)` — Pushes a window with an empty tab list; later `add_tab` calls attach to it.
-- `wolf_ffi_state_snapshot_add_tab(cwd, sidebar_visible)` — Attaches to the most recently added window. A no-op when there is none.
-- `wolf_ffi_state_layout_push_leaf(path, preview, terminal, zoomed, weight)` — Part of a post-order token replay that assembles one tab's split tree across the scalar bridge.
-- `wolf_ffi_state_layout_push_split(orientation, child_count, weight)` — Pops `child_count` nodes, wraps them into a split, and pushes it back. The root split's weight is 1.0.
-- `wolf_ffi_state_layout_commit_to_tab()` — Attaches the single remaining node to the last window's last tab. A no-op unless exactly one node remains.
-- `wolf_ffi_state_snapshot_commit()` — Commits the whole tree at once; an identical tree is a no-op in the store.
-- `wolf_ffi_state_flush() -> bool` — Blocks until every pending write has been attempted, bounded by an internal timeout. True when no store exists, since there is nothing to flush.
-
-All windows share one process-wide store, opened lazily over the platform state directory. Opening the same directory twice would race the per-store writer threads, which the store does not support. An unresolvable state directory disables persistence process-wide, logged and never fatal.
-
 ### Application state
 
-The builder, submit and readers over core's [`AppStateStore`](../../wolf-core/src/README.md#app_state_storers), shaped like the saved-state surface above. Every window shares the process-wide `SHARED_APP_STATE`, opened lazily over the state directory, because the store's unchanged-tree check is per handle. `shutdown` does not flush it: the final write is a front-end step taken before any Neovim exits.
+The builder, submit and readers over core's [`AppStateStore`](../../wolf-core/src/README.md#app_state_storers). The write side pushes a fresh window state through free functions, since a recursive tree cannot cross a scalar bridge as one value. Every window shares the process-wide `SHARED_APP_STATE`, opened lazily over the state directory, because the store's unchanged-tree check is per handle; with no state directory, a commit writes nothing and the reads are empty. `shutdown` does not flush it: the final write is a front-end step taken before any Neovim exits.
 
 - `wolf_ffi_app_state_begin()` — Clears the window state, its recency and the node stack.
 - `wolf_ffi_app_state_add_window(has_position, x, y, width, height, active_tab)` — Frontmost first. `x` and `y` are stored as unset when `has_position` is false.
+- `wolf_ffi_app_state_window_minimized(minimized)` — Sets the last window's `minimized`, false until called.
 - `wolf_ffi_app_state_add_tab(directory, sidebar_visible, focused_kind, focused_index, zoomed_kind, zoomed_index)` — Attaches to the last window. Each reference is a `pane_ref` kind plus an index that only `PANE` reads; an unknown kind is unset.
 - `wolf_ffi_app_state_tab_sidebar(mode, query, case_sensitive, use_regex, all_files)`, `wolf_ffi_app_state_tab_drawer(open, share)` — The last tab's fields, unset until called. An unknown `mode`, or `UNSET`, is unset.
-- `wolf_ffi_app_state_push_pane(kind, path, weight)`, `wolf_ffi_app_state_push_layout(orientation, child_count, weight)`, `wolf_ffi_app_state_commit_root()` — The same post-order replay as the saved-state layout builder above. An unknown `kind` pushes an empty edit pane, so a later layout's count still matches.
+- `wolf_ffi_app_state_push_pane(kind, path, weight)`, `wolf_ffi_app_state_push_layout(orientation, child_count, weight)`, `wolf_ffi_app_state_commit_root()` — A post-order token replay that assembles the last tab's root: a layout pops its `child_count` nodes, and `commit_root` attaches the one remaining node, a no-op unless exactly one remains. An unknown `kind` pushes an empty edit pane, so a later layout's count still matches.
 - `wolf_ffi_app_state_pane_cursor(line, col, top_line)`, `wolf_ffi_app_state_pane_scroll(scroll)` — Apply to the pane just pushed when it is an edit or a preview pane respectively.
 - `wolf_ffi_app_state_push_recency(tab)` — Appends to the last window's recency, most recently selected first. It picks a directory's project state and is never stored.
-- `wolf_ffi_app_state_commit()` — Submits the state with its recency; an unchanged tree writes nothing. `wolf_ffi_app_state_flush() -> bool` is as `wolf_ffi_state_flush`.
+- `wolf_ffi_app_state_commit()` — Submits the state with its recency; an unchanged tree writes nothing. `wolf_ffi_app_state_flush() -> bool` blocks until the pending write has been attempted, bounded by an internal timeout, and is true when it was in time or no store exists.
 - `wolf_ffi_app_state_window_state() -> FfiAppState` — The launch read. Empty with no store, nothing saved, or a table from a newer build.
 - `wolf_ffi_app_state_project_state(directory) -> FfiProjectState` — The Open Folder read, which marks the row used. `found` is false when there is none, and `tab().directory()` is the directory asked for.
-- `FfiAppState::windows`, `FfiAppWindow`, `FfiAppTab`, `FfiAppNode` — Accessors over core's model. A field that was not saved or does not apply reads 0, `""`, `false`, `UNSET` or `NONE`, with a `has_…` accessor wherever 0 is also a real value. A missing root and an out-of-range `child` read as an empty edit pane.
+- `FfiAppState::windows`, `FfiAppWindow`, `FfiAppTab`, `FfiAppNode` — Accessors over core's model. A field that was not saved or does not apply reads 0, `""`, `false`, `UNSET` or `NONE`, with a `has_…` accessor wherever 0 is also a real value. A missing root and an out-of-range `child` read as an empty edit pane. `FfiAppWindow::minimized` is the saved flag.
+- `FfiAppTab::restored() -> FfiAppTab` — The tab as [`app_state::restored_tab`](../../wolf-core/src/README.md#app_staters) restores it, with the same directory: a missing file becomes an empty pane in place, and a zoom on it is dropped. The front-end reads its saved tab as is and rebuilds this one.
 
 ## Discriminant tables
 
