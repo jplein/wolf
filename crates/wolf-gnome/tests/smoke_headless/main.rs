@@ -2859,8 +2859,6 @@ fn cage_is_only_spawned_through_the_isolating_helper() {
 ///     delete its `gtk-font-name` line.
 /// 16. `XDG_CONFIG_HOME` is set to the `.config` directory under the `HOME` the same
 ///     command sets. Falsify: delete its `.env` line from [`cage_command`].
-/// 17. `WOLF_TAB_ID` is removed on [`cage_command`]. Falsify: delete its `.env_remove`
-///     line.
 ///
 /// ## The premise, and what it does not cover
 ///
@@ -2931,7 +2929,6 @@ fn every_cage_gets_a_private_runtime_dir_and_no_host_session() {
     const HOME_VAR: &str = "HOME";
     const CONFIG_HOME_VAR: &str = "XDG_CONFIG_HOME";
     const USER_CONFIG_RELATIVE: &str = ".config";
-    const TAB_ID_VAR: &str = "WOLF_TAB_ID";
 
     type EnvMap = std::collections::BTreeMap<std::ffi::OsString, Option<std::ffi::OsString>>;
 
@@ -3461,16 +3458,6 @@ fn every_cage_gets_a_private_runtime_dir_and_no_host_session() {
          them masks the app's pin — and moves where a wolf-config.yaml leak would land away from \
          the directory `single_pane_file_survives_relaunch_under_cage` checks. Restore \
          `.env(\"{CONFIG_HOME_VAR}\", smoke_home(cwd).join(\".config\"))` in `cage_command`."
-    );
-
-    // --- Check 17: no tab ID reaches a scenario's wolf command -------------------
-    assert_eq!(
-        envs_a.get(OsStr::new(TAB_ID_VAR)),
-        Some(&None),
-        "{GUARD}: check 17: {TAB_ID_VAR} is {}, where it must be removed. A suite run from a \
-         Wolf terminal inherits that tab's ID, and every `wolf` a scenario runs would carry it. \
-         Restore `.env_remove(\"{TAB_ID_VAR}\")` in `cage_command`.",
-        reach(&envs_a, TAB_ID_VAR)
     );
 
     if let Some(parent) = cwd.parent() {

@@ -968,7 +968,7 @@ const FO_COLD_BACK_NAME: &str = "foecho";
 ///
 /// | # | edit | predicted red |
 /// | --- | --- | --- |
-/// | S4a | Linux `platform_launcher` answers `None` | exit 31 |
+/// | S4a | Linux `launcher` answers `None` | exit 31 |
 /// | S4b | `PaneHandle::open_file` places at once rather than on a ready wake | the readback or the save |
 /// | S4c | the launched app keeps the command's working directory | exit 21 |
 #[test]
