@@ -73,9 +73,9 @@ final class FileOpenSeamTests: XCTestCase {
     let front = LiveWindow(
       tabs: [LiveTab(id: 21, directory: dirC), LiveTab(id: 22, directory: dirB)], selected: nil)
     XCTAssertEqual(
-      FileOpenSeam.currentTab(windows: [front], stacking: stacking(focusing: [22, 21])), 21,
-      "with no selected tab, the frontmost window's active tab is its most recently focused, 21; "
-        + "22 means the first tab in tab order was taken")
+      FileOpenSeam.currentTab(windows: [front], stacking: stacking(focusing: [21, 22])), 22,
+      "with no selected tab, the frontmost window's active tab is its most recently focused, 22; "
+        + "21 means the first tab in tab order was taken")
   }
 
   // MARK: - F2, F3: a directory

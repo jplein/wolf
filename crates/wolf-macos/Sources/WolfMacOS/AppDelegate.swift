@@ -108,8 +108,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     // here rather than mid-frame.
     FrameMetrics.start()
 
-    // Register the three process-global wake callbacks ONCE; each routes by
-    // the firing core's token through `WindowRegistry`.
+    // Register each process-global wake callback once; the per-core ones route by the firing
+    // core's token through `WindowRegistry`.
     WakeBridge.install()
     PickerWakeBridge.install()
     TreeWakeBridge.install()
