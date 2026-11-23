@@ -111,7 +111,7 @@ A tab holds one root node, a layout or a lone pane, plus:
 
 ### Window
 
-A window holds one or more tabs in tab-bar order, even when the tab bar is hidden, and `active_tab`, the index of the selected one. `frame` is the window's normal frame: its un-maximized, non-fullscreen geometry, in the writing front-end's coordinates (AppKit's bottom-left global coordinates on macOS). A platform that cannot report a window's position writes `x` and `y` as `null`, and restore ignores them; on GNOME this is always the case, since a Wayland client is never told its position.
+A window holds one or more tabs in tab-bar order, even when the tab bar is hidden, `active_tab`, the index of the selected one, and `minimized`, which is `true` for a minimized window and omitted otherwise. `frame` is the window's normal frame: its un-maximized, non-fullscreen geometry, in the writing front-end's coordinates (AppKit's bottom-left global coordinates on macOS). A platform that cannot report a window's position writes `x` and `y` as `null`, and restore ignores them; on GNOME this is always the case, since a Wayland client is never told its position.
 
 ### Window state
 

@@ -52,12 +52,12 @@ use wolf_core::{
     rank_buffers, rank_matches_top_n, rank_palette, AppStateStore, Appearance, BufInfo, BufferRow,
     Cmdline, Command, CommandMru, CoreConfig, CursorShape, FileSearch, FocusDir, Grid,
     HighlightTable, InputEvent, Key, KeyEvent, LayoutIntent, Liveness, MarkdownCursor, MouseAction,
-    MouseButton, MouseEvent, PaletteRow, PaletteRowKind, PaletteWindow, PaneNode, PaneOrientation,
+    MouseButton, MouseEvent, PaletteRow, PaletteRowKind, PaletteWindow, PaneOrientation,
     PaneStatus, PreviewInfo, Pum, ResolvedStyle, Rgb, ScrollDirection, ScrollEvent, SearchMatch,
-    SearchOptions, SearchSession, SplitOrientation, StateStore, TabFiles, TabState, TerminalCell,
-    TerminalCellWidth, TerminalCommand, TerminalCursor, TerminalCursorStyle, TerminalFrame,
-    TerminalId, TerminalMouseEvent, TerminalMouseKind, TerminalScrollEvent, TerminalTarget,
-    TerminalUnderline, Toast, WakeFn, WinInfo, WindowState, WolfCore, WolfState,
+    SearchOptions, SearchSession, SplitOrientation, TabFiles, TerminalCell, TerminalCellWidth,
+    TerminalCommand, TerminalCursor, TerminalCursorStyle, TerminalFrame, TerminalId,
+    TerminalMouseEvent, TerminalMouseKind, TerminalScrollEvent, TerminalTarget, TerminalUnderline,
+    Toast, WakeFn, WinInfo, WolfCore,
 };
 
 // Re-export the bridge's transparent structs so rlib consumers (the Rust tests) can name them;
@@ -341,8 +341,8 @@ mod tristate {
     pub const ON: u8 = 2;
 }
 
-/// How long [`wolf_ffi_state_flush`] (and the shutdown-time flush) blocks
-/// waiting for the state writer thread to drain everything pending.
+/// How long [`wolf_ffi_app_state_flush`] blocks waiting for the state writer
+/// thread to drain everything pending.
 const STATE_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The scroll-direction discriminants packed into [`FfiScrollEvent::direction`],
@@ -572,9 +572,9 @@ mod ffi {
         // Creates a tabpage, `:tcd`'d to `cwd` unless empty, and returns its handle. Blocks briefly;
         // 0 when the core is gone (the caller drops the would-be tab).
         fn create_tabpage(&self, cwd: String) -> i64;
-        // Renders a saved tree (as `FfiTabState::layout` returns it) via `rebuild_layout_spec` and
-        // realizes it in the current tabpage's lone window; returns window handles in leaf order.
-        fn rebuild_layout(&self, layout: &FfiPaneNode) -> Vec<i64>;
+        // Renders `tab` (pass `FfiAppTab::restored`'s output) via `tab_rebuild_spec` and realizes
+        // it in the current tabpage's lone window; returns window handles in leaf order.
+        fn rebuild_tab(&self, tab: &FfiAppTab) -> Vec<i64>;
         // The current tabpage's stable HANDLE via a blocking RPC. 0 when the core is gone.
         fn current_tabpage(&self) -> i64;
         // `Snapshot.current_tabpage` (updated via `wolf_tabpage`), no RPC, so a dead core answers it.
@@ -1023,109 +1023,6 @@ mod ffi {
     }
 
     extern "Rust" {
-        type FfiState;
-
-        // The restored per-window entries (empty when nothing was saved).
-        // `FfiWindowState` is opaque so a `Vec` is supported.
-        fn windows(&self) -> Vec<FfiWindowState>;
-    }
-
-    extern "Rust" {
-        type FfiWindowState;
-
-        // The window origin's x coordinate, in points.
-        fn x(&self) -> f64;
-        // The window origin's y coordinate, in points.
-        fn y(&self) -> f64;
-        // The window width, in points (`<= 0` == unset — do not restore).
-        fn width(&self) -> f64;
-        // The window height, in points (`<= 0` == unset — do not restore).
-        fn height(&self) -> f64;
-        // The window's saved tabs, in tab order. `FfiTabState` is opaque so a
-        // `Vec` is supported.
-        fn tabs(&self) -> Vec<FfiTabState>;
-    }
-
-    extern "Rust" {
-        type FfiTabState;
-
-        // The tab's saved working directory, or "" when never reported.
-        fn cwd(&self) -> String;
-        // Whether the tab's file-tree sidebar was visible.
-        fn sidebar_visible(&self) -> bool;
-        // Whether the tab has a saved split layout: false only for an empty-state lone pane (a lone
-        // pane showing a file or preview persists a single leaf).
-        fn has_layout(&self) -> bool;
-        // The tab's saved pane-split layout as an opaque `FfiPaneNode` root (an
-        // empty leaf when the tab has no layout).
-        fn layout(&self) -> FfiPaneNode;
-    }
-
-    extern "Rust" {
-        type FfiPaneNode;
-
-        // Whether this node is a leaf (vs. a split).
-        fn is_leaf(&self) -> bool;
-        // Whether this leaf is a Markdown preview (its `leaf_path` is the source
-        // file's abs path, restored via `wolf_preview_file`); false for a split.
-        fn is_preview(&self) -> bool;
-        // Whether this leaf is a terminal pane (its `leaf_path` is the directory its shell
-        // starts in); false for a split.
-        fn is_terminal(&self) -> bool;
-        // Whether this leaf is its tab's zoomed pane; false for a split.
-        fn is_zoomed(&self) -> bool;
-        // For a leaf: the buffer path ("" for an unnamed buffer); "" for a split.
-        fn leaf_path(&self) -> String;
-        // For a split: the orientation discriminant (0 = horizontal, 1 = vertical);
-        // 0 for a leaf.
-        fn orientation(&self) -> u8;
-        // For a split: the number of children; 0 for a leaf.
-        fn child_count(&self) -> u32;
-        // For a split: the weight of child `index` (0.0 when out of range / a leaf).
-        fn weight(&self, index: u32) -> f64;
-        // For a split: child `index` as another opaque `FfiPaneNode` (an empty leaf
-        // when out of range / a leaf) — recursion via repeated opaque returns.
-        fn child(&self, index: u32) -> FfiPaneNode;
-    }
-
-    extern "Rust" {
-        // The pre-start restore read: never creates the file or opens the live store, and an absent,
-        // corrupt or unresolvable file yields an empty window list.
-        fn wolf_ffi_load_state() -> FfiState;
-
-        // Clears the write-side scratch tree, starting a fresh whole-tree
-        // snapshot the coordinator builds up window-by-window / tab-by-tab.
-        fn wolf_ffi_state_snapshot_begin();
-        // Pushes a window with the given geometry (points) and an empty tab list
-        // onto the scratch tree. Subsequent `add_tab` calls attach to it.
-        fn wolf_ffi_state_snapshot_add_window(x: f64, y: f64, width: f64, height: f64);
-        // Pushes a tab (its cwd + sidebar visibility) onto the most recently
-        // added window. A defensive no-op when no window has been added yet.
-        fn wolf_ffi_state_snapshot_add_tab(cwd: String, sidebar_visible: bool);
-        // Pushes a leaf (`path`, a preview, terminal or zoomed pane per its flags, `weight` in its
-        // parent): a post-order replay that carries one tab's split tree across the bridge.
-        fn wolf_ffi_state_layout_push_leaf(
-            path: String,
-            preview: bool,
-            terminal: bool,
-            zoomed: bool,
-            weight: f64,
-        );
-        // Pops `child_count` nodes, wraps them in a split (`orientation` 0 = horizontal, 1 =
-        // vertical) and pushes it back with `weight` (1.0 for the root split).
-        fn wolf_ffi_state_layout_push_split(orientation: u8, child_count: u32, weight: f64);
-        // Moves the single remaining layout node to the last window's last tab and clears the stack;
-        // a no-op unless exactly one node remains and a tab exists.
-        fn wolf_ffi_state_layout_commit_to_tab();
-        // Commits the scratch tree into the shared state store (a whole-tree
-        // `set_snapshot`); an identical tree is a no-op there.
-        fn wolf_ffi_state_snapshot_commit();
-        // Blocks until every pending state write is attempted (bounded by `STATE_FLUSH_TIMEOUT`).
-        // Returns whether all flushed in time; true when no store exists.
-        fn wolf_ffi_state_flush() -> bool;
-    }
-
-    extern "Rust" {
         type FfiAppState;
 
         // The saved windows, frontmost first; empty when nothing was saved.
@@ -1142,6 +1039,7 @@ mod ffi {
         fn width(&self) -> f64;
         fn height(&self) -> f64;
         fn active_tab(&self) -> u32;
+        fn minimized(&self) -> bool;
         fn tabs(&self) -> Vec<FfiAppTab>;
     }
 
@@ -1170,6 +1068,8 @@ mod ffi {
         fn has_drawer(&self) -> bool;
         fn drawer_open(&self) -> bool;
         fn drawer_share(&self) -> f64;
+        // The tab as `app_state::restored_tab` restores it: missing files become empty panes.
+        fn restored(&self) -> FfiAppTab;
     }
 
     extern "Rust" {
@@ -1221,6 +1121,8 @@ mod ffi {
             height: f64,
             active_tab: u32,
         );
+        // Sets the last window's `minimized`; a no-op with no window.
+        fn wolf_ffi_app_state_window_minimized(minimized: bool);
         // Pushes a tab onto the last window; each reference is a `pane_ref` kind and an index.
         fn wolf_ffi_app_state_add_tab(
             directory: String,
@@ -1696,24 +1598,6 @@ fn registered_search_wake(token: u64) -> WakeFn {
     })
 }
 
-/// The process-wide application-state store, opened once over
-/// [`wolf_core::state_dir`] and cloned into every window's handle.
-///
-/// Opening the same `state.json` directory more than once would race the
-/// per-store writer threads (unsupported), so all windows SHARE one store. The
-/// `Option` is `None` when no state dir could be resolved — state persistence
-/// is then disabled process-wide (logged, never fatal). `OnceLock` makes the
-/// open lazy and single-shot.
-static SHARED_STORE: OnceLock<Option<StateStore>> = OnceLock::new();
-
-/// Returns a clone of the process-wide [`StateStore`], opening it on first use
-/// over [`wolf_core::state_dir`]. `None` when no state dir could be resolved.
-fn shared_store() -> Option<StateStore> {
-    SHARED_STORE
-        .get_or_init(|| wolf_core::state_dir().map(|dir| StateStore::open(&dir)))
-        .clone()
-}
-
 /// Returns the ancestor directory rel-paths of `rel_path`, from the cwd root down
 /// to the node's parent (`"src/main.rs"` -> `["src"]`, `"README.md"` -> `[]`).
 ///
@@ -1819,456 +1703,11 @@ pub fn wolf_ffi_library_license_notices() -> String {
     wolf_core::LIBRARY_LICENSE_NOTICES.to_owned()
 }
 
-// --- FfiState / FfiWindowState: the saved application state (opaque to Swift) ---
-
-/// The saved application state as loaded by [`wolf_ffi_load_state`] (opaque to
-/// Swift). A thin wrapper vending the per-window entries — kept opaque (rather
-/// than returning the `Vec` from the free fn directly) so the bridge stays on
-/// the proven opaque-type-method `Vec` pattern.
-pub struct FfiState {
-    windows: Vec<FfiWindowState>,
-}
-
-impl FfiState {
-    /// The restored per-window entries (empty when nothing was saved).
-    #[must_use]
-    pub fn windows(&self) -> Vec<FfiWindowState> {
-        self.windows.clone()
-    }
-}
-
-/// One saved window's state (opaque to Swift, so a `Vec<FfiWindowState>` is
-/// supported — swift-bridge emits Vec support only for opaque types).
-///
-/// A projection of [`wolf_core::WindowState`] exposing the saved geometry plus
-/// the window's tabs through per-field accessors.
-#[derive(Clone)]
-pub struct FfiWindowState {
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-    tabs: Vec<FfiTabState>,
-}
-
-impl FfiWindowState {
-    /// The window origin's x coordinate, in points.
-    #[must_use]
-    pub fn x(&self) -> f64 {
-        self.x
-    }
-
-    /// The window origin's y coordinate, in points.
-    #[must_use]
-    pub fn y(&self) -> f64 {
-        self.y
-    }
-
-    /// The window width, in points (`<= 0` == unset — do not restore).
-    #[must_use]
-    pub fn width(&self) -> f64 {
-        self.width
-    }
-
-    /// The window height, in points (`<= 0` == unset — do not restore).
-    #[must_use]
-    pub fn height(&self) -> f64 {
-        self.height
-    }
-
-    /// The window's saved tabs, in tab order.
-    #[must_use]
-    pub fn tabs(&self) -> Vec<FfiTabState> {
-        self.tabs.clone()
-    }
-
-    /// Projects a [`wolf_core::WindowState`] into its FFI accessor form.
-    fn from_window(w: &WindowState) -> Self {
-        Self {
-            x: w.x,
-            y: w.y,
-            width: w.width,
-            height: w.height,
-            tabs: w.tabs.iter().map(FfiTabState::from_tab).collect(),
-        }
-    }
-}
-
-/// One saved tab's state (opaque to Swift, so a `Vec<FfiTabState>` is supported
-/// — swift-bridge emits Vec support only for opaque types).
-///
-/// A projection of [`wolf_core::TabState`] exposing the saved working directory
-/// and sidebar visibility through per-field accessors.
-#[derive(Clone)]
-pub struct FfiTabState {
-    cwd: String,
-    sidebar_visible: bool,
-    layout: Option<PaneNode>,
-}
-
-impl FfiTabState {
-    /// The saved working directory, or `""` when never reported.
-    #[must_use]
-    pub fn cwd(&self) -> String {
-        self.cwd.clone()
-    }
-
-    /// Whether the tab's file-tree sidebar was visible.
-    #[must_use]
-    pub fn sidebar_visible(&self) -> bool {
-        self.sidebar_visible
-    }
-
-    /// Whether the tab carries a saved pane-split layout (false ONLY for an
-    /// empty-state (unnamed, non-preview) lone pane; a lone pane showing a file or
-    /// preview persists a single leaf).
-    #[must_use]
-    pub fn has_layout(&self) -> bool {
-        self.layout.is_some()
-    }
-
-    /// The tab's saved pane-split layout as an opaque [`FfiPaneNode`] root (an
-    /// empty leaf when the tab has no layout).
-    #[must_use]
-    pub fn layout(&self) -> FfiPaneNode {
-        FfiPaneNode {
-            node: self.layout.clone().unwrap_or(PaneNode::Leaf {
-                path: String::new(),
-                preview: false,
-                terminal: false,
-                zoomed: false,
-            }),
-        }
-    }
-
-    /// Projects a [`wolf_core::TabState`] into its FFI accessor form.
-    fn from_tab(t: &TabState) -> Self {
-        Self {
-            cwd: t.cwd.clone(),
-            sidebar_visible: t.sidebar_visible,
-            layout: t.layout.clone(),
-        }
-    }
-}
-
-/// One node of a tab's saved pane-split tree (opaque to Swift). A projection of
-/// [`wolf_core::PaneNode`] read back recursively: `child(index)` returns another
-/// `FfiPaneNode` (repeated opaque returns rather than a `Vec`, so the bridge stays
-/// on scalar/String/opaque returns).
-pub struct FfiPaneNode {
-    node: PaneNode,
-}
-
-impl FfiPaneNode {
-    /// Whether this node is a leaf (vs. a split).
-    #[must_use]
-    pub fn is_leaf(&self) -> bool {
-        matches!(self.node, PaneNode::Leaf { .. })
-    }
-
-    /// Whether this leaf is a Markdown preview (its `leaf_path` is the source file's
-    /// abs path, restored via `wolf_preview_file`); `false` for a split.
-    #[must_use]
-    pub fn is_preview(&self) -> bool {
-        match &self.node {
-            PaneNode::Leaf { preview, .. } => *preview,
-            PaneNode::Split { .. } => false,
-        }
-    }
-
-    /// Whether this leaf is a terminal pane (its `leaf_path` is the directory its shell
-    /// starts in); `false` for a split.
-    #[must_use]
-    pub fn is_terminal(&self) -> bool {
-        match &self.node {
-            PaneNode::Leaf { terminal, .. } => *terminal,
-            PaneNode::Split { .. } => false,
-        }
-    }
-
-    /// Whether this leaf is its tab's zoomed pane, which the restore re-zooms; `false` for a
-    /// split.
-    #[must_use]
-    pub fn is_zoomed(&self) -> bool {
-        match &self.node {
-            PaneNode::Leaf { zoomed, .. } => *zoomed,
-            PaneNode::Split { .. } => false,
-        }
-    }
-
-    /// For a leaf: the buffer path (`""` for an unnamed buffer); `""` for a split.
-    #[must_use]
-    pub fn leaf_path(&self) -> String {
-        match &self.node {
-            PaneNode::Leaf { path, .. } => path.clone(),
-            PaneNode::Split { .. } => String::new(),
-        }
-    }
-
-    /// For a split: the orientation discriminant (`0` = horizontal, `1` =
-    /// vertical); `0` for a leaf.
-    #[must_use]
-    pub fn orientation(&self) -> u8 {
-        match &self.node {
-            PaneNode::Split { orientation, .. } => match orientation {
-                PaneOrientation::Horizontal => 0,
-                PaneOrientation::Vertical => 1,
-            },
-            PaneNode::Leaf { .. } => 0,
-        }
-    }
-
-    /// For a split: the number of children; `0` for a leaf.
-    #[must_use]
-    pub fn child_count(&self) -> u32 {
-        match &self.node {
-            PaneNode::Split { children, .. } => children.len() as u32,
-            PaneNode::Leaf { .. } => 0,
-        }
-    }
-
-    /// For a split: the weight of child `index` (`0.0` when out of range / a leaf).
-    #[must_use]
-    pub fn weight(&self, index: u32) -> f64 {
-        match &self.node {
-            PaneNode::Split { weights, .. } => weights.get(index as usize).copied().unwrap_or(0.0),
-            PaneNode::Leaf { .. } => 0.0,
-        }
-    }
-
-    /// For a split: child `index` as another opaque [`FfiPaneNode`] (an empty leaf
-    /// when out of range / a leaf).
-    #[must_use]
-    pub fn child(&self, index: u32) -> FfiPaneNode {
-        let node = match &self.node {
-            PaneNode::Split { children, .. } => children.get(index as usize).cloned(),
-            PaneNode::Leaf { .. } => None,
-        };
-        FfiPaneNode {
-            node: node.unwrap_or(PaneNode::Leaf {
-                path: String::new(),
-                preview: false,
-                terminal: false,
-                zoomed: false,
-            }),
-        }
-    }
-}
-
-/// Loads the saved application state from the platform state dir — the
-/// PRE-START restore read the front-end performs before `wolf_ffi_start`.
-///
-/// A free FFI fn delegating to [`wolf_core::state_dir`] +
-/// [`wolf_core::load_state`]: it NEVER creates or modifies the file and NEVER
-/// opens the live store (the handle does that at start). An absent/corrupt
-/// file or an unresolvable state dir all yield an empty window list —
-/// infallible across the bridge, parallel to [`wolf_ffi_load_config`].
-#[must_use]
-pub fn wolf_ffi_load_state() -> FfiState {
-    let state = wolf_core::state_dir()
-        .and_then(|dir| wolf_core::load_state(&dir))
-        .unwrap_or_default();
-    FfiState {
-        windows: state
-            .windows
-            .iter()
-            .map(FfiWindowState::from_window)
-            .collect(),
-    }
-}
-
-// --- Write-side snapshot builder (free fns over the shared store + a scratch tree) ---
-
-/// The write-side scratch tree the coordinator builds up window-by-window /
-/// tab-by-tab before committing it whole. A process-wide `Mutex` (the builder is
-/// only ever driven from the AppKit main thread, but the lock keeps the free fns
-/// sound regardless), lazily initialized by [`scratch`].
-static SCRATCH: OnceLock<Mutex<WolfState>> = OnceLock::new();
-
-/// Returns the process-wide scratch-tree mutex, initializing it empty on first
-/// use.
-fn scratch() -> &'static Mutex<WolfState> {
-    SCRATCH.get_or_init(|| Mutex::new(WolfState::default()))
-}
-
-/// Clears the write-side scratch tree, starting a fresh whole-tree snapshot.
-///
-/// The coordinator calls this, then one
-/// [`wolf_ffi_state_snapshot_add_window`] per live window (each followed by its
-/// tabs' [`wolf_ffi_state_snapshot_add_tab`] calls), then
-/// [`wolf_ffi_state_snapshot_commit`].
-pub fn wolf_ffi_state_snapshot_begin() {
-    scratch()
-        .lock()
-        .expect("state scratch mutex poisoned")
-        .windows
-        .clear();
-}
-
-/// Pushes a window with the given geometry (points; AppKit bottom-left global
-/// coords on macOS) and an EMPTY tab list onto the scratch tree.
-///
-/// Subsequent [`wolf_ffi_state_snapshot_add_tab`] calls attach their tabs to
-/// this window (the most recently added one).
-pub fn wolf_ffi_state_snapshot_add_window(x: f64, y: f64, width: f64, height: f64) {
-    scratch()
-        .lock()
-        .expect("state scratch mutex poisoned")
-        .windows
-        .push(WindowState {
-            x,
-            y,
-            width,
-            height,
-            tabs: Vec::new(),
-        });
-}
-
-/// Pushes a tab (its `cwd` + `sidebar_visible`) onto the most recently added
-/// window. A defensive no-op when no window has been added yet.
-pub fn wolf_ffi_state_snapshot_add_tab(cwd: String, sidebar_visible: bool) {
-    if let Some(window) = scratch()
-        .lock()
-        .expect("state scratch mutex poisoned")
-        .windows
-        .last_mut()
-    {
-        window.tabs.push(TabState {
-            cwd,
-            sidebar_visible,
-            layout: None,
-        });
-    }
-}
-
-/// The layout push-builder stack: `(node, weight-within-parent)` pairs the
-/// post-order token replay assembles into a tab's pane-split tree across the
-/// scalar bridge. A process-wide `Mutex` (driven only from the AppKit main thread,
-/// but the lock keeps the free fns sound), lazily initialized by [`layout_stack`].
-static LAYOUT_STACK: OnceLock<Mutex<Vec<(PaneNode, f64)>>> = OnceLock::new();
-
-/// Returns the process-wide layout-stack mutex, initializing it empty on first use.
-fn layout_stack() -> &'static Mutex<Vec<(PaneNode, f64)>> {
-    LAYOUT_STACK.get_or_init(|| Mutex::new(Vec::new()))
-}
-
-/// Pushes a LEAF node (buffer `path`, a Markdown preview of `path` when `preview`
-/// is true, a terminal pane starting in the directory `path` when `terminal` is true,
-/// its tab's zoomed pane when `zoomed` is true, weighing `weight` within its parent
-/// split) onto the layout push-builder stack.
-pub fn wolf_ffi_state_layout_push_leaf(
-    path: String,
-    preview: bool,
-    terminal: bool,
-    zoomed: bool,
-    weight: f64,
-) {
-    layout_stack()
-        .lock()
-        .expect("layout stack mutex poisoned")
-        .push((
-            PaneNode::Leaf {
-                path,
-                preview,
-                terminal,
-                zoomed,
-            },
-            weight,
-        ));
-}
-
-/// Pops the top `child_count` layout-stack nodes (in DFS push order), wraps them
-/// into a SPLIT (`orientation` 0 → Horizontal, 1 → Vertical), and pushes it back
-/// (weighing `weight` within its parent; the root split carries weight 1.0). A
-/// defensive no-op when the stack holds fewer than `child_count` nodes.
-pub fn wolf_ffi_state_layout_push_split(orientation: u8, child_count: u32, weight: f64) {
-    let mut stack = layout_stack().lock().expect("layout stack mutex poisoned");
-    let count = child_count as usize;
-    if stack.len() < count {
-        tracing::warn!(
-            "wolf-ffi: layout push_split wants {count} children but only {} on the stack",
-            stack.len()
-        );
-        return;
-    }
-    // The top `count` pairs are the children in DFS (left-to-right) order.
-    let split_at = stack.len() - count;
-    let popped = stack.split_off(split_at);
-    let orientation = match orientation {
-        1 => PaneOrientation::Vertical,
-        _ => PaneOrientation::Horizontal,
-    };
-    let weights = popped.iter().map(|(_, w)| *w).collect();
-    let children = popped.into_iter().map(|(node, _)| node).collect();
-    stack.push((
-        PaneNode::Split {
-            orientation,
-            weights,
-            children,
-        },
-        weight,
-    ));
-}
-
-/// Pops the single remaining layout-stack node onto the scratch tree's LAST
-/// window's LAST tab's `layout`, then clears the stack. A defensive no-op (still
-/// clearing the stack) when the stack is not exactly one node or there is no tab
-/// to attach to.
-pub fn wolf_ffi_state_layout_commit_to_tab() {
-    let node = {
-        let mut stack = layout_stack().lock().expect("layout stack mutex poisoned");
-        let node = if stack.len() == 1 {
-            Some(stack[0].0.clone())
-        } else {
-            tracing::warn!(
-                "wolf-ffi: layout commit_to_tab expected 1 root node, found {}",
-                stack.len()
-            );
-            None
-        };
-        stack.clear();
-        node
-    };
-    let Some(node) = node else {
-        return;
-    };
-    if let Some(tab) = scratch()
-        .lock()
-        .expect("state scratch mutex poisoned")
-        .windows
-        .last_mut()
-        .and_then(|w| w.tabs.last_mut())
-    {
-        tab.layout = Some(node);
-    }
-}
-
-/// Commits the scratch tree into the process-wide state store via a whole-tree
-/// [`StateStore::set_snapshot`] (an identical tree is a no-op there, so a
-/// redundant snapshot causes no disk churn). A no-op when no state dir resolved.
-pub fn wolf_ffi_state_snapshot_commit() {
-    let state = scratch()
-        .lock()
-        .expect("state scratch mutex poisoned")
-        .clone();
-    if let Some(store) = shared_store() {
-        store.set_snapshot(state);
-    }
-}
-
-/// Blocks until every pending state write has had its disk write attempted
-/// (bounded by `STATE_FLUSH_TIMEOUT`). Returns whether everything pending was
-/// flushed in time; `true` when no store exists (there is nothing to flush).
-#[must_use]
-pub fn wolf_ffi_state_flush() -> bool {
-    shared_store().is_none_or(|store| store.flush(STATE_FLUSH_TIMEOUT))
-}
-
 // --- The application-state surface: builder, submit and readers over `AppStateStore` ---
 
 /// The process-wide application-state store, opened once over
-/// [`wolf_core::state_dir`], as [`SHARED_STORE`] is: its unchanged-tree check is
-/// per store, so every window shares one. `None` when no state dir resolved.
+/// [`wolf_core::state_dir`]: its unchanged-tree check is per store, so every
+/// window shares one. `None` when no state dir resolved.
 ///
 /// [`WolfCoreHandle::shutdown`] does not flush it: the final write is a front-end
 /// step taken before any Neovim exits, through [`wolf_ffi_app_state_flush`].
@@ -2349,8 +1788,7 @@ pub fn wolf_ffi_app_state_begin() {
 }
 
 /// Pushes a window with an empty tab list and an empty recency list. `x` and `y`
-/// are stored as `None` when `has_position` is false, which GNOME's model writes
-/// as `null`.
+/// are stored as `None` when `has_position` is false, which is written as `null`.
 pub fn wolf_ffi_app_state_add_window(
     has_position: bool,
     x: f64,
@@ -2369,8 +1807,16 @@ pub fn wolf_ffi_app_state_add_window(
         },
         active_tab: active_tab as usize,
         tabs: Vec::new(),
+        minimized: false,
     });
     scratch.recency.push(Vec::new());
+}
+
+/// Sets the last window's `minimized`. A no-op with no window.
+pub fn wolf_ffi_app_state_window_minimized(minimized: bool) {
+    if let Some(window) = app_scratch().state.windows.last_mut() {
+        window.minimized = minimized;
+    }
 }
 
 /// Pushes a tab with no root onto the last window, its `focused` and `zoomed`
@@ -2645,6 +2091,12 @@ impl FfiAppWindow {
         u32::try_from(self.window.active_tab).unwrap_or(u32::MAX)
     }
 
+    /// Whether the window was minimized.
+    #[must_use]
+    pub fn minimized(&self) -> bool {
+        self.window.minimized
+    }
+
     /// The window's tabs, in tab-bar order.
     #[must_use]
     pub fn tabs(&self) -> Vec<FfiAppTab> {
@@ -2778,6 +2230,16 @@ impl FfiAppTab {
     #[must_use]
     pub fn drawer_share(&self) -> f64 {
         self.content.drawer.map_or(0.0, |d| d.share)
+    }
+
+    /// The tab as [`app::restored_tab`] restores it, with the same directory: a
+    /// missing file becomes an empty pane in place, and a zoom on it is dropped.
+    #[must_use]
+    pub fn restored(&self) -> FfiAppTab {
+        FfiAppTab {
+            directory: self.directory.clone(),
+            content: app::restored_tab(&self.content),
+        }
     }
 }
 
@@ -3168,27 +2630,30 @@ impl WolfCoreHandle {
         core.create_tabpage(path.as_deref())
     }
 
-    /// Realizes the saved pane-split tree `layout` (the node [`FfiTabState::layout`]
-    /// returned) in the current tabpage's single starting window, returning the
-    /// resulting window handles in DFS/leaf order.
+    /// Realizes `tab`'s root in the current tabpage's single starting window,
+    /// returning the resulting window handles in DFS/leaf order.
     ///
-    /// Rust renders the spec with [`wolf_core::state::rebuild_layout_spec`], so no
-    /// front-end renders it. Delegates to [`WolfCore::rebuild_layout`], which drives the
-    /// `wolf_rebuild_layout` Lua helper (`:split`/`:vsplit` + `:edit`). Blocks
-    /// briefly on the captive nvim; an empty `Vec` on error / when the core is
-    /// gone. nvim produces only the window COUNT + TOPOLOGY + per-window BUFFER;
-    /// sizes come from the front-end's weights.
+    /// Rust renders the spec with [`app::tab_rebuild_spec`], so no front-end renders
+    /// it. It checks no file, so pass it [`FfiAppTab::restored`]'s output. Delegates
+    /// to [`WolfCore::rebuild_layout`], which drives the `wolf_rebuild_layout` Lua
+    /// helper (`:split`/`:vsplit` + `:edit`). Blocks briefly on the captive nvim; an
+    /// empty `Vec` when the tab has no root, on error, or when the core is gone.
+    /// nvim produces only the window COUNT + TOPOLOGY + per-window BUFFER; sizes
+    /// come from the front-end's weights.
     ///
     /// When it returns, [`win_buffer`](Self::win_buffer) and [`previews`](Self::previews)
     /// already report every returned window, so a state commit straight after it reads
     /// the restored files rather than the startup buffer.
     #[must_use]
-    pub fn rebuild_layout(&self, layout: &FfiPaneNode) -> Vec<i64> {
+    pub fn rebuild_tab(&self, tab: &FfiAppTab) -> Vec<i64> {
+        let Some(spec) = app::tab_rebuild_spec(&tab.content) else {
+            return Vec::new();
+        };
         let borrow = self.core.borrow();
         let Some(core) = borrow.as_ref() else {
             return Vec::new();
         };
-        core.rebuild_layout(&wolf_core::state::rebuild_layout_spec(&layout.node))
+        core.rebuild_layout(&spec)
     }
 
     /// The current tabpage's stable HANDLE via a blocking RPC. 0 when the core
@@ -3339,13 +2804,6 @@ impl WolfCoreHandle {
     /// it via [`WolfCore::shutdown`]; any shutdown error is logged, not returned
     /// (the bridge signature is infallible).
     pub fn shutdown(&self) {
-        // Drain any pending state writes BEFORE the core (and with it the
-        // process's reason to live) goes away; bounded so shutdown never hangs.
-        if let Some(store) = shared_store() {
-            if !store.flush(STATE_FLUSH_TIMEOUT) {
-                tracing::warn!("wolf-ffi: state flush timed out during shutdown");
-            }
-        }
         if let Some(core) = self.core.borrow_mut().take() {
             if let Err(e) = core.shutdown() {
                 tracing::warn!("wolf-ffi: core shutdown failed: {e}");
@@ -4280,8 +3738,8 @@ impl WolfCoreHandle {
 /// A fresh wake token is minted (via `NEXT_WAKE_TOKEN`) and captured by the
 /// core's [`WakeFn`] so wakes route back to THIS tab. State persistence is not
 /// wired per-core: the coordinator walks the whole window/tab tree and
-/// commits it via the write-side snapshot builder free fns (see
-/// [`wolf_ffi_state_snapshot_begin`]).
+/// commits it via the app-state builder free fns (see
+/// [`wolf_ffi_app_state_begin`]).
 #[must_use]
 pub fn wolf_ffi_start(
     init_lua: String,

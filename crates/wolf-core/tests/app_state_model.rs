@@ -5,11 +5,12 @@
 //!
 //! - The spec's JSON example parses, means what the spec says, and serializes back to the same
 //!   document: the same keys, the same array lengths, and the same numbers.
-//! - The fields the front-ends write only in later tasks (`cursor`, `top_line`, `scroll`,
-//!   `focused`, the sidebar's `mode`, `query` and toggles, and `drawer`) read as `None` when
-//!   absent and are not written back as `null`.
+//! - The fields a front-end may not capture (`cursor`, `top_line`, `scroll`, `focused`, the
+//!   sidebar's `mode`, `query` and toggles, and `drawer`) read as `None` when absent and are not
+//!   written back as `null`.
 //! - `frame.x` and `frame.y`, a tab's `root` and its `zoomed` are always written, `null` when
 //!   unset, as the spec writes them.
+//! - A window's `minimized` is written only when `true`, and reads `false` when absent.
 //! - A pane reference is a depth-first pane index or the string `"drawer"`.
 //! - A project state is `{"frame": …, "tab": …}`, and its tab carries no `directory`.
 //!
@@ -186,6 +187,7 @@ fn the_spec_example_parses_to_its_meaning() {
                 height: 900.0,
             },
             active_tab: 0,
+            minimized: false,
             tabs: vec![Tab {
                 directory: "/home/user/dev/project".to_owned(),
                 content: TabContent {
@@ -235,7 +237,7 @@ fn optional_fields_read_as_nothing_to_restore() {
     let parsed: WindowState = serde_json::from_str(SPARSE).unwrap_or_else(|err| {
         panic!(
             "a tab without cursor, top_line, scroll, focused, sidebar mode, query, toggles or \
-             drawer must parse, since the front-ends write them only in later tasks: {err}"
+             drawer must parse, since a front-end may not capture them: {err}"
         )
     });
     let tab = &parsed.windows[0].tabs[0].content;
@@ -315,6 +317,58 @@ fn a_frame_without_a_position_writes_null_x_and_y() {
              None here means the key is skipped. Written: {written}"
         );
     }
+}
+
+/// A window's `minimized` is written only when `true`, and a window without the key reads `false`.
+#[test]
+fn a_window_writes_minimized_only_when_true() {
+    let window = |minimized: bool| Window {
+        frame: Frame {
+            x: Some(10.0),
+            y: Some(20.0),
+            width: 800.0,
+            height: 600.0,
+        },
+        active_tab: 0,
+        minimized,
+        tabs: Vec::new(),
+    };
+
+    let shown = to_value(&window(false), "a window that is not minimized");
+    assert_eq!(
+        object(&shown, "a window").get("minimized"),
+        None,
+        "a window that is not minimized must write no \"minimized\" key, so §2's example and \
+         every saved row stay byte-identical; Some means the field is written though false. \
+         Written: {shown}"
+    );
+    let hidden = to_value(&window(true), "a minimized window");
+    assert_eq!(
+        object(&hidden, "a window").get("minimized"),
+        Some(&Value::Bool(true)),
+        "a minimized window must write \"minimized\": true; None means the field is never \
+         written, so §5 cannot restore it minimized. Written: {hidden}"
+    );
+
+    let absent: Window = serde_json::from_str(
+        r#"{"frame": {"x": 1, "y": 2, "width": 3, "height": 4}, "active_tab": 0, "tabs": []}"#,
+    )
+    .unwrap_or_else(|err| {
+        panic!("a window without \"minimized\" must parse, as every older row does: {err}")
+    });
+    assert!(
+        !absent.minimized,
+        "a window without \"minimized\" must read false"
+    );
+    let present: Window = serde_json::from_str(
+        r#"{"frame": {"x": 1, "y": 2, "width": 3, "height": 4}, "active_tab": 0,
+            "minimized": true, "tabs": []}"#,
+    )
+    .unwrap_or_else(|err| panic!("a window with \"minimized\": true must parse: {err}"));
+    assert!(
+        present.minimized,
+        "a window with \"minimized\": true must read true; false means the key is ignored on read"
+    );
 }
 
 /// An empty tab writes `"directory": ""` and `"root": null`, and parses back equal.

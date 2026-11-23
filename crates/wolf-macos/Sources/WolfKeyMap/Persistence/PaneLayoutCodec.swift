@@ -1,7 +1,7 @@
 // Pure codec between the `PaneTree` layout and its persisted and FFI shapes.
 
 /// A persistable, serializable mirror of a pane-split tree keyed by per-leaf
-/// buffer path (the FFI + `state.json` shape). Either a leaf bound to a buffer
+/// buffer path (the shape the window state is gathered into). Either a leaf bound to a buffer
 /// path (`""` for an unnamed buffer) or an n-ary split of child nodes along
 /// `orientation` with a parallel per-child `weights` vector.
 public enum SavedPaneNode: Hashable {

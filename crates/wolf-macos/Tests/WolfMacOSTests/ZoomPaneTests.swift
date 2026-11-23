@@ -169,8 +169,8 @@ final class ZoomPaneTests: XCTestCase {
         + " Unchanged means the grid sizes still follow the unzoomed layout")
     XCTAssertEqual(
       container.paneLayout, layout0,
-      "while zoomed, paneLayout must still be the unzoomed tree, which state.json records; the"
-        + " zoomed pane alone means a relaunch would lose the other panes")
+      "while zoomed, paneLayout must still be the unzoomed tree, which the window state records;"
+        + " the zoomed pane alone means a relaunch would lose the other panes")
 
     // Both presses land in the zoomed pane: a hidden divider or edge must not take them.
     guard
@@ -630,9 +630,11 @@ final class ZoomPaneTests: XCTestCase {
 
   // MARK: - Z13: a save and restore of the layout
 
-  /// A zoom survives the production save and restore: the zoomed leaf is gathered, pushed
-  /// through the bridge into state.json, read back, rebuilt in a second core and re-zoomed,
-  /// with Neovim's current window on it and the saved weights behind it.
+  /// A zoom survives the production save and restore: the zoomed leaf is gathered, submitted
+  /// through `WindowStateCodec` into the window state, read back and restored, rebuilt in a
+  /// second core through `rebuild_tab` and re-zoomed, with Neovim's current window on it and the
+  /// saved weights behind it. `restored()` replaces at most A, whose startup buffer is no file
+  /// on disk, in place, so B keeps index 1 and its zoom.
   func testZoomSurvivesASaveAndRestoreOfTheLayout() {
     let base =
       ProcessInfo.processInfo.environment["TEST_TMPDIR"].flatMap { $0.isEmpty ? nil : $0 }
@@ -656,19 +658,12 @@ final class ZoomPaneTests: XCTestCase {
     defer { fixture.shutdown() }
     let handle = fixture.handle
     let container = fixture.container
-    // Element refs must not outlive their vec, so `windows` and `tabs` stay bound.
-    let windows = wolf_ffi_load_state().windows()
-    guard windows.len() > 0, let window = windows.get(index: UInt(windows.len() - 1)) else {
-      XCTFail("the committed state must load back with a window")
+    let loaded = WindowStateCodec.load(wolf_ffi_app_state_window_state())
+    guard let rebuild = loaded.last?.tabs.last?.rebuild else {
+      XCTFail("the committed window state must load back with a rebuild on its last tab")
       return
     }
-    let tabs = window.tabs()
-    guard tabs.len() > 0, let tab = tabs.get(index: UInt(tabs.len() - 1)), tab.has_layout() else {
-      XCTFail("the committed state must load back with a layout on its last tab")
-      return
-    }
-    let node = tab.layout()
-    container.requestLayoutRebuild(AppDelegate.savedPaneNode(from: node), node: node)
+    container.requestLayoutRebuild(rebuild.layout, tab: rebuild.tab)
     let rebuilt = fixture.wake { container.paneCount == 3 }
     XCTAssertTrue(
       rebuilt, "premise: the restore must rebuild three tree panes: \(container.paneCount)")
@@ -681,7 +676,7 @@ final class ZoomPaneTests: XCTestCase {
     XCTAssertEqual(
       unzoomedAt, [],
       "the restored view must be zoomed at every wake. Unzoomed at all means the zoom is lost"
-        + " on the way through gatherTab, pushLayout, the load or rebuildLayout; unzoomed after"
+        + " on the way through gatherTab, submit, the load or rebuildLayout; unzoomed after"
         + " a zoomed wake means Neovim reported another pane after the rebuild")
     let frames = container.visiblePaneFrames
     guard frames.count == 1, let zoomedFrame = frames.first else {
@@ -813,7 +808,7 @@ final class ZoomPaneTests: XCTestCase {
   }
 
   /// Builds `vertical[A, horizontal[B, C]]` in a first core, drags A's divider, edits `path`
-  /// into B and zooms it, then commits the tab through the production save path and flushes.
+  /// into B and zooms it, then submits the tab through `WindowStateCodec` and flushes.
   /// Returns the layout's topology and weights, with no paths, after shutting the core down;
   /// `nil`, with the test failed, when a step does not happen.
   private func saveWithBZoomed(
@@ -866,14 +861,13 @@ final class ZoomPaneTests: XCTestCase {
       "the gathered layout must mark B, depth-first leaf 1; nil means the zoom is dropped from"
         + " the saved state", file: file, line: line)
 
-    wolf_ffi_state_snapshot_begin()
-    wolf_ffi_state_snapshot_add_window(
-      0, 0, Double(TerminalViewFixture.windowSize.width),
-      Double(TerminalViewFixture.windowSize.height))
-    wolf_ffi_state_snapshot_add_tab(tab.cwd, tab.sidebarVisible)
-    AppDelegate.pushLayout(layout)
-    wolf_ffi_state_snapshot_commit()
-    XCTAssertTrue(wolf_ffi_state_flush(), "premise: state.json must flush", file: file, line: line)
+    WindowStateCodec.submit([
+      WindowStateCodec.Window(
+        frame: CGRect(origin: .zero, size: TerminalViewFixture.windowSize), activeTab: 0,
+        minimized: false, tabs: [tab], recency: [0])
+    ])
+    XCTAssertTrue(
+      wolf_ffi_app_state_flush(), "premise: the window state must flush", file: file, line: line)
     return shape
   }
 

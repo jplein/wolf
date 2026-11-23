@@ -6,7 +6,7 @@ to this harness as ``--app-zip``. The harness extracts a private copy of the bun
 twice in the logged-in GUI session against isolated state and config directories, and drives it
 only through Neovim: a two-line prelude (``PRELUDE_LUA``) opens a socket before it sources the
 bundled ``init.lua``, and the bundle's own ``nvim`` evaluates one expression per call through
-``--server <sock> --remote-expr``. It reads back only Neovim window sizes and ``state.json``.
+``--server <sock> --remote-expr``. It reads back only Neovim window sizes and the window state.
 
 Every Wolf Ex command is an ``rpcnotify`` on core's channel, captured when core calls
 ``wolf_setup_commands`` after the init file loads, so one issued by a second RPC client takes
@@ -20,7 +20,8 @@ Scenario
 L1 is the ``(w, h)`` of the lone launch pane in run 1. ``W_za`` is that pane's Neovim window and
 ``W_zb`` the window the split adds.
 
-Run 1 starts from a seeded ``state.json`` holding one window, one tab and a lone ``za.md`` leaf.
+Run 1 starts from a seeded ``wolf.sqlite`` whose window state holds one window, one tab and a
+lone ``za.md`` edit pane.
 
 1. P0 (premise): the socket answers, ``:WolfZoomPane`` exists, one editor window shows ``za.md``,
    and its size is stable at L1 with ``w > 1`` and ``h > 1``.
@@ -28,7 +29,8 @@ Run 1 starts from a seeded ``state.json`` holding one window, one tab and a lone
 3. P1 (premise): ``:edit zb.md`` in the current (new) window; it shows ``zb.md``.
 4. C1: ``:WolfZoomPane``.
 5. Q: ``:WolfQuitApplication``.
-6. R1: run 1's ``state.json``, copied to ``logs/run1-state.json`` before run 2 can rewrite it.
+6. R1: run 1's window state, written to ``logs/run1-window-state.json`` before run 2 can rewrite
+   it.
 
 Run 2 shares the state and config dirs and gets a new socket.
 
@@ -49,9 +51,9 @@ The falsifying edits are in production code only; each should turn its own ID re
 | P1  | premise: the current window shows ``zb.md`` and ``W_za`` still shows ``za.md`` | none | n/a |
 | C1  | after ``:WolfZoomPane``: ``cur == W_zb``, ``w(W_zb) == L1.w``, ``h(W_zb) == L1.h``, and ``W_za`` still listed with ``w < L1.w`` (hidden, kept at its size) | the ``case .zoomPane:`` body becomes ``break`` | C1 (zb about half of L1.w) |
 | Q   | each launch exits with status 0 within ``QUIT_TIMEOUT_S`` of ``:WolfQuitApplication`` | the ``case .quitApplication:`` body becomes ``break`` | Q, at its first check in run 1; the harness then kills the app |
-| R1  | run 1's ``state.json``: version 1; one window; one tab; tab ``cwd == P``; layout a ``vertical`` split of exactly two leaves, tails ``za.md`` (``zoomed`` absent or false) then ``zb.md`` (``zoomed: true``) | ``WolfWindowController.liveTab()``: drop the ``zoomed: paneContainer.zoomedPaneId`` argument to ``SessionSeam.gatherTab`` (it defaults to ``nil``) | R1 (no leaf zoomed) |
+| R1  | run 1's window state: one window; one tab; tab ``directory == P``; root a ``vertical`` layout of exactly two ``edit`` panes, tails ``za.md`` then ``zb.md``; tab ``zoomed == 1`` | ``WolfWindowController.liveTab()``: drop the ``zoomed: paneContainer.zoomedPaneId`` argument to ``SessionSeam.gatherTab`` (it defaults to ``nil``) | R1 (no leaf zoomed) |
 | P2  | premise: see the scenario | none | n/a |
-| R2  | run 2: two editor windows, no drawer; the current one shows ``zb.md`` at ``w == L1.w`` and ``h == L1.h``; the other window ``w < L1.w`` | ``PaneContainerView.rebuildLayout(from:node:)``: delete the ``if let index = saved.zoomedLeafIndex ...`` re-zoom block | R2 (zb about half of L1.w) |
+| R2  | run 2: two editor windows, no drawer; the current one shows ``zb.md`` at ``w == L1.w`` and ``h == L1.h``; the other window ``w < L1.w`` | ``PaneContainerView.rebuildLayout(from:tab:)``: delete the ``if let index = saved.zoomedLeafIndex ...`` re-zoom block | R2 (zb about half of L1.w) |
 | C2  | after ``:WolfTerminal`` in run 2: exactly one drawer window (``w:wolf_drawer``), which is current, with ``0 < h < L1.h`` | the ``case .terminal:`` body becomes ``break`` | C2 (no drawer) |
 | C2z | at the same point, after C2: ``w(W_zb) < L1.w`` and ``h(W_zb) < L1.h`` (unzoomed, laid out above the drawer) | ``PaneZoom.zoomed(after:...)``: the ``.split``, ``.drawerOpen``, ``.focusMove`` and ``.toggleTerminal`` arms each ``return zoomed`` unchanged | C2z, with C2 green |
 
@@ -106,6 +108,7 @@ import platform
 import re
 import shutil
 import signal
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -460,39 +463,49 @@ def extract_bundle(zip_path: str, run: RunDir) -> Bundle:
     return bundle
 
 
-# The first launch restores a seeded state.json, so Neovim starts in the project.
+# The first launch restores a seeded window state, so Neovim starts in the project.
 # See notes/tools/wolf-macos-app-smoke.py.md#the-seeded-first-launch
 def write_fixtures(run: RunDir) -> None:
     with open(os.path.join(run.project, LEFT_FILE), "w", encoding="utf-8") as f:
         f.write("# Left pane\n")
     with open(os.path.join(run.project, ZOOMED_FILE), "w", encoding="utf-8") as f:
         f.write("# Zoomed pane\n")
-    # Width 0 is the unset sentinel, so the window keeps the size it is built at.
+    # No position and width 0, so the window keeps the size and place it is built at.
     seeded = {
-        "version": 1,
         "windows": [
             {
-                "x": 0,
-                "y": 0,
-                "width": 0,
-                "height": 0,
+                "frame": {"x": None, "y": None, "width": 0, "height": 0},
+                "active_tab": 0,
                 "tabs": [
                     {
-                        "cwd": run.project,
-                        "sidebar_visible": True,
-                        "layout": {
-                            "type": "leaf",
+                        "directory": run.project,
+                        "root": {
+                            "type": "pane",
+                            "kind": "edit",
                             "path": os.path.join(run.project, LEFT_FILE),
-                            "preview": False,
                         },
+                        "zoomed": None,
+                        "sidebar": {"visible": True},
                     }
                 ],
             }
         ],
     }
-    with open(os.path.join(run.state, "state.json"), "w", encoding="utf-8") as f:
-        json.dump(seeded, f, indent=2)
-        f.write("\n")
+    # A table with no schema row is dropped and recreated empty, so the row is required.
+    conn = sqlite3.connect(os.path.join(run.state, "wolf.sqlite"))
+    try:
+        with conn:
+            conn.execute("CREATE TABLE schema (name TEXT PRIMARY KEY, version INTEGER NOT NULL)")
+            conn.execute("INSERT INTO schema (name, version) VALUES ('window_state', 1)")
+            conn.execute(
+                "CREATE TABLE window_state (id INTEGER PRIMARY KEY CHECK (id = 1), "
+                "state TEXT NOT NULL)"
+            )
+            conn.execute(
+                "INSERT INTO window_state (id, state) VALUES (1, ?)", (json.dumps(seeded),)
+            )
+    finally:
+        conn.close()
     with open(os.path.join(run.init, "smoke_init.lua"), "w", encoding="utf-8") as f:
         f.write(PRELUDE_LUA)
 
@@ -606,7 +619,7 @@ class App:
                 f"run {self.n} was still alive {QUIT_TIMEOUT_S}s after :WolfQuitApplication and "
                 "was killed. Either CommandDispatcher's .quitApplication never called "
                 "NSApp.terminate (the command did not drain, or its case does nothing), or "
-                "applicationWillTerminate hung in snapshotNow, wolf_ffi_state_flush or a core "
+                "applicationWillTerminate hung in snapshotNow, wolf_ffi_app_state_flush or a core "
                 "shutdown.",
             ) from None
         if code != 0:
@@ -615,7 +628,7 @@ class App:
                 check_id,
                 f"run {self.n} {how} within {QUIT_TIMEOUT_S}s of :WolfQuitApplication; want "
                 "status 0. A signal means a crash during teardown; a non-zero status means an "
-                "error exit. Either way state.json may be unflushed.",
+                "error exit. Either way the window state may be unflushed.",
             )
 
     def stop(self) -> None:
@@ -823,33 +836,26 @@ def stable_size(nvim: Nvim, check_id: str, win_id: int, timeout: float) -> Tuple
         time.sleep(POLL_INTERVAL_S)
 
 
-def _leaf_summary(node: object) -> Tuple[Optional[str], object]:
-    """(path tail, zoomed field) of a leaf node, or (None, the node) for anything else."""
-    if isinstance(node, dict) and node.get("type") == "leaf" and isinstance(node.get("path"), str):
-        return (os.path.basename(node["path"]), node.get("zoomed", False))
+def _pane_summary(node: object) -> Tuple[Optional[str], object]:
+    """(path tail, kind) of a pane node, or (None, the node) for anything else."""
+    if isinstance(node, dict) and node.get("type") == "pane" and isinstance(node.get("path"), str):
+        return (os.path.basename(node["path"]), node.get("kind"))
     return (None, node)
 
 
 def check_saved_zoom(state_path: str, project: str) -> None:
-    """R1: the saved tree is `vertical[za.md unzoomed, zb.md zoomed]` in one tab of one window."""
+    """R1: the saved tab is `vertical[za.md, zb.md]` zoomed on pane 1, in one window."""
     try:
         with open(state_path, "r", encoding="utf-8") as f:
             text = f.read()
     except OSError as e:
-        raise SmokeFailure(
-            "R1",
-            f"could not read run 1's state file {state_path} ({e}): applicationWillTerminate's "
-            "snapshotNow or wolf_ffi_state_flush wrote nothing, or WOLF_STATE_DIR was ignored.",
-        ) from None
+        raise SmokeFailure("R1", f"could not read {state_path} back ({e}).") from None
     try:
         data = json.loads(text)
     except ValueError as e:
         raise SmokeFailure("R1", f"{state_path} is not JSON ({e}): a torn write.") from None
     where = f"File: {state_path}"
-    if not isinstance(data, dict) or data.get("version") != 1:
-        version = data.get("version") if isinstance(data, dict) else None
-        raise SmokeFailure("R1", f"run 1 saved version {version!r}; want 1. {where}")
-    windows = data.get("windows")
+    windows = data.get("windows") if isinstance(data, dict) else None
     window = windows[0] if isinstance(windows, list) and len(windows) == 1 else None
     tabs = window.get("tabs") if isinstance(window, dict) else None
     if not isinstance(tabs, list) or len(tabs) != 1 or not isinstance(tabs[0], dict):
@@ -861,35 +867,40 @@ def check_saved_zoom(state_path: str, project: str) -> None:
             f"or tab that is not an object means a malformed save. {where}",
         )
     tab = tabs[0]
-    if tab.get("cwd") != project:
+    if tab.get("directory") != project:
         raise SmokeFailure(
             "R1",
-            f"run 1 saved the tab cwd {tab.get('cwd')!r}; want {project!r}, the seeded project. "
-            f"Another directory means Neovim did not start in the restored cwd. {where}",
+            f"run 1 saved the tab directory {tab.get('directory')!r}; want {project!r}, the "
+            f"seeded project. Another directory means Neovim did not start in the restored "
+            f"directory. {where}",
         )
-    layout = tab.get("layout")
-    children = layout.get("children") if isinstance(layout, dict) else None
+    root = tab.get("root")
+    children = root.get("children") if isinstance(root, dict) else None
     if (
-        not isinstance(layout, dict)
-        or layout.get("type") != "split"
-        or layout.get("orientation") != "vertical"
+        not isinstance(root, dict)
+        or root.get("type") != "layout"
+        or root.get("orientation") != "vertical"
         or not isinstance(children, list)
     ):
         raise SmokeFailure(
             "R1",
-            f"run 1 saved the layout {layout!r}; want a vertical split. A lone leaf or no layout "
+            f"run 1 saved the root {root!r}; want a vertical layout. A lone pane or no root "
             f"means the split :WolfSplitVertical made was never saved. {where}",
         )
-    leaves = [_leaf_summary(c) for c in children]
-    want = [(LEFT_FILE, False), (ZOOMED_FILE, True)]
-    if leaves != want:
+    panes = [_pane_summary(c) for c in children]
+    want = [(LEFT_FILE, "edit"), (ZOOMED_FILE, "edit")]
+    if panes != want:
         raise SmokeFailure(
             "R1",
-            f"run 1 saved the leaves (tail, zoomed) {leaves!r}; want {want!r}. Both unzoomed "
-            "means the save wrote no mark: liveTab() did not pass zoomedPaneId to "
-            "SessionSeam.gatherTab. Both zoomed means every leaf of a zoomed tab is marked; only "
-            "za zoomed means the mark went to the wrong pane; a third child or a non-leaf "
-            f"means the split itself is wrong. {where}",
+            f"run 1 saved the panes (tail, kind) {panes!r}; want {want!r}. A third child or a "
+            f"non-pane means the split itself is wrong. {where}",
+        )
+    if tab.get("zoomed") != 1:
+        raise SmokeFailure(
+            "R1",
+            f"run 1 saved zoomed {tab.get('zoomed')!r}; want 1, the zb.md pane. null means the "
+            "save wrote no zoom: liveTab() did not pass zoomedPaneId to SessionSeam.gatherTab. "
+            f"0 means the zoom went to the wrong pane. {where}",
         )
 
 
@@ -935,8 +946,8 @@ def _run_one_checks(run: RunDir, app: App, nvim: Nvim) -> Tuple[int, int]:
         if len(eds) == 1 and not eds[0].name:
             return (
                 f"want one editor window showing {LEFT_FILE}, got [{_sizes(p)}]. A lone unnamed "
-                "window means, most likely first: the seeded state.json was not restored "
-                "(WOLF_STATE_DIR ignored, or the file rejected), so the app opened its "
+                "window means, most likely first: the seeded window state was not restored "
+                "(WOLF_STATE_DIR ignored, or the row rejected), so the app opened its "
                 "empty-state tab. Otherwise the restored tab's layout rebuild never ran: its "
                 "core's render wakes never reached its view, or its first pane never bound."
             )
@@ -1219,17 +1230,29 @@ def _run_two_checks(app: App, nvim: Nvim, l1: Tuple[int, int]) -> None:
 def scenario(run: RunDir, bundle: Bundle, apps: List[App]) -> None:
     l1 = run_one(run, bundle, apps)
 
-    step("R1: run 1's state.json")
-    src = os.path.join(run.state, "state.json")
-    copy = os.path.join(run.logs, "run1-state.json")
+    step("R1: run 1's window state")
+    src = os.path.join(run.state, "wolf.sqlite")
+    copy = os.path.join(run.logs, "run1-window-state.json")
     try:
-        shutil.copyfile(src, copy)
-    except OSError as e:
+        conn = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
+        try:
+            row = conn.execute("SELECT state FROM window_state WHERE id = 1").fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error as e:
         raise SmokeFailure(
             "R1",
-            f"run 1 left no state file at {src} ({e}): applicationWillTerminate's snapshotNow "
-            "or wolf_ffi_state_flush wrote nothing.",
+            f"could not read run 1's window state from {src} ({e}): applicationWillTerminate's "
+            "snapshotNow or wolf_ffi_app_state_flush wrote nothing, or WOLF_STATE_DIR was ignored.",
         ) from None
+    if row is None:
+        raise SmokeFailure(
+            "R1",
+            f"run 1 left no window_state row in {src}: applicationWillTerminate's snapshotNow "
+            "or wolf_ffi_app_state_flush wrote nothing.",
+        )
+    with open(copy, "w", encoding="utf-8") as f:
+        f.write(row[0])
     check_saved_zoom(copy, run.project)
     passed("R1", f"saved vertical[{LEFT_FILE}, {ZOOMED_FILE} zoomed] (copy at {copy})")
 

@@ -132,4 +132,20 @@ final class RestoreSeamTests: XCTestCase {
       "the saved split layout rides into the PlannedTab unchanged")
     XCTAssertNil(tab1.layout, "a nil saved layout stays nil in the PlannedTab")
   }
+
+  // MARK: - the selected tab of a restored window
+
+  func testTheSavedActiveTabIsSelectedWhenItWasRestored() {
+    XCTAssertEqual(
+      RestoreSeam.selectedPosition(active: 2, materialized: [0, 1, 2]), 2,
+      "the saved active tab was restored, so it must be selected; 0 means the selection "
+        + "falls back to the first tab although the saved one exists")
+    XCTAssertEqual(
+      RestoreSeam.selectedPosition(active: 1, materialized: [0, 2]), 0,
+      "the saved active tab 1 was not restored, so the first restored tab must be selected; "
+        + "1 means a position with no tab is selected")
+    XCTAssertNil(
+      RestoreSeam.selectedPosition(active: 0, materialized: []),
+      "a window with no restored tab has nothing to select")
+  }
 }

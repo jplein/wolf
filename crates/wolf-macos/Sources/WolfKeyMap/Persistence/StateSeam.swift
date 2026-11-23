@@ -59,4 +59,12 @@ public enum StateSeam {
     }
     return .folder(cwd: restored)
   }
+
+  /// The window's normal frame after a geometry change: `frame` when the window is neither
+  /// zoomed nor full screen, else the `previous` normal frame, which a zoom or full screen keeps.
+  public static func normalFrame(
+    previous: CGRect?, frame: CGRect, zoomed: Bool, fullScreen: Bool
+  ) -> CGRect? {
+    zoomed || fullScreen ? previous : frame
+  }
 }

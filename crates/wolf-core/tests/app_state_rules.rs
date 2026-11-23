@@ -72,6 +72,7 @@ fn window(frame: Frame, active: usize, tabs: Vec<Tab>) -> Window {
     Window {
         frame,
         active_tab: active,
+        minimized: false,
         tabs,
     }
 }

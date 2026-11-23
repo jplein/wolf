@@ -5,31 +5,13 @@ import Foundation
 import WolfFFI
 import WolfKeyMap
 
-/// The facets of one saved TAB, copied OUT of the bridge's
-/// `RustVec<FfiTabState>` immediately (element refs must not outlive the vec)
-/// into a value that survives launch. Each tab is its own captive Neovim.
+/// One saved tab as the launch restores it, read out of the window state at launch. Each tab is
+/// its own captive Neovim.
 struct RestoredTabState {
-  let cwd: String
-  let sidebarVisible: Bool
-  /// The tab's saved pane-split layout, `nil` ONLY for an empty-state (unnamed,
-  /// non-preview) lone pane; a lone pane showing a file or preview persists a
-  /// single leaf.
-  let layout: SavedPaneNode?
-  /// The owned bridge node `layout` was projected from, held so the rebuild hands
-  /// Rust the tree it saved; non-nil exactly when `layout` is.
-  let layoutNode: FfiPaneNode?
-}
-
-/// One saved WINDOW GROUP: its geometry (points; AppKit bottom-left) plus its
-/// ordered tabs. Copied OUT of the bridge's `RustVec<FfiWindowState>` at launch.
-/// The coordinator restores each group by starting the FIRST tab's controller,
-/// anchoring the window frame, then `addTabbedWindow`-ing the rest.
-struct RestoredWindowGroup {
-  let x: Double
-  let y: Double
-  let width: Double
-  let height: Double
-  let tabs: [RestoredTabState]
+  /// The tab as saved, which seeds the view's cache until it can gather its own.
+  let saved: RestoreSeam.SavedTab
+  /// The restored tab to rebuild, `nil` for one with no root or no folder.
+  let rebuild: WindowStateCodec.Rebuild?
 }
 
 /// Owns and drives a single top-level window (one tab) and its own captive Neovim.
@@ -43,8 +25,8 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
   private static let initialRows = 24
 
   /// This tab's monotonic identity (assigned by the coordinator; used as the
-  /// Window-menu item tag and the `raiseWindow`/`otherWindows` key). Distinct
-  /// from any `state.json` slot — persistence is now whole-tree, not per-index.
+  /// Window-menu item tag, the `raiseWindow`/`otherWindows` key and the stacking
+  /// order's tab id).
   let tabId: Int
 
   /// This tab's captive Neovim. Held STRONG and shut down in `teardown()`; the core
@@ -172,9 +154,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
     let seed = CellMetrics.defaultPointSize(config: config)
     self.defaultPointSize = seed
     self.currentPointSize = seed
-    self.persistedCache = restoredTab.map {
-      RestoreSeam.SavedTab(cwd: $0.cwd, sidebarVisible: $0.sidebarVisible, layout: $0.layout)
-    }
+    self.persistedCache = restoredTab?.saved
     super.init()
   }
 
@@ -194,8 +174,8 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
     }
     // Rebuild any saved layout, including a single leaf, which reopens its file or preview in the
     // tab's sole window.
-    if let saved = restoredTab?.layout, let node = restoredTab?.layoutNode {
-      paneContainer.requestLayoutRebuild(saved, node: node)
+    if let rebuild = restoredTab?.rebuild {
+      paneContainer.requestLayoutRebuild(rebuild.layout, tab: rebuild.tab)
     }
 
     // The sidebar owns its own file-search session. `start()` waits for the end of this method,
@@ -274,7 +254,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
     if !hasFolder {
       window.sidebarItem.isCollapsed = true
     } else if let restoredTab {
-      window.sidebarItem.isCollapsed = !restoredTab.sidebarVisible
+      window.sidebarItem.isCollapsed = !restoredTab.saved.sidebarVisible
     }
 
     window.delegate = self
@@ -761,6 +741,12 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
     window
   }
 
+  /// The window's last recorded normal frame, un-zoomed and not full screen, or `nil` when none
+  /// was recorded (`StatePersistence.normalFrame`).
+  var normalFrame: CGRect? {
+    statePersistence?.normalFrame
+  }
+
   /// Whether `candidate` is this controller's own top-level window (used by the
   /// coordinator to find the key window's controller).
   func owns(_ candidate: NSWindow?) -> Bool {
@@ -778,7 +764,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
   func persistedTab() -> RestoreSeam.SavedTab? {
     let tab = SessionSeam.contribution(
       mayGather: SessionSeam.mayGather(
-        hasFolder: hasFolder, restoredCwd: restoredTab?.cwd,
+        hasFolder: hasFolder, restoredCwd: restoredTab?.saved.cwd,
         restoreFailed: paneContainer?.restoreFailed ?? false),
       gather: liveTab(), cache: persistedCache)
     persistedCache = tab
@@ -996,6 +982,16 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
   /// recomputes which tab is focused and reports the edges to the tabs' Neovims.
   func windowDidBecomeMain(_ notification: Notification) {
     coordinator?.refreshTabFocus()
+  }
+
+  /// This view's window was minimized, which minimizes its whole tab group.
+  func windowDidMiniaturize(_ notification: Notification) {
+    coordinator?.windowMinimizedChanged(self, minimized: true)
+  }
+
+  /// This view's window was restored from the Dock.
+  func windowDidDeminiaturize(_ notification: Notification) {
+    coordinator?.windowMinimizedChanged(self, minimized: false)
   }
 
   /// This view stopped being key, which app deactivation also causes: the active

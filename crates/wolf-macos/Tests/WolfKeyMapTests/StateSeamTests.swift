@@ -162,4 +162,29 @@ final class StateSeamTests: XCTestCase {
         "launchDecision must NEVER return the process cwd, case: \(c.desc)")
     }
   }
+
+  // MARK: - normalFrame
+
+  func testNormalFrameKeepsTheLastNormalFrameWhileZoomedOrFullScreen() {
+    let previous = CGRect(x: 100, y: 80, width: 1200, height: 800)
+    let current = CGRect(x: 0, y: 0, width: 1920, height: 1055)
+    XCTAssertEqual(
+      StateSeam.normalFrame(previous: previous, frame: current, zoomed: false, fullScreen: false),
+      current,
+      "a window neither zoomed nor full screen is in its normal frame, so it must be recorded; "
+        + "the previous frame means a move or resize is never saved")
+    XCTAssertEqual(
+      StateSeam.normalFrame(previous: previous, frame: current, zoomed: true, fullScreen: false),
+      previous,
+      "a zoomed window's frame is not its normal frame, so the last normal frame must be kept; "
+        + "the zoomed frame means a relaunch opens the window at its zoomed size")
+    XCTAssertEqual(
+      StateSeam.normalFrame(previous: previous, frame: current, zoomed: false, fullScreen: true),
+      previous,
+      "a full-screen window's frame is not its normal frame, so the last normal frame must be "
+        + "kept; the screen-sized frame means a relaunch opens at full-screen size")
+    XCTAssertNil(
+      StateSeam.normalFrame(previous: nil, frame: current, zoomed: true, fullScreen: false),
+      "a window zoomed before any normal frame was recorded has none to report")
+  }
 }

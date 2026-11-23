@@ -941,15 +941,6 @@ rust_test(
 )
 
 rust_test(
-    name = "state",
-    srcs = ["tests/state.rs"],
-    crate_root = "tests/state.rs",
-    size = "small",
-    edition = "2021",
-    deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
-)
-
-rust_test(
     name = "app_state",
     srcs = ["tests/app_state.rs"],
     crate_root = "tests/app_state.rs",
@@ -985,12 +976,12 @@ rust_test(
 )
 
 rust_test(
-    name = "rebuild_layout",
+    name = "rebuild_tab",
     srcs = [
         "tests/common/mod.rs",
-        "tests/rebuild_layout.rs",
+        "tests/rebuild_tab.rs",
     ],
-    crate_root = "tests/rebuild_layout.rs",
+    crate_root = "tests/rebuild_tab.rs",
     # Spawning a real nvim child does not work under the macOS build sandbox, so
     # run unsandboxed. `no-sandbox` (vs `local`) keeps Bazel test-result caching.
     tags = ["no-sandbox"],

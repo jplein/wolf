@@ -14,38 +14,14 @@ public func wolf_ffi_font_license_notices() -> RustString {
 public func wolf_ffi_library_license_notices() -> RustString {
     RustString(ptr: __swift_bridge__$wolf_ffi_library_license_notices())
 }
-public func wolf_ffi_load_state() -> FfiState {
-    FfiState(ptr: __swift_bridge__$wolf_ffi_load_state())
-}
-public func wolf_ffi_state_snapshot_begin() {
-    __swift_bridge__$wolf_ffi_state_snapshot_begin()
-}
-public func wolf_ffi_state_snapshot_add_window(_ x: Double, _ y: Double, _ width: Double, _ height: Double) {
-    __swift_bridge__$wolf_ffi_state_snapshot_add_window(x, y, width, height)
-}
-public func wolf_ffi_state_snapshot_add_tab<GenericIntoRustString: IntoRustString>(_ cwd: GenericIntoRustString, _ sidebar_visible: Bool) {
-    __swift_bridge__$wolf_ffi_state_snapshot_add_tab({ let rustString = cwd.intoRustString(); rustString.isOwned = false; return rustString.ptr }(), sidebar_visible)
-}
-public func wolf_ffi_state_layout_push_leaf<GenericIntoRustString: IntoRustString>(_ path: GenericIntoRustString, _ preview: Bool, _ terminal: Bool, _ zoomed: Bool, _ weight: Double) {
-    __swift_bridge__$wolf_ffi_state_layout_push_leaf({ let rustString = path.intoRustString(); rustString.isOwned = false; return rustString.ptr }(), preview, terminal, zoomed, weight)
-}
-public func wolf_ffi_state_layout_push_split(_ orientation: UInt8, _ child_count: UInt32, _ weight: Double) {
-    __swift_bridge__$wolf_ffi_state_layout_push_split(orientation, child_count, weight)
-}
-public func wolf_ffi_state_layout_commit_to_tab() {
-    __swift_bridge__$wolf_ffi_state_layout_commit_to_tab()
-}
-public func wolf_ffi_state_snapshot_commit() {
-    __swift_bridge__$wolf_ffi_state_snapshot_commit()
-}
-public func wolf_ffi_state_flush() -> Bool {
-    __swift_bridge__$wolf_ffi_state_flush()
-}
 public func wolf_ffi_app_state_begin() {
     __swift_bridge__$wolf_ffi_app_state_begin()
 }
 public func wolf_ffi_app_state_add_window(_ has_position: Bool, _ x: Double, _ y: Double, _ width: Double, _ height: Double, _ active_tab: UInt32) {
     __swift_bridge__$wolf_ffi_app_state_add_window(has_position, x, y, width, height, active_tab)
+}
+public func wolf_ffi_app_state_window_minimized(_ minimized: Bool) {
+    __swift_bridge__$wolf_ffi_app_state_window_minimized(minimized)
 }
 public func wolf_ffi_app_state_add_tab<GenericIntoRustString: IntoRustString>(_ directory: GenericIntoRustString, _ sidebar_visible: Bool, _ focused_kind: UInt8, _ focused_index: UInt32, _ zoomed_kind: UInt8, _ zoomed_index: UInt32) {
     __swift_bridge__$wolf_ffi_app_state_add_tab({ let rustString = directory.intoRustString(); rustString.isOwned = false; return rustString.ptr }(), sidebar_visible, focused_kind, focused_index, zoomed_kind, zoomed_index)
@@ -357,8 +333,8 @@ extension WolfCoreHandleRef {
         __swift_bridge__$WolfCoreHandle$create_tabpage(ptr, { let rustString = cwd.intoRustString(); rustString.isOwned = false; return rustString.ptr }())
     }
 
-    public func rebuild_layout(_ layout: FfiPaneNodeRef) -> RustVec<Int64> {
-        RustVec(ptr: __swift_bridge__$WolfCoreHandle$rebuild_layout(ptr, layout.ptr))
+    public func rebuild_tab(_ tab: FfiAppTabRef) -> RustVec<Int64> {
+        RustVec(ptr: __swift_bridge__$WolfCoreHandle$rebuild_tab(ptr, tab.ptr))
     }
 
     public func current_tabpage() -> Int64 {
@@ -1919,386 +1895,6 @@ extension FfiConfig: Vectorizable {
 }
 
 
-public class FfiState: FfiStateRefMut {
-    var isOwned: Bool = true
-
-    public override init(ptr: UnsafeMutableRawPointer) {
-        super.init(ptr: ptr)
-    }
-
-    deinit {
-        if isOwned {
-            __swift_bridge__$FfiState$_free(ptr)
-        }
-    }
-}
-public class FfiStateRefMut: FfiStateRef {
-    public override init(ptr: UnsafeMutableRawPointer) {
-        super.init(ptr: ptr)
-    }
-}
-public class FfiStateRef {
-    var ptr: UnsafeMutableRawPointer
-
-    public init(ptr: UnsafeMutableRawPointer) {
-        self.ptr = ptr
-    }
-}
-extension FfiStateRef {
-    public func windows() -> RustVec<FfiWindowState> {
-        RustVec(ptr: __swift_bridge__$FfiState$windows(ptr))
-    }
-}
-extension FfiState: Vectorizable {
-    public static func vecOfSelfNew() -> UnsafeMutableRawPointer {
-        __swift_bridge__$Vec_FfiState$new()
-    }
-
-    public static func vecOfSelfFree(vecPtr: UnsafeMutableRawPointer) {
-        __swift_bridge__$Vec_FfiState$drop(vecPtr)
-    }
-
-    public static func vecOfSelfPush(vecPtr: UnsafeMutableRawPointer, value: FfiState) {
-        __swift_bridge__$Vec_FfiState$push(vecPtr, {value.isOwned = false; return value.ptr;}())
-    }
-
-    public static func vecOfSelfPop(vecPtr: UnsafeMutableRawPointer) -> Optional<Self> {
-        let pointer = __swift_bridge__$Vec_FfiState$pop(vecPtr)
-        if pointer == nil {
-            return nil
-        } else {
-            return (FfiState(ptr: pointer!) as! Self)
-        }
-    }
-
-    public static func vecOfSelfGet(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiStateRef> {
-        let pointer = __swift_bridge__$Vec_FfiState$get(vecPtr, index)
-        if pointer == nil {
-            return nil
-        } else {
-            return FfiStateRef(ptr: pointer!)
-        }
-    }
-
-    public static func vecOfSelfGetMut(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiStateRefMut> {
-        let pointer = __swift_bridge__$Vec_FfiState$get_mut(vecPtr, index)
-        if pointer == nil {
-            return nil
-        } else {
-            return FfiStateRefMut(ptr: pointer!)
-        }
-    }
-
-    public static func vecOfSelfAsPtr(vecPtr: UnsafeMutableRawPointer) -> UnsafePointer<FfiStateRef> {
-        UnsafePointer<FfiStateRef>(OpaquePointer(__swift_bridge__$Vec_FfiState$as_ptr(vecPtr)))
-    }
-
-    public static func vecOfSelfLen(vecPtr: UnsafeMutableRawPointer) -> UInt {
-        __swift_bridge__$Vec_FfiState$len(vecPtr)
-    }
-}
-
-
-public class FfiWindowState: FfiWindowStateRefMut {
-    var isOwned: Bool = true
-
-    public override init(ptr: UnsafeMutableRawPointer) {
-        super.init(ptr: ptr)
-    }
-
-    deinit {
-        if isOwned {
-            __swift_bridge__$FfiWindowState$_free(ptr)
-        }
-    }
-}
-public class FfiWindowStateRefMut: FfiWindowStateRef {
-    public override init(ptr: UnsafeMutableRawPointer) {
-        super.init(ptr: ptr)
-    }
-}
-public class FfiWindowStateRef {
-    var ptr: UnsafeMutableRawPointer
-
-    public init(ptr: UnsafeMutableRawPointer) {
-        self.ptr = ptr
-    }
-}
-extension FfiWindowStateRef {
-    public func x() -> Double {
-        __swift_bridge__$FfiWindowState$x(ptr)
-    }
-
-    public func y() -> Double {
-        __swift_bridge__$FfiWindowState$y(ptr)
-    }
-
-    public func width() -> Double {
-        __swift_bridge__$FfiWindowState$width(ptr)
-    }
-
-    public func height() -> Double {
-        __swift_bridge__$FfiWindowState$height(ptr)
-    }
-
-    public func tabs() -> RustVec<FfiTabState> {
-        RustVec(ptr: __swift_bridge__$FfiWindowState$tabs(ptr))
-    }
-}
-extension FfiWindowState: Vectorizable {
-    public static func vecOfSelfNew() -> UnsafeMutableRawPointer {
-        __swift_bridge__$Vec_FfiWindowState$new()
-    }
-
-    public static func vecOfSelfFree(vecPtr: UnsafeMutableRawPointer) {
-        __swift_bridge__$Vec_FfiWindowState$drop(vecPtr)
-    }
-
-    public static func vecOfSelfPush(vecPtr: UnsafeMutableRawPointer, value: FfiWindowState) {
-        __swift_bridge__$Vec_FfiWindowState$push(vecPtr, {value.isOwned = false; return value.ptr;}())
-    }
-
-    public static func vecOfSelfPop(vecPtr: UnsafeMutableRawPointer) -> Optional<Self> {
-        let pointer = __swift_bridge__$Vec_FfiWindowState$pop(vecPtr)
-        if pointer == nil {
-            return nil
-        } else {
-            return (FfiWindowState(ptr: pointer!) as! Self)
-        }
-    }
-
-    public static func vecOfSelfGet(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiWindowStateRef> {
-        let pointer = __swift_bridge__$Vec_FfiWindowState$get(vecPtr, index)
-        if pointer == nil {
-            return nil
-        } else {
-            return FfiWindowStateRef(ptr: pointer!)
-        }
-    }
-
-    public static func vecOfSelfGetMut(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiWindowStateRefMut> {
-        let pointer = __swift_bridge__$Vec_FfiWindowState$get_mut(vecPtr, index)
-        if pointer == nil {
-            return nil
-        } else {
-            return FfiWindowStateRefMut(ptr: pointer!)
-        }
-    }
-
-    public static func vecOfSelfAsPtr(vecPtr: UnsafeMutableRawPointer) -> UnsafePointer<FfiWindowStateRef> {
-        UnsafePointer<FfiWindowStateRef>(OpaquePointer(__swift_bridge__$Vec_FfiWindowState$as_ptr(vecPtr)))
-    }
-
-    public static func vecOfSelfLen(vecPtr: UnsafeMutableRawPointer) -> UInt {
-        __swift_bridge__$Vec_FfiWindowState$len(vecPtr)
-    }
-}
-
-
-public class FfiTabState: FfiTabStateRefMut {
-    var isOwned: Bool = true
-
-    public override init(ptr: UnsafeMutableRawPointer) {
-        super.init(ptr: ptr)
-    }
-
-    deinit {
-        if isOwned {
-            __swift_bridge__$FfiTabState$_free(ptr)
-        }
-    }
-}
-public class FfiTabStateRefMut: FfiTabStateRef {
-    public override init(ptr: UnsafeMutableRawPointer) {
-        super.init(ptr: ptr)
-    }
-}
-public class FfiTabStateRef {
-    var ptr: UnsafeMutableRawPointer
-
-    public init(ptr: UnsafeMutableRawPointer) {
-        self.ptr = ptr
-    }
-}
-extension FfiTabStateRef {
-    public func cwd() -> RustString {
-        RustString(ptr: __swift_bridge__$FfiTabState$cwd(ptr))
-    }
-
-    public func sidebar_visible() -> Bool {
-        __swift_bridge__$FfiTabState$sidebar_visible(ptr)
-    }
-
-    public func has_layout() -> Bool {
-        __swift_bridge__$FfiTabState$has_layout(ptr)
-    }
-
-    public func layout() -> FfiPaneNode {
-        FfiPaneNode(ptr: __swift_bridge__$FfiTabState$layout(ptr))
-    }
-}
-extension FfiTabState: Vectorizable {
-    public static func vecOfSelfNew() -> UnsafeMutableRawPointer {
-        __swift_bridge__$Vec_FfiTabState$new()
-    }
-
-    public static func vecOfSelfFree(vecPtr: UnsafeMutableRawPointer) {
-        __swift_bridge__$Vec_FfiTabState$drop(vecPtr)
-    }
-
-    public static func vecOfSelfPush(vecPtr: UnsafeMutableRawPointer, value: FfiTabState) {
-        __swift_bridge__$Vec_FfiTabState$push(vecPtr, {value.isOwned = false; return value.ptr;}())
-    }
-
-    public static func vecOfSelfPop(vecPtr: UnsafeMutableRawPointer) -> Optional<Self> {
-        let pointer = __swift_bridge__$Vec_FfiTabState$pop(vecPtr)
-        if pointer == nil {
-            return nil
-        } else {
-            return (FfiTabState(ptr: pointer!) as! Self)
-        }
-    }
-
-    public static func vecOfSelfGet(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiTabStateRef> {
-        let pointer = __swift_bridge__$Vec_FfiTabState$get(vecPtr, index)
-        if pointer == nil {
-            return nil
-        } else {
-            return FfiTabStateRef(ptr: pointer!)
-        }
-    }
-
-    public static func vecOfSelfGetMut(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiTabStateRefMut> {
-        let pointer = __swift_bridge__$Vec_FfiTabState$get_mut(vecPtr, index)
-        if pointer == nil {
-            return nil
-        } else {
-            return FfiTabStateRefMut(ptr: pointer!)
-        }
-    }
-
-    public static func vecOfSelfAsPtr(vecPtr: UnsafeMutableRawPointer) -> UnsafePointer<FfiTabStateRef> {
-        UnsafePointer<FfiTabStateRef>(OpaquePointer(__swift_bridge__$Vec_FfiTabState$as_ptr(vecPtr)))
-    }
-
-    public static func vecOfSelfLen(vecPtr: UnsafeMutableRawPointer) -> UInt {
-        __swift_bridge__$Vec_FfiTabState$len(vecPtr)
-    }
-}
-
-
-public class FfiPaneNode: FfiPaneNodeRefMut {
-    var isOwned: Bool = true
-
-    public override init(ptr: UnsafeMutableRawPointer) {
-        super.init(ptr: ptr)
-    }
-
-    deinit {
-        if isOwned {
-            __swift_bridge__$FfiPaneNode$_free(ptr)
-        }
-    }
-}
-public class FfiPaneNodeRefMut: FfiPaneNodeRef {
-    public override init(ptr: UnsafeMutableRawPointer) {
-        super.init(ptr: ptr)
-    }
-}
-public class FfiPaneNodeRef {
-    var ptr: UnsafeMutableRawPointer
-
-    public init(ptr: UnsafeMutableRawPointer) {
-        self.ptr = ptr
-    }
-}
-extension FfiPaneNodeRef {
-    public func is_leaf() -> Bool {
-        __swift_bridge__$FfiPaneNode$is_leaf(ptr)
-    }
-
-    public func is_preview() -> Bool {
-        __swift_bridge__$FfiPaneNode$is_preview(ptr)
-    }
-
-    public func is_terminal() -> Bool {
-        __swift_bridge__$FfiPaneNode$is_terminal(ptr)
-    }
-
-    public func is_zoomed() -> Bool {
-        __swift_bridge__$FfiPaneNode$is_zoomed(ptr)
-    }
-
-    public func leaf_path() -> RustString {
-        RustString(ptr: __swift_bridge__$FfiPaneNode$leaf_path(ptr))
-    }
-
-    public func orientation() -> UInt8 {
-        __swift_bridge__$FfiPaneNode$orientation(ptr)
-    }
-
-    public func child_count() -> UInt32 {
-        __swift_bridge__$FfiPaneNode$child_count(ptr)
-    }
-
-    public func weight(_ index: UInt32) -> Double {
-        __swift_bridge__$FfiPaneNode$weight(ptr, index)
-    }
-
-    public func child(_ index: UInt32) -> FfiPaneNode {
-        FfiPaneNode(ptr: __swift_bridge__$FfiPaneNode$child(ptr, index))
-    }
-}
-extension FfiPaneNode: Vectorizable {
-    public static func vecOfSelfNew() -> UnsafeMutableRawPointer {
-        __swift_bridge__$Vec_FfiPaneNode$new()
-    }
-
-    public static func vecOfSelfFree(vecPtr: UnsafeMutableRawPointer) {
-        __swift_bridge__$Vec_FfiPaneNode$drop(vecPtr)
-    }
-
-    public static func vecOfSelfPush(vecPtr: UnsafeMutableRawPointer, value: FfiPaneNode) {
-        __swift_bridge__$Vec_FfiPaneNode$push(vecPtr, {value.isOwned = false; return value.ptr;}())
-    }
-
-    public static func vecOfSelfPop(vecPtr: UnsafeMutableRawPointer) -> Optional<Self> {
-        let pointer = __swift_bridge__$Vec_FfiPaneNode$pop(vecPtr)
-        if pointer == nil {
-            return nil
-        } else {
-            return (FfiPaneNode(ptr: pointer!) as! Self)
-        }
-    }
-
-    public static func vecOfSelfGet(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiPaneNodeRef> {
-        let pointer = __swift_bridge__$Vec_FfiPaneNode$get(vecPtr, index)
-        if pointer == nil {
-            return nil
-        } else {
-            return FfiPaneNodeRef(ptr: pointer!)
-        }
-    }
-
-    public static func vecOfSelfGetMut(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiPaneNodeRefMut> {
-        let pointer = __swift_bridge__$Vec_FfiPaneNode$get_mut(vecPtr, index)
-        if pointer == nil {
-            return nil
-        } else {
-            return FfiPaneNodeRefMut(ptr: pointer!)
-        }
-    }
-
-    public static func vecOfSelfAsPtr(vecPtr: UnsafeMutableRawPointer) -> UnsafePointer<FfiPaneNodeRef> {
-        UnsafePointer<FfiPaneNodeRef>(OpaquePointer(__swift_bridge__$Vec_FfiPaneNode$as_ptr(vecPtr)))
-    }
-
-    public static func vecOfSelfLen(vecPtr: UnsafeMutableRawPointer) -> UInt {
-        __swift_bridge__$Vec_FfiPaneNode$len(vecPtr)
-    }
-}
-
-
 public class FfiAppState: FfiAppStateRefMut {
     var isOwned: Bool = true
 
@@ -2427,6 +2023,10 @@ extension FfiAppWindowRef {
 
     public func active_tab() -> UInt32 {
         __swift_bridge__$FfiAppWindow$active_tab(ptr)
+    }
+
+    public func minimized() -> Bool {
+        __swift_bridge__$FfiAppWindow$minimized(ptr)
     }
 
     public func tabs() -> RustVec<FfiAppTab> {
@@ -2575,6 +2175,10 @@ extension FfiAppTabRef {
 
     public func drawer_share() -> Double {
         __swift_bridge__$FfiAppTab$drawer_share(ptr)
+    }
+
+    public func restored() -> FfiAppTab {
+        FfiAppTab(ptr: __swift_bridge__$FfiAppTab$restored(ptr))
     }
 }
 extension FfiAppTab: Vectorizable {

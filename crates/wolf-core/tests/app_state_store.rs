@@ -91,6 +91,7 @@ fn one_window(width: f64, tabs: Vec<Tab>) -> WindowState {
         windows: vec![Window {
             frame: frame(0.0, width),
             active_tab: 0,
+            minimized: false,
             tabs,
         }],
     }
@@ -160,6 +161,7 @@ fn full_state() -> WindowState {
             Window {
                 frame: frame(120.0, 1400.0),
                 active_tab: 1,
+                minimized: false,
                 tabs: vec![
                     tab("/full/two", "first"),
                     Tab {
@@ -176,6 +178,7 @@ fn full_state() -> WindowState {
                     height: 768.0,
                 },
                 active_tab: 0,
+                minimized: true,
                 tabs: vec![
                     empty_tab(),
                     Tab {
@@ -546,11 +549,13 @@ fn the_chosen_tab_and_its_window_frame_become_the_project_state() {
             Window {
                 frame: frame(10.0, 800.0),
                 active_tab: 0,
+                minimized: false,
                 tabs: vec![tab("/x", "x"), tab(d, "a"), tab(d, "b")],
             },
             Window {
                 frame: frame(500.0, 1200.0),
                 active_tab: 0,
+                minimized: false,
                 tabs: vec![tab("/y", "y"), tab(d, "c")],
             },
         ],

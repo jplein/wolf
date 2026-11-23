@@ -6,7 +6,7 @@ import Foundation
 /// mirroring `StateSeam`.
 public enum RestoreSeam {
   /// One saved tab's state: its working directory and sidebar visibility, in
-  /// the shape the AppKit caller reads back from `FfiTabState`, and the shape a
+  /// the shape the AppKit caller reads back from `FfiAppTab`, and the shape a
   /// live view contributes to a commit (`SessionSeam`).
   public struct SavedTab: Equatable {
     /// The saved (already-canonical) working directory, or `""` for the
@@ -102,5 +102,11 @@ public enum RestoreSeam {
       }
     }
     return tabs
+  }
+
+  /// The position to select in a restored window: the saved `active` one when it restored,
+  /// else the first restored position, `nil` when none did.
+  public static func selectedPosition(active: Int, materialized: [Int]) -> Int? {
+    materialized.contains(active) ? active : materialized.first
   }
 }

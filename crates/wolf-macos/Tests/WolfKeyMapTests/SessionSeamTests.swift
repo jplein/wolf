@@ -85,7 +85,7 @@ final class SessionSeamTests: XCTestCase {
       XCTAssertEqual(
         SessionSeam.closeCommit(terminating: false, otherLiveViews: others), .dropSubtree,
         "closing one of several windows (\(others) others live) must commit without it: "
-          + ".keepSubtree resurrects a window the user closed, .skip leaves it in state.json "
+          + ".keepSubtree resurrects a window the user closed, .skip leaves it in the window state "
           + "until some unrelated commit")
     }
   }
@@ -358,7 +358,7 @@ final class SessionSeamTests: XCTestCase {
     XCTAssertEqual(
       SessionSeam.contribution(mayGather: true, gather: .refuse, cache: seed), seed,
       "a refused gather must contribute the cached tab: nil drops the window's files from "
-        + "state.json, which is how a launch commit erased every restored tab")
+        + "the window state, which is how a launch commit erased every restored tab")
     XCTAssertNil(
       SessionSeam.contribution(mayGather: true, gather: .refuse, cache: nil),
       "a refused gather with no cache contributes nothing rather than an invented tab")
@@ -433,7 +433,7 @@ final class SessionSeamTests: XCTestCase {
         SessionSeam.OrphanGroup(groupIndex: 1, positions: [0, 1]),
       ],
       "every saved slot without a live view must be carried, by window and in saved order: "
-        + "a missing slot drops that tab from state.json, an extra one duplicates a live tab")
+        + "a missing slot drops that tab from the window state, an extra one duplicates a live tab")
     XCTAssertEqual(
       SessionSeam.orphanedSlots(
         savedTabCounts: [1, 1, 1], materialized: [slot(1, 0)]),
@@ -447,5 +447,110 @@ final class SessionSeamTests: XCTestCase {
         savedTabCounts: [2, 1], materialized: [slot(0, 0), slot(0, 1), slot(1, 0)]),
       [],
       "with every slot materialized nothing is orphaned; any group here duplicates a tab")
+  }
+
+  // MARK: - The window state a commit writes (SS1 to SS4)
+
+  /// Distinct frames, by which each test tells the returned windows apart.
+  private let frame1 = CGRect(x: 10, y: 20, width: 800, height: 600)
+  private let frame2 = CGRect(x: 300, y: 40, width: 1000, height: 700)
+  private let frameO = CGRect(x: 600, y: 60, width: 900, height: 500)
+
+  /// A lone-leaf folder tab on `file`, distinct per file.
+  private func savedTab(_ file: String) -> RestoreSeam.SavedTab {
+    RestoreSeam.SavedTab(
+      cwd: folder, sidebarVisible: true, layout: .leaf(path: file, preview: false))
+  }
+
+  /// `W1`: tab 1 contributes nothing, tabs 2 and 3 contribute, and `selected` is selected.
+  private func w1(selected: Int) -> SessionSeam.LiveWindow {
+    SessionSeam.LiveWindow(
+      frame: frame1,
+      tabs: [
+        SessionSeam.LiveTab(id: 1, tab: nil),
+        SessionSeam.LiveTab(id: 2, tab: savedTab(fileA)),
+        SessionSeam.LiveTab(id: 3, tab: savedTab(fileB)),
+      ],
+      selected: selected)
+  }
+
+  /// `W2`: tab 4 alone, selected.
+  private var w2: SessionSeam.LiveWindow {
+    SessionSeam.LiveWindow(
+      frame: frame2, tabs: [SessionSeam.LiveTab(id: 4, tab: savedTab(fileC))], selected: 4)
+  }
+
+  /// Tab 3 focused last, tab 2 before it, and tab 4 first.
+  private var focusOrder: StackingOrder {
+    var stacking = StackingOrder()
+    stacking.focus(4)
+    stacking.focus(2)
+    stacking.focus(3)
+    return stacking
+  }
+
+  func testTheWindowStateIsInStackingOrderWithEachWindowsContributingTabs() {
+    let windows = SessionSeam.windowState(
+      live: [w2, w1(selected: 3)], stacking: focusOrder, orphans: [])
+    XCTAssertEqual(
+      windows.map(\.frame), [frame1, frame2],
+      "W1 holds the most recently focused tab, so it must come first although it was passed "
+        + "second; [W2, W1] means windowState keeps the input order, not the stacking order")
+    guard let first = windows.first else { return }
+    XCTAssertEqual(
+      first.tabs, [savedTab(fileA), savedTab(fileB)],
+      "W1 must hold the two tabs that contribute, in tab order; tab 1 contributes nothing")
+    XCTAssertEqual(
+      first.activeTab, 1,
+      "the selected tab 3 is the second contributing tab; 2 means activeTab indexes every "
+        + "live tab, the one that contributes nothing included, which points past the end")
+    XCTAssertEqual(
+      first.recency, [1, 0],
+      "tab 3 was focused after tab 2, so recency lists index 1 first; [0, 1] means recency "
+        + "is the tab order")
+    XCTAssertEqual(
+      windows.map(\.minimized), [false, false], "neither window was minimized")
+  }
+
+  func testASelectedTabThatContributesNothingFallsBackToTheMostRecentTab() {
+    let windows = SessionSeam.windowState(
+      live: [w2, w1(selected: 1)], stacking: focusOrder, orphans: [])
+    XCTAssertEqual(
+      windows.first?.frame, frame1, "premise: W1 comes first, as in the sibling test")
+    XCTAssertEqual(
+      windows.first?.activeTab, 1,
+      "the selected tab 1 contributes nothing, so the active tab must be the most recently "
+        + "focused contributing one, tab 3 at index 1; 0 means the fallback is the first tab")
+  }
+
+  func testAWindowWithNoContributingTabIsDropped() {
+    let empty = SessionSeam.LiveWindow(
+      frame: frameO, tabs: [SessionSeam.LiveTab(id: 5, tab: nil)], selected: 5)
+    let windows = SessionSeam.windowState(
+      live: [empty, w2], stacking: focusOrder, orphans: [])
+    XCTAssertEqual(
+      windows.map(\.frame), [frame2],
+      "a window none of whose tabs contributes must be absent; a window with no tabs is not "
+        + "a §2 window, and an extra entry here writes one")
+  }
+
+  func testOrphansMergeByMinimizedThenStackingOrder() {
+    var stacking = StackingOrder()
+    stacking.focus(4)
+    stacking.focus(2)
+    stacking.minimize([1, 2, 3])
+    let orphan = WindowStateCodec.Window(
+      frame: frameO, activeTab: 0, minimized: false, tabs: [savedTab(fileC)], recency: [])
+    let windows = SessionSeam.windowState(
+      live: [w1(selected: 2), w2], stacking: stacking, orphans: [orphan])
+    XCTAssertEqual(
+      windows.map(\.frame), [frame2, frameO, frame1],
+      "the order must be the live window that is not minimized, then the orphan that is not, "
+        + "then the minimized live W1; [W2, W1, O] means orphans are appended after every "
+        + "live window, minimized ones included")
+    XCTAssertEqual(
+      windows.map(\.minimized), [false, false, true],
+      "W1's tabs were all minimized through the stacking, so its window must be written "
+        + "minimized; false means windowState never asks the stacking")
   }
 }

@@ -6,8 +6,8 @@ import Foundation
 /// pane's id. A namespace (`enum` with only static members).
 ///
 /// Zoom is front-end geometry: nothing here reaches Neovim, the pane tree or its
-/// weights, which is what lets an unzoom restore the layout exactly. Only `state.json`
-/// records it, as a mark on the zoomed leaf.
+/// weights, which is what lets an unzoom restore the layout exactly. Only the saved window
+/// state records it, as the tab's zoomed pane.
 public enum PaneZoom {
   /// What happened to the view, for `zoomed(after:zoomed:active:panes:)`.
   public enum Event: Equatable {

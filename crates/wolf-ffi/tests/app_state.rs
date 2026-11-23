@@ -8,6 +8,11 @@
 //! picks its tab by `specs/application-state.md` §4's rule, so the recency the builder submits
 //! decides which of two tabs in one directory is read back.
 //!
+//! A second submit then pins a window's `minimized` flag, set on the last window only, and
+//! `FfiAppTab::restored`, which applies §5's restore rules to a read-back tab: an edit pane on a
+//! missing file becomes an empty edit pane, and a zoom on it is dropped. The saved tab itself
+//! keeps both, since only the restore checks files.
+//!
 //! One `#[test]`: it sets the process-global `WOLF_STATE_DIR` before the store opens, and the
 //! store is a process-wide `OnceLock`, so a second test could race it or find it opened
 //! elsewhere. The discriminants are local constants mirroring the bridge's private tables.
@@ -18,7 +23,7 @@ use wolf_ffi::{
     wolf_ffi_app_state_pane_cursor, wolf_ffi_app_state_pane_scroll,
     wolf_ffi_app_state_project_state, wolf_ffi_app_state_push_layout, wolf_ffi_app_state_push_pane,
     wolf_ffi_app_state_push_recency, wolf_ffi_app_state_tab_drawer, wolf_ffi_app_state_tab_sidebar,
-    wolf_ffi_app_state_window_state,
+    wolf_ffi_app_state_window_minimized, wolf_ffi_app_state_window_state,
 };
 
 // `pane_kind`
@@ -280,5 +285,93 @@ fn the_app_state_builder_round_trips_through_the_shared_store() {
     assert!(
         !wolf_ffi_app_state_project_state("/nowhere".to_owned()).found(),
         "a directory never opened has no project state"
+    );
+
+    // --- A minimized window, and a tab restored over a missing file ---
+    let files = tempfile::tempdir().expect("failed to create the files tempdir");
+    let directory = files.path().to_string_lossy().into_owned();
+    let kept = files.path().join("kept.md");
+    std::fs::write(&kept, "# kept\n").expect("failed to write the kept file");
+    let kept = kept.to_string_lossy().into_owned();
+    // Never created, so the restore must find it missing.
+    let gone = files.path().join("gone.md").to_string_lossy().into_owned();
+
+    wolf_ffi_app_state_begin();
+    wolf_ffi_app_state_add_window(true, W0.0, W0.1, W0.2, W0.3, 0);
+    wolf_ffi_app_state_add_tab(directory.clone(), true, REF_NONE, 0, REF_PANE, 1);
+    wolf_ffi_app_state_push_pane(EDIT, kept.clone(), 0.5);
+    wolf_ffi_app_state_push_pane(EDIT, gone.clone(), 0.5);
+    wolf_ffi_app_state_push_layout(VERTICAL, 2, 1.0);
+    wolf_ffi_app_state_commit_root();
+    wolf_ffi_app_state_push_recency(0);
+    wolf_ffi_app_state_add_window(true, W1.0, W1.1, W1.2, W1.3, 0);
+    wolf_ffi_app_state_window_minimized(true);
+    wolf_ffi_app_state_add_tab(String::new(), false, REF_NONE, 0, REF_NONE, 0);
+    wolf_ffi_app_state_commit();
+    assert!(
+        wolf_ffi_app_state_flush(),
+        "the second commit's write must be attempted within the flush timeout"
+    );
+
+    let windows = wolf_ffi_app_state_window_state().windows();
+    assert_eq!(
+        windows.len(),
+        2,
+        "the second commit must replace the first with its two windows"
+    );
+    assert!(
+        !windows[0].minimized(),
+        "window 0 was never marked minimized; true means the setter marks every window, not the \
+         last one"
+    );
+    assert!(
+        windows[1].minimized(),
+        "window 1 was marked minimized right after it was added; false means the setter, the \
+         stored row or the accessor drops the flag"
+    );
+
+    let tabs = windows[0].tabs();
+    let saved = &tabs[0];
+    assert_eq!(
+        (saved.zoomed_kind(), saved.zoomed_index()),
+        (REF_PANE, 1),
+        "the saved tab keeps its zoom on pane 1: the store checks no file"
+    );
+    assert_eq!(
+        saved.root().child(1).path(),
+        gone,
+        "the saved tab keeps the missing file's path: only the restore replaces it"
+    );
+
+    let restored = saved.restored();
+    assert_eq!(
+        restored.directory(),
+        directory,
+        "restored() keeps the tab's directory"
+    );
+    let root = restored.root();
+    assert_eq!(
+        root.child_count(),
+        2,
+        "restored() keeps the layout's two panes in place"
+    );
+    assert_eq!(
+        root.child(0).path(),
+        kept,
+        "the pane on an existing file is kept as it was saved"
+    );
+    let replaced = root.child(1);
+    assert_eq!(
+        (replaced.is_pane(), replaced.kind(), replaced.path()),
+        (true, EDIT, String::new()),
+        "the edit pane on the missing file must restore as an empty edit pane in the same \
+         position; the missing path means restored() applied no rule, so the rebuild would \
+         :edit a file that is gone"
+    );
+    assert_eq!(
+        restored.zoomed_kind(),
+        REF_NONE,
+        "the zoom named the pane restored empty, so restored() must drop it; PANE means the \
+         zoom survives on an empty pane, which §5 forbids"
     );
 }

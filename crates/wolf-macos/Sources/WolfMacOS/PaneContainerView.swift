@@ -159,13 +159,13 @@ final class PaneContainerView: NSView {
   /// The pane Zoom Pane shows alone over the whole pane area, or `nil`. `PaneZoom` owns
   /// every rule that sets it. Zoom is front-end geometry: it never touches `tree`, its
   /// weights or `drawerWeight`, so an unzoom restores them exactly. It belongs to this
-  /// view; `state.json` records it through `zoomedPaneId`, and a launch restore re-zooms it.
+  /// view; the window state records it through `zoomedPaneId`, and a launch restore re-zooms it.
   private var zoomedPane: PaneId?
 
   /// A saved pane-split layout awaiting rebuild once this view's first pane binds
-  /// (consumed once in `onRenderWake`): Rust renders and realizes `node`, and
+  /// (consumed once in `onRenderWake`): Rust renders and realizes `tab`, and
   /// `saved` is the same tree projected for the Swift `PaneTree`.
-  private var pendingLayoutRebuild: (saved: SavedPaneNode, node: FfiPaneNode)?
+  private var pendingLayoutRebuild: (saved: SavedPaneNode, tab: FfiAppTab)?
 
   /// The terminal restore a crash-restart requested (`requestTerminalRestore`), run once
   /// by `onRenderWake` after the first pane binds and no layout rebuild waits. See
@@ -673,7 +673,7 @@ final class PaneContainerView: NSView {
   /// Whether a pane is zoomed.
   var isZoomed: Bool { zoomedPane != nil }
 
-  /// The zoomed pane's id, which `state.json` records as a mark on its leaf. A zoomed
+  /// The zoomed pane's id, which the window state records by its leaf's index. A zoomed
   /// drawer is no leaf of `paneLayout`, so it marks none and persists unzoomed.
   var zoomedPaneId: PaneId? { zoomedPane }
 
@@ -692,7 +692,7 @@ final class PaneContainerView: NSView {
   /// with no drawer stays unzoomed. Zooming focuses the pane's window, as
   /// `closeActivePane()` does, so Neovim's current window is the pane the view shows.
   /// Unzooming sizes the hidden panes to the restored layout. It fires `onLayoutChanged`,
-  /// since `state.json` records the zoom and this is the change no render wake makes.
+  /// since the window state records the zoom and this is the change no render wake makes.
   func toggleZoom() {
     zoomedPane = PaneZoom.zoomed(
       after: .toggle, zoomed: zoomedPane, active: activePane, panes: viewPanes)
@@ -1494,11 +1494,11 @@ final class PaneContainerView: NSView {
 
     // One-shot launch restore: once the first pane is bound, realize the saved split tree in nvim
     // and rebind the panes.
-    if let (saved, node) = pendingLayoutRebuild {
+    if let (saved, tab) = pendingLayoutRebuild {
       ensureInitialPane()
       if panes.isEmpty { return }  // no window grid yet; retry on the next wake.
       pendingLayoutRebuild = nil
-      rebuildLayout(from: saved, node: node)
+      rebuildLayout(from: saved, tab: tab)
       applyTitlebarTheme()
       syncPreviewWebViews()
       refreshOverlays()
@@ -2399,11 +2399,11 @@ final class PaneContainerView: NSView {
   private(set) var restoreFailed = false
 
   /// Requests that this view's pane layout be rebuilt once its first pane binds
-  /// (consumed once in `onRenderWake`). `node` is the bridge
-  /// node the launch read returned, which Rust renders and realizes; `saved` is the
-  /// same tree projected for the Swift `PaneTree`.
-  func requestLayoutRebuild(_ saved: SavedPaneNode, node: FfiPaneNode) {
-    pendingLayoutRebuild = (saved, node)
+  /// (consumed once in `onRenderWake`). `tab` is the restored bridge tab the launch
+  /// read returned (`WindowStateCodec.Rebuild`), which Rust renders and realizes;
+  /// `saved` is the same tree projected for the Swift `PaneTree`.
+  func requestLayoutRebuild(_ saved: SavedPaneNode, tab: FfiAppTab) {
+    pendingLayoutRebuild = (saved, tab)
   }
 
   /// Replaces the pure layout tree wholesale (launch restore only).
@@ -2411,14 +2411,14 @@ final class PaneContainerView: NSView {
     tree = newTree
   }
 
-  /// Has Rust render and realize `node` in nvim (its window topology), then rebuilds
+  /// Has Rust render and realize `tab` in nvim (its window topology), then rebuilds
   /// the pane bindings from the returned DFS-ordered handles, taking the tree's
   /// weights from `PaneTree.rebuilt(from: saved)`, `saved` being the same tree
   /// projected for Swift. It then re-zooms the leaf `saved` marks zoomed, which it makes
   /// active. On a handle-count mismatch it logs and falls back to the single
   /// already-bound pane (leaving `tree` untouched), unzoomed.
-  private func rebuildLayout(from saved: SavedPaneNode, node: FfiPaneNode) {
-    let handles = Array(handle.rebuild_layout(node))
+  private func rebuildLayout(from saved: SavedPaneNode, tab: FfiAppTab) {
+    let handles = Array(handle.rebuild_tab(tab))
     guard handles.count == saved.leafCount else {
       NSLog(
         "wolf: layout rebuild handle count \(handles.count) != leaf count "

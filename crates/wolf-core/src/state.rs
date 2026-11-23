@@ -412,10 +412,9 @@ fn clear_unrestorable_zoom(node: &mut PaneNode) {
 }
 
 /// Renders `node` into the JSON string `runtime/nvim/init.lua`'s
-/// `_G.wolf_rebuild_layout` decodes, for the `state.json` model: GNOME calls it
-/// directly, and macOS reaches it through wolf-ffi's
-/// `WolfCoreHandle::rebuild_layout`. [`crate::app_state::tab_rebuild_spec`]
-/// renders the same document for the application-state model.
+/// `_G.wolf_rebuild_layout` decodes, for the `state.json` model, which GNOME
+/// calls it for. [`crate::app_state::tab_rebuild_spec`] renders the same document
+/// for the application-state model.
 ///
 /// **This is NOT [`PaneNode`]'s serde shape.** The Lua helper reads a different,
 /// terser document:

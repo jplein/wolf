@@ -1,8 +1,9 @@
 // Pure write-side decisions for state persistence, ported from wolf-gnome's state_seam.
 
+import CoreGraphics
 import Foundation
 
-/// What each live view contributes to `state.json`, and when a commit runs. A
+/// What each live view contributes to the window state, and when a commit runs. A
 /// namespace (`enum` with only static members), the write-side counterpart of
 /// `RestoreSeam`.
 public enum SessionSeam {
@@ -202,6 +203,56 @@ public enum SessionSeam {
       }
       return positions.isEmpty ? nil : OrphanGroup(groupIndex: groupIndex, positions: positions)
     }
+  }
+
+  /// One live tab: its id in the stacking order, and the tab it contributes, `nil` for none.
+  public struct LiveTab: Equatable {
+    public let id: Int
+    public let tab: RestoreSeam.SavedTab?
+
+    public init(id: Int, tab: RestoreSeam.SavedTab?) {
+      self.id = id
+      self.tab = tab
+    }
+  }
+
+  /// One live window: its normal frame, its tabs in tab-bar order, and the selected tab's id.
+  public struct LiveWindow: Equatable {
+    public let frame: CGRect
+    public let tabs: [LiveTab]
+    public let selected: Int?
+
+    public init(frame: CGRect, tabs: [LiveTab], selected: Int?) {
+      self.frame = frame
+      self.tabs = tabs
+      self.selected = selected
+    }
+  }
+
+  /// The windows a commit writes, frontmost first, with minimized windows behind the rest.
+  ///
+  /// Each live window holds the tabs that contribute, and is dropped when none does. Its
+  /// `activeTab` is the selected tab's index among those, or the most recently focused one when
+  /// the selected tab contributes nothing. `orphans`, the saved windows no live view took, merge
+  /// in after the live windows of their class, minimized or not, keeping their own order.
+  public static func windowState(
+    live: [LiveWindow], stacking: StackingOrder, orphans: [WindowStateCodec.Window]
+  ) -> [WindowStateCodec.Window] {
+    let ranked = stacking.order(live.map { $0.tabs.map(\.id) })
+    let windows: [WindowStateCodec.Window] = ranked.compactMap { index in
+      let window = live[index]
+      let contributing = window.tabs.compactMap { live in live.tab.map { (live.id, $0) } }
+      guard !contributing.isEmpty else { return nil }
+      let ids = contributing.map(\.0)
+      let recency = stacking.recency(ids)
+      let active = window.selected.flatMap { ids.firstIndex(of: $0) } ?? recency[0]
+      return WindowStateCodec.Window(
+        frame: window.frame, activeTab: active,
+        minimized: stacking.isMinimized(window.tabs.map(\.id)),
+        tabs: contributing.map(\.1), recency: recency)
+    }
+    return windows.filter { !$0.minimized } + orphans.filter { !$0.minimized }
+      + windows.filter(\.minimized) + orphans.filter(\.minimized)
   }
 
   /// The leaf ids of `layout`, in DFS order.

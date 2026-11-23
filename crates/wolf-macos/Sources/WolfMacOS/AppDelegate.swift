@@ -35,9 +35,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   /// The tab whose Neovim was last told it has focus (`refreshTabFocus()`), or `nil`.
   private var focusedTabId: Int?
 
-  /// The next monotonic tab id to mint (used only as an opaque Window-menu / raise
-  /// key, never a `state.json` slot).
+  /// The next monotonic tab id to mint: the Window-menu / raise key and the stacking
+  /// order's tab id.
   private var nextTabId = 0
+
+  /// The window stacking order and tab recency (`specs/application-state.md` §3), fed by
+  /// main-window changes and minimize events and seeded once the launch restore has
+  /// assembled its windows.
+  private var stacking = StackingOrder()
 
   /// Throttles whole-tree snapshots: the first request arms one walk + commit
   /// `snapshotCoalesceDelay` later, and requests until then join it. A throttle, not a
@@ -58,7 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   /// The saved windows, or the saved tabs of a window, that no live view took at
   /// launch (a failed core start). Never retried, but carried into
   /// every commit so the next launch can try them again.
-  private var orphanWindows: [RestoredWindowGroup] = []
+  private var orphanWindows: [WindowStateCodec.Window] = []
 
   /// The Window submenu (returned by `AppMenu.install`), rebuilt with the
   /// dynamic per-window list on window open/close/cwd-change. `nil` until launch.
@@ -121,11 +126,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     // follows and observes the live OS appearance.
     applyResolvedAppearance()
 
-    // Read saved state before any core starts. A fresh run restores nothing and opens one
+    // Read the window state before any core starts. A fresh run restores nothing and opens one
     // empty-state window.
-    let restoredGroups = Self.restoredGroups(from: wolf_ffi_load_state())
+    let loaded = WindowStateCodec.load(wolf_ffi_app_state_window_state())
 
-    if restoredGroups.isEmpty {
+    if loaded.isEmpty {
       // Fresh first run: always the empty state (no folder), nvim at home.
       guard let controller = startEmptyStateWindow() else {
         presentStartupFailureAndQuit()
@@ -139,14 +144,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     // Plan one tab, with its own Neovim, per saved tab, materialize them, then assemble the OS
-    // windows and tab groups from the saved geometry.
+    // windows and tab groups in stacking order, which seeds the live stacking order.
     let plan = RestoreSeam.plan(
-      windows: Self.savedWindows(from: restoredGroups),
+      windows: loaded.map { RestoreSeam.SavedWindow(tabs: $0.tabs.map(\.saved)) },
       home: homeDir(),
       isDirectory: isDirectoryCheck())
-    let byGroup = materializeTabs(plan, groups: restoredGroups)
-    assembleWindows(byGroup, groups: restoredGroups)
-    orphanWindows = Self.unmaterializedGroups(byGroup, groups: restoredGroups)
+    let byGroup = materializeTabs(plan, windows: loaded)
+    stacking = StackingOrder(seed: assembleWindows(byGroup, windows: loaded))
+    orphanWindows = Self.unmaterializedWindows(byGroup, windows: loaded)
 
     // Every restored core failed (edge case): quit rather than run windowless.
     if controllers.isEmpty {
@@ -160,20 +165,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
   /// PHASE A — starts a core and builds a controller for every planned tab
   /// WITHOUT anchoring or tab-grouping them yet. Returns a map from the ORIGINAL
-  /// saved group index to the group's `(positionInGroup, controller)` members, so
+  /// saved window index to the window's `(positionInGroup, controller)` members, so
   /// Phase B can drop each view back into the right OS window/tab-group. A tab
-  /// whose core fails to start is skipped and stays an orphan. `groups` is the read
-  /// `plan` came from, which supplies each tab's bridge layout node by the same
-  /// `(groupIndex, positionInGroup)` lookup.
+  /// whose core fails to start is skipped and stays an orphan. Only a tab planned
+  /// with a folder rebuilds its saved layout; one whose directory is missing shows
+  /// the empty state and keeps its saved tab in its cache.
   private func materializeTabs(
-    _ plan: [RestoreSeam.PlannedTab], groups: [RestoredWindowGroup]
+    _ plan: [RestoreSeam.PlannedTab], windows: [WindowStateCodec.LoadedWindow]
   ) -> [Int: [(pos: Int, controller: WolfWindowController)]] {
     var byGroup: [Int: [(pos: Int, controller: WolfWindowController)]] = [:]
     for tab in plan {
-      guard let tabCore = startTabCore(launchCwd: tab.launchCwd) else { continue }
+      guard
+        let loadedTab = windows[safe: tab.groupIndex]?.tabs[safe: tab.positionInGroup],
+        let tabCore = startTabCore(launchCwd: tab.launchCwd)
+      else { continue }
       let restoredTab = RestoredTabState(
-        cwd: tab.cwd, sidebarVisible: tab.sidebarVisible, layout: tab.layout,
-        layoutNode: groups[safe: tab.groupIndex]?.tabs[safe: tab.positionInGroup]?.layoutNode)
+        saved: loadedTab.saved, rebuild: tab.hasFolder ? loadedTab.rebuild : nil)
       let controller = makeController(
         tabId: mintTabId(), tabCore: tabCore, restoredTab: restoredTab, anchorFrame: nil,
         hasFolder: tab.hasFolder)
@@ -185,11 +192,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   }
 
   /// The saved tabs no view took in `byGroup`, each saved window's in saved order
-  /// under that window's geometry (`SessionSeam.orphanedSlots`).
-  private static func unmaterializedGroups(
+  /// under that window's frame, active tab and minimized flag (`SessionSeam.orphanedSlots`).
+  private static func unmaterializedWindows(
     _ byGroup: [Int: [(pos: Int, controller: WolfWindowController)]],
-    groups: [RestoredWindowGroup]
-  ) -> [RestoredWindowGroup] {
+    windows: [WindowStateCodec.LoadedWindow]
+  ) -> [WindowStateCodec.Window] {
     var materialized = Set<SessionSeam.TabSlot>()
     for (groupIndex, members) in byGroup {
       for member in members {
@@ -198,32 +205,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
       }
     }
     let orphans = SessionSeam.orphanedSlots(
-      savedTabCounts: groups.map { $0.tabs.count }, materialized: materialized)
+      savedTabCounts: windows.map { $0.tabs.count }, materialized: materialized)
     return orphans.map { orphan in
-      let group = groups[orphan.groupIndex]
-      return RestoredWindowGroup(
-        x: group.x, y: group.y, width: group.width, height: group.height,
-        tabs: orphan.positions.map { group.tabs[$0] })
+      let window = windows[orphan.groupIndex]
+      return WindowStateCodec.Window(
+        frame: window.frame ?? .zero,
+        activeTab: orphan.positions.firstIndex(of: window.activeTab) ?? 0,
+        minimized: window.minimized, tabs: orphan.positions.map { window.tabs[$0].saved },
+        recency: [])
     }
   }
 
-  /// PHASE B — assembles the OS windows/tab-groups: for each saved window group
-  /// in order, anchors the first surviving view at the group's validated frame
-  /// and `addTabbedWindow`s the rest into its tab group. A group with no surviving
-  /// views is dropped.
+  /// One assembled window: its members in tab order, the selected one's index, and
+  /// whether it restores minimized.
+  private struct AssembledWindow {
+    let members: [WolfWindowController]
+    let selected: Int
+    let minimized: Bool
+  }
+
+  /// PHASE B — assembles the OS windows/tab-groups: for each saved window in
+  /// stacking order, anchors the first surviving view at the saved frame when one
+  /// intersects a screen, `addTabbedWindow`s the rest and selects the saved active
+  /// tab. It then orders the windows so the first is frontmost and key, minimizes
+  /// the minimized ones, and returns the stacking-order seed. A window with no
+  /// surviving view is dropped.
   private func assembleWindows(
     _ byGroup: [Int: [(pos: Int, controller: WolfWindowController)]],
-    groups: [RestoredWindowGroup]
-  ) {
+    windows: [WindowStateCodec.LoadedWindow]
+  ) -> [StackingOrder.SeedWindow] {
+    var assembled: [AssembledWindow] = []
     for groupIndex in byGroup.keys.sorted() {
-      guard let group = groups[safe: groupIndex] else { continue }
+      guard let saved = windows[safe: groupIndex] else { continue }
       let members = byGroup[groupIndex]!.sorted { $0.pos < $1.pos }
       guard let anchor = members.first?.controller, let anchorWindow = anchor.nsWindow
       else { continue }
 
-      if let anchorFrame = StateSeam.restoredWindowFrame(
-        x: group.x, y: group.y, width: group.width, height: group.height,
-        screenVisibleFrames: NSScreen.screens.map(\.visibleFrame))
+      if let frame = saved.frame,
+        let anchorFrame = StateSeam.restoredWindowFrame(
+          x: frame.origin.x, y: frame.origin.y, width: frame.size.width,
+          height: frame.size.height, screenVisibleFrames: NSScreen.screens.map(\.visibleFrame))
       {
         anchorWindow.setFrame(anchorFrame, display: false)
       }
@@ -233,6 +254,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
           anchorWindow.addTabbedWindow(newWindow, ordered: .above)
         }
       }
+      let positions = members.map(\.pos)
+      let selected = RestoreSeam.selectedPosition(active: saved.activeTab, materialized: positions)
+        .flatMap { positions.firstIndex(of: $0) }
+      assembled.append(
+        AssembledWindow(
+          members: members.map(\.controller), selected: selected ?? 0,
+          minimized: saved.minimized))
+    }
+
+    // Back to front, each window's selected tab in front of its group, so the first ends
+    // frontmost; then the minimized windows leave, and the first other one takes key.
+    for window in assembled.reversed() {
+      guard let selected = window.members[window.selected].nsWindow else { continue }
+      selected.tabGroup?.selectedWindow = selected
+      selected.orderFront(nil)
+    }
+    for window in assembled where window.minimized {
+      window.members[window.selected].nsWindow?.miniaturize(nil)
+    }
+    if let front = assembled.first(where: { !$0.minimized }) {
+      front.members[front.selected].nsWindow?.makeKeyAndOrderFront(nil)
+    }
+    return assembled.map {
+      StackingOrder.SeedWindow(
+        tabs: $0.members.map(\.tabId), activeTab: $0.selected, minimized: $0.minimized)
     }
   }
 
@@ -333,8 +379,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   /// main, so a gain fires `FocusGained` and the `WolfAutoRead` `:checktime` reloads
   /// a file another tab saved. Main rather than key, so a picker panel taking key
   /// reports nothing.
+  ///
+  /// The main window's tab also moves to the front of the stacking order, which
+  /// schedules a snapshot when it changes the order.
   func refreshTabFocus() {
     let mainTab = controllers.first { !$0.isTornDown && $0.owns(NSApp.mainWindow) }?.tabId
+    if let mainTab {
+      let before = stacking
+      stacking.focus(mainTab)
+      if stacking != before { scheduleStateSnapshot() }
+    }
     let next = TabFocusSeam.focusedTab(appActive: NSApp.isActive, mainTab: mainTab)
     for edge in TabFocusSeam.edges(from: focusedTabId, to: next) {
       let tab = controllers.first { $0.tabId == edge.tab && !$0.isTornDown }
@@ -386,9 +440,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     removeAppearanceObserver()
 
     // Commit the whole tree synchronously, as a coalesced snapshot may not have fired, then block
-    // briefly on the writer so `state.json` is on disk before teardown.
+    // briefly on the writer so the window state is on disk before any Neovim exits.
     snapshotNow()
-    _ = wolf_ffi_state_flush()
+    _ = wolf_ffi_app_state_flush()
 
     // Backstop for views that skipped windowWillClose; each teardown shuts its tab's core down.
     for controller in controllers {
@@ -464,7 +518,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   /// teardown / window close), then rebuilds the dynamic Window menu.
   func removeController(_ controller: WolfWindowController) {
     controllers.removeAll { $0 === controller }
+    stacking.remove(controller.tabId)
     rebuildWindowMenu()
+  }
+
+  /// Notified by a controller when its window was minimized or restored, which acts on
+  /// its whole tab group: the group's tabs are marked in the stacking order, and a
+  /// snapshot is scheduled.
+  func windowMinimizedChanged(_ controller: WolfWindowController, minimized: Bool) {
+    guard let window = controller.nsWindow else { return }
+    let tabs = (window.tabGroup?.windows ?? [window]).compactMap { tabWindow in
+      controllers.first { !$0.isTornDown && $0.owns(tabWindow) }?.tabId
+    }
+    if minimized {
+      stacking.minimize(tabs)
+    } else {
+      stacking.deminimize(tabs)
+    }
+    scheduleStateSnapshot()
   }
 
   /// Rebuilds the dynamic Window-menu per-window list from the live controllers.
@@ -545,7 +616,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
   /// Groups the view closes of one runloop turn (`SessionSeam.CloseBurst`); a keep
   /// commits the tree read at the burst's first close.
-  private lazy var closeBurst = SessionSeam.CloseBurst<[CommitWindow]?>(
+  private lazy var closeBurst = SessionSeam.CloseBurst<[WindowStateCodec.Window]?>(
     scheduleEnd: { DispatchQueue.main.async(execute: $0) },
     read: { [weak self] in self?.gatherTree() },
     commit: { [weak self] windows in
@@ -561,13 +632,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     return closeBurst.close(terminating: isTerminating, otherLiveViews: others)
   }
 
-  /// One saved window as a commit writes it: its geometry and its tabs.
-  private struct CommitWindow {
-    let frame: CGRect
-    let tabs: [RestoreSeam.SavedTab]
-  }
-
-  /// Walks the live window/tab tree and commits it to `state.json`, when
+  /// Walks the live window/tab tree and submits it to the window state, when
   /// `gatherTree()` answers a tree.
   func snapshotNow() {
     if let windows = gatherTree() { commitTree(windows) }
@@ -575,14 +640,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
   /// Walks the live window/tab tree into the windows a commit writes. Only views that
   /// are not torn down count. Windows are grouped by their native tab group (a solo
-  /// window is its own group); tab order comes from `tabGroup.windows`; each group's
-  /// geometry is its selected tab's frame (fallback: the first tab's). Each tab
-  /// contributes its `persistedTab()`, a window with none is omitted, and
-  /// `orphanWindows` follow. `SessionSeam.committedWindows` decides whether anything
-  /// is committed at all: `nil` commits nothing.
-  private func gatherTree() -> [CommitWindow]? {
+  /// window is its own group); tab order comes from `tabGroup.windows`. Each group's
+  /// frame is its selected tab's normal frame, else any member's, else the selected
+  /// window's frame. Every tab contributes its `persistedTab()`, and
+  /// `SessionSeam.windowState` orders the windows by the stacking order and merges
+  /// `orphanWindows` in. `SessionSeam.committedWindows` decides whether anything is
+  /// committed at all: `nil` commits nothing.
+  private func gatherTree() -> [WindowStateCodec.Window]? {
     let live = controllers.filter { !$0.isTornDown }
-    var gathered: [CommitWindow] = []
+    var gathered: [SessionSeam.LiveWindow] = []
     var seenGroups = Set<ObjectIdentifier>()
     for controller in live {
       guard let window = controller.nsWindow else { continue }
@@ -599,58 +665,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         groupWindows = [window]
       }
 
+      let members = groupWindows.compactMap { tabWindow in live.first { $0.owns(tabWindow) } }
+      let selectedWindow = window.tabGroup?.selectedWindow ?? window
+      let selected = members.first { $0.owns(selectedWindow) }
       let frame =
-        window.tabGroup?.selectedWindow?.frame ?? groupWindows.first?.frame
-        ?? window.frame
-      let tabs = groupWindows.compactMap { tabWindow in
-        live.first { $0.owns(tabWindow) }?.persistedTab()
-      }
-      if !tabs.isEmpty {
-        gathered.append(CommitWindow(frame: frame, tabs: tabs))
-      }
-    }
-    for orphan in orphanWindows {
+        selected?.normalFrame ?? members.lazy.compactMap(\.normalFrame).first
+        ?? selectedWindow.frame
       gathered.append(
-        CommitWindow(
-          frame: CGRect(x: orphan.x, y: orphan.y, width: orphan.width, height: orphan.height),
-          tabs: orphan.tabs.map {
-            RestoreSeam.SavedTab(cwd: $0.cwd, sidebarVisible: $0.sidebarVisible, layout: $0.layout)
-          }))
+        SessionSeam.LiveWindow(
+          frame: frame,
+          tabs: members.map { SessionSeam.LiveTab(id: $0.tabId, tab: $0.persistedTab()) },
+          selected: selected?.tabId))
     }
 
-    return SessionSeam.committedWindows(liveViews: live.count, windows: gathered)
+    return SessionSeam.committedWindows(
+      liveViews: live.count,
+      windows: SessionSeam.windowState(live: gathered, stacking: stacking, orphans: orphanWindows))
   }
 
-  /// Commits `windows` to `state.json` via the write-side snapshot builder.
-  private func commitTree(_ windows: [CommitWindow]) {
-    wolf_ffi_state_snapshot_begin()
-    for window in windows {
-      wolf_ffi_state_snapshot_add_window(
-        window.frame.origin.x, window.frame.origin.y, window.frame.size.width,
-        window.frame.size.height)
-      for tab in window.tabs {
-        wolf_ffi_state_snapshot_add_tab(tab.cwd, tab.sidebarVisible)
-        // An empty-state lone pane has no layout and pushes nothing.
-        guard let layout = tab.layout else { continue }
-        Self.pushLayout(layout)
-      }
-    }
-    wolf_ffi_state_snapshot_commit()
-  }
-
-  /// Pushes `layout` through the write-side layout builder, zoom marks included, and
-  /// commits it to the last tab added to the snapshot.
-  static func pushLayout(_ layout: SavedPaneNode) {
-    for token in PaneLayoutCodec.postOrderTokens(layout) {
-      switch token {
-      case .leaf(let path, let preview, let terminal, let zoomed, let weight):
-        wolf_ffi_state_layout_push_leaf(path, preview, terminal, zoomed, weight)
-      case .split(let orientation, let childCount, let weight):
-        let orient: UInt8 = orientation == .vertical ? 1 : 0
-        wolf_ffi_state_layout_push_split(orient, UInt32(childCount), weight)
-      }
-    }
-    wolf_ffi_state_layout_commit_to_tab()
+  /// Submits `windows` to the window state (`WindowStateCodec.submit`).
+  private func commitTree(_ windows: [WindowStateCodec.Window]) {
+    WindowStateCodec.submit(windows)
   }
 
   /// Refreshes the tab-bar titles for `window`'s whole tab group from each tab's
@@ -847,64 +882,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   private func launchDecision(restoredCwd: String) -> StateSeam.LaunchDecision {
     StateSeam.launchDecision(
       restored: restoredCwd, home: homeDir(), isDirectory: isDirectoryCheck())
-  }
-
-  /// Projects the restored window GROUPS into `RestoreSeam.SavedWindow`s (the
-  /// restore planner's input), preserving window + tab order.
-  private static func savedWindows(from groups: [RestoredWindowGroup]) -> [RestoreSeam.SavedWindow]
-  {
-    groups.map { group in
-      RestoreSeam.SavedWindow(
-        tabs: group.tabs.map {
-          RestoreSeam.SavedTab(
-            cwd: $0.cwd, sidebarVisible: $0.sidebarVisible, layout: $0.layout)
-        })
-    }
-  }
-
-  /// Extracts EVERY saved window group (geometry + ordered tabs) from the
-  /// bridge's restore read into plain values (element refs must not outlive the
-  /// vec). A group with no tabs is dropped (nothing to restore).
-  private static func restoredGroups(from state: FfiState) -> [RestoredWindowGroup] {
-    let windows = state.windows()
-    var result: [RestoredWindowGroup] = []
-    for i in 0..<windows.len() {
-      guard let w = windows.get(index: UInt(i)) else { continue }
-      let tabsVec = w.tabs()
-      var tabs: [RestoredTabState] = []
-      for j in 0..<tabsVec.len() {
-        guard let t = tabsVec.get(index: UInt(j)) else { continue }
-        let node: FfiPaneNode? = t.has_layout() ? t.layout() : nil
-        tabs.append(
-          RestoredTabState(
-            cwd: t.cwd().toString(), sidebarVisible: t.sidebar_visible(),
-            layout: node.map(Self.savedPaneNode(from:)), layoutNode: node))
-      }
-      if tabs.isEmpty { continue }
-      result.append(
-        RestoredWindowGroup(
-          x: w.x(), y: w.y(), width: w.width(), height: w.height(), tabs: tabs))
-    }
-    return result
-  }
-
-  /// Recursively projects an opaque bridge `FfiPaneNode` into a plain
-  /// `SavedPaneNode` value, zoom marks included (element refs must not outlive the
-  /// bridge read).
-  static func savedPaneNode(from node: FfiPaneNode) -> SavedPaneNode {
-    if node.is_leaf() {
-      return .leaf(
-        path: node.leaf_path().toString(), preview: node.is_preview(),
-        terminal: node.is_terminal(), zoomed: node.is_zoomed())
-    }
-    let orientation: Orientation = node.orientation() == 1 ? .vertical : .horizontal
-    var weights: [Double] = []
-    var children: [SavedPaneNode] = []
-    for i in 0..<node.child_count() {
-      weights.append(node.weight(i))
-      children.append(savedPaneNode(from: node.child(i)))
-    }
-    return .split(orientation: orientation, weights: weights, children: children)
   }
 
   /// Shows a fatal alert when the core fails to start, then terminates.

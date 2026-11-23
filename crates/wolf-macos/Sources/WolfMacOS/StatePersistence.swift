@@ -1,14 +1,21 @@
 // Asks the coordinator for a coalesced state snapshot when one window changes.
 
 import AppKit
+import WolfKeyMap
 
 /// Observes a window's geometry, its sidebar's collapsed state, and its tab
 /// group's membership/selection, calling the injected `onChange` on each change
-/// (the coordinator's coalesced `scheduleStateSnapshot`).
+/// (the coordinator's coalesced `scheduleStateSnapshot`). It also records the
+/// window's normal frame, which the window state saves.
 final class StatePersistence: NSObject {
   private weak var window: NSWindow?
   private weak var sidebarItem: NSSplitViewItem?
   private let onChange: () -> Void
+
+  /// The window's last frame while it was neither zoomed nor full screen
+  /// (`StateSeam.normalFrame`), recorded before each geometry `onChange`. `nil`
+  /// until one is seen.
+  private(set) var normalFrame: CGRect?
 
   /// The NotificationCenter observation tokens (removed on deinit).
   private var notificationObservers: [NSObjectProtocol] = []
@@ -41,22 +48,23 @@ final class StatePersistence: NSObject {
   }
 
   /// Installs the observers: window move, end-of-live-resize, non-live resize
-  /// (zoom / programmatic setFrame), sidebar `isCollapsed` KVO, and tab-group
-  /// membership/selection (tear-off / merge / reorder / tab switch).
+  /// (zoom / programmatic setFrame), full-screen exit, sidebar `isCollapsed` KVO,
+  /// and tab-group membership/selection (tear-off / merge / reorder / tab switch).
   func install() {
+    recordNormalFrame()
     let center = NotificationCenter.default
     notificationObservers.append(
       center.addObserver(
         forName: NSWindow.didMoveNotification, object: window, queue: .main
       ) { [weak self] _ in
-        self?.onChange()
+        self?.geometryChanged()
       }
     )
     notificationObservers.append(
       center.addObserver(
         forName: NSWindow.didEndLiveResizeNotification, object: window, queue: .main
       ) { [weak self] _ in
-        self?.onChange()
+        self?.geometryChanged()
       }
     )
     notificationObservers.append(
@@ -68,7 +76,14 @@ final class StatePersistence: NSObject {
         guard let self, let window = self.window, !window.inLiveResize else {
           return
         }
-        self.onChange()
+        self.geometryChanged()
+      }
+    )
+    notificationObservers.append(
+      center.addObserver(
+        forName: NSWindow.didExitFullScreenNotification, object: window, queue: .main
+      ) { [weak self] _ in
+        self?.geometryChanged()
       }
     )
     sidebarObservation = sidebarItem?.observe(\.isCollapsed, options: [.new]) {
@@ -80,5 +95,19 @@ final class StatePersistence: NSObject {
       observer.install()
       tabGroupObserver = observer
     }
+  }
+
+  /// Records the normal frame, then asks for a snapshot.
+  private func geometryChanged() {
+    recordNormalFrame()
+    onChange()
+  }
+
+  /// Records the window's frame as its normal frame unless it is zoomed or full screen.
+  private func recordNormalFrame() {
+    guard let window else { return }
+    normalFrame = StateSeam.normalFrame(
+      previous: normalFrame, frame: window.frame, zoomed: window.isZoomed,
+      fullScreen: window.styleMask.contains(.fullScreen))
   }
 }

@@ -6,7 +6,8 @@
 //! [`TabContent::zoomed`]. These are optional when read, an absent one meaning
 //! "nothing to restore", and are not written when `None`: a pane's `cursor`,
 //! `top_line` and `scroll`, a tab's `focused` and `drawer`, and the sidebar's
-//! `mode`, `query` and three toggles.
+//! `mode`, `query` and three toggles. [`Window::minimized`] is written only when
+//! `true`, and an absent one reads `false`.
 //!
 //! A [`PaneRef`] names a pane by its index among the root's panes in depth-first
 //! order, or the drawer. That is safe across a restore because [`restored_tab`]
@@ -49,6 +50,9 @@ pub struct Window {
     pub active_tab: usize,
     /// The window's tabs, in tab-bar order.
     pub tabs: Vec<Tab>,
+    /// Whether the window is minimized. Written only when `true`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub minimized: bool,
 }
 
 /// A window's normal frame. `x` and `y` are `None` on a platform that cannot
@@ -328,9 +332,9 @@ pub struct ProjectState {
 ///
 /// Empty recency is therefore correct at launch: §3 starts it with the active tab
 /// first, which never matters to rule 2, because rule 2 runs only when no window's
-/// active tab is in `directory`. Later tasks use this both for saving and for §6's
-/// "focus the existing tab". Directories compare as strings, since the front-ends
-/// write canonical absolute paths.
+/// active tab is in `directory`. It picks the saved project state, and §6's tab to
+/// focus. Directories compare as strings, since the front-ends write canonical
+/// absolute paths.
 #[must_use]
 pub fn project_tab(
     state: &WindowState,
