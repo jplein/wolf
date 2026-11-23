@@ -1,6 +1,6 @@
 //! The shared state database `wolf.sqlite`: its open, the per-table versioning
-//! kept in its `schema` table, its recovery, and the removal of the legacy
-//! per-store files.
+//! kept in its `schema` table, its recovery, and the removal of the files it
+//! replaces: `state.json`, `state.json.tmp` and the per-store MRU databases.
 //!
 //! The policy this module implements — which tables exist, what a version
 //! mismatch does to each class, and which files are deleted when — is
@@ -30,8 +30,14 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 /// The database's file name under [`crate::state::state_dir`].
 const DB_NAME: &str = "wolf.sqlite";
 
-/// The per-store databases this one replaces, deleted on every [`Table::open`].
-const LEGACY_DB_NAMES: [&str; 3] = ["file-mru.sqlite", "folder-mru.sqlite", "command-mru.sqlite"];
+/// The files this database replaces, deleted on every [`Table::open_all`].
+const LEGACY_FILE_NAMES: [&str; 5] = [
+    "state.json",
+    "state.json.tmp",
+    "file-mru.sqlite",
+    "folder-mru.sqlite",
+    "command-mru.sqlite",
+];
 
 /// SQLite `busy_timeout` (milliseconds) so concurrent opens back off rather than
 /// fail immediately with `SQLITE_BUSY`. Installed before anything else — see
@@ -111,7 +117,7 @@ impl Table {
 
     /// Opens every table of `specs` in `dir/wolf.sqlite` on one connection,
     /// creating the directory, the file and the tables as needed, after deleting
-    /// the legacy per-store files.
+    /// the files it replaces.
     ///
     /// Infallible and eager, so the file exists as soon as this returns. A failed
     /// open leaves the connection `None`, and [`Table::with_conn`] retries it.
@@ -397,10 +403,10 @@ fn remove_db_files(path: &Path) {
     }
 }
 
-/// Removes each of [`LEGACY_DB_NAMES`] under `dir`, with its sidecars, importing
+/// Removes each of [`LEGACY_FILE_NAMES`] under `dir`, with its sidecars, importing
 /// nothing from them.
 fn remove_legacy_files(dir: &Path) {
-    for name in LEGACY_DB_NAMES {
+    for name in LEGACY_FILE_NAMES {
         remove_db_files(&dir.join(name));
     }
 }

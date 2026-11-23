@@ -184,7 +184,7 @@
 //! `Alive` arm. `WolfCore::ignorecase()` IS a `block_on_rpc` and is deliberately
 //! never called from this crate.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 use std::time::Duration;
@@ -357,20 +357,14 @@ pub struct ShellParts<'a> {
     pub nav_back_button: &'a gtk::Button,
     /// The header bar's Forward button; see [`ShellParts::nav_back_button`].
     pub nav_forward_button: &'a gtk::Button,
-    /// The user's restored sidebar PREFERENCE
-    /// ([`crate::state_seam::RestorePlan::sidebar_visible`]). The empty state
-    /// overrides it at apply time, never at restore time.
-    pub sidebar_shown: bool,
-    /// The working directory the window's tabs were launched in — the seed for
-    /// [`ShellInner::rooted_cwd`]. Taken by value; `window::build` already clones
-    /// `RestorePlan::core_cwd` for each tab.
+    /// The working directory the selected tab was launched in — the seed for
+    /// [`ShellInner::rooted_cwd`].
     pub launch_cwd: PathBuf,
     /// The crash/stall overlay + banner, driven by the liveness read.
     pub crash_overlay: &'a CrashOverlay,
-    /// This window's TABS. Every fan-out this module performs per tab — the empty
-    /// state, the sidebar preference, the focus return — goes through here, every
-    /// window-level action resolves the selected tab's core here, and so does the New
-    /// Tab press. No cycle: [`crate::tab_view`] holds the shell's callbacks only
+    /// This window's TABS. The empty state and the sidebar preference are each
+    /// tab's own and are read off the selected tab here, every window-level action
+    /// resolves the selected tab's core here, and so does the New Tab press. No cycle: [`crate::tab_view`] holds the shell's callbacks only
     /// through `Weak`s.
     pub tabs: &'a TabsHandle,
     /// The header bar's and tab bar's provider, fed on every render wake by
@@ -411,14 +405,6 @@ struct ShellInner {
     nav_back_button: gtk::Button,
     /// The header bar's Forward button; see [`ShellInner::nav_back_button`].
     nav_forward_button: gtk::Button,
-    /// The user's sidebar PREFERENCE — what they last asked for, NOT what is on
-    /// screen. [`state_seam::sidebar_is_shown`] combines it with
-    /// [`ShellInner::empty`] to decide the latter.
-    sidebar_shown: Cell<bool>,
-    /// The LIVE empty-state flag. Stored because
-    /// [`AppShell::apply_sidebar_visibility`] needs both halves of the rule and
-    /// [`AppShell::set_sidebar_preference`] is not given the flag.
-    empty: Cell<bool>,
     /// The `win.go-to-file` action, stashed by [`AppShell::install_actions`] so the
     /// empty state can disable it.
     go_to_file: RefCell<Option<gio::SimpleAction>>,
@@ -440,9 +426,9 @@ struct ShellInner {
     ///
     /// Seeded in [`build`] from the canonicalized [`ShellParts::launch_cwd`].
     /// Canonicalizing the seed is load-bearing: `live_cwd` is already canonical
-    /// (core's `apply_cwd` canonicalizes) while a cwd restored from `state.json`
-    /// need not be, and a textual mismatch would cost a spurious full re-root — a
-    /// whole fresh traversal — on every launch.
+    /// (core's `apply_cwd` canonicalizes) while a restored directory need not be,
+    /// and a textual mismatch would cost a spurious full re-root — a whole fresh
+    /// traversal — on every launch.
     rooted_cwd: RefCell<Option<PathBuf>>,
     /// The crash/stall overlay + banner, driven by [`AppShell::on_liveness_wake`].
     crash_overlay: CrashOverlay,
@@ -450,15 +436,6 @@ struct ShellInner {
     tabs: TabsHandle,
     /// The header bar's and tab bar's provider; see [`ShellParts::titlebar`].
     titlebar: TitlebarStyle,
-    /// The cwd the window's tabs were LAUNCHED in, retained beside
-    /// [`ShellInner::rooted_cwd`] rather than consumed into it.
-    ///
-    /// Both are needed and they are not the same value: `rooted_cwd` is canonical
-    /// and follows every re-root, while this one never moves and is the fallback
-    /// [`crate::tabs_ui::new_tab_cwd`] uses when the selected Neovim has not reported
-    /// a live cwd yet — the same seed [`crate::state_seam::snapshot_cwd`] persists, so
-    /// a new tab cannot be rooted somewhere the window would not have saved.
-    launch_cwd: PathBuf,
     /// The process-scoped coordinator, upgraded per use.
     coordinator: Weak<CoordinatorInner>,
     /// This window's identity, passed to every coordinator call.
@@ -503,7 +480,7 @@ pub fn build_menu_model() -> gio::Menu {
 
 /// Builds the empty-state overlay: an opaque, full-bleed container holding an
 /// `adw::StatusPage` with an "Open Folder…" button. Starts HIDDEN;
-/// [`AppShell::set_empty_state`] shows it.
+/// [`crate::tab_view::TabHandle::set_empty`] shows it.
 ///
 /// It is meant to be added with `gtk::Overlay::add_overlay` (the picker's
 /// precedent) so the editor `DrawingArea` keeps its full allocation and no
@@ -555,7 +532,7 @@ pub fn build_empty_state() -> gtk::Widget {
 /// the command palette's row activation to [`AppShell::dispatch_command`].
 ///
 /// Installs nothing else by itself: call [`AppShell::install_actions`] (after the
-/// window exists, before `present()`) and [`AppShell::set_empty_state`] next.
+/// window exists, before `present()`) and [`AppShell::apply_selected_tab`] next.
 #[must_use]
 pub fn build(parts: ShellParts<'_>) -> AppShell {
     let inner = Rc::new(ShellInner {
@@ -569,10 +546,6 @@ pub fn build(parts: ShellParts<'_>) -> AppShell {
         paned: parts.paned.clone(),
         nav_back_button: parts.nav_back_button.clone(),
         nav_forward_button: parts.nav_forward_button.clone(),
-        sidebar_shown: Cell::new(parts.sidebar_shown),
-        // Pessimistic until `set_empty_state` says otherwise, which `window::build`
-        // does immediately after `install_actions`. Nothing reads it before then.
-        empty: Cell::new(true),
         go_to_file: RefCell::new(None),
         search_in_project: RefCell::new(None),
         toggle_sidebar: RefCell::new(None),
@@ -582,7 +555,6 @@ pub fn build(parts: ShellParts<'_>) -> AppShell {
         rooted_cwd: RefCell::new(Some(
             std::fs::canonicalize(&parts.launch_cwd).unwrap_or_else(|_| parts.launch_cwd.clone()),
         )),
-        launch_cwd: parts.launch_cwd,
         crash_overlay: parts.crash_overlay.clone(),
         tabs: parts.tabs.clone(),
         titlebar: parts.titlebar.clone(),
@@ -819,12 +791,11 @@ impl AppShell {
         found.is_some_and(|action| action.is_enabled())
     }
 
-    /// Shows or hides the empty state.
-    ///
-    /// `sidebar.set_visible(false)` is the load-bearing half: the `gtk::Paned`
-    /// divider position is advisory (a start child that is merely positioned at 0
-    /// can still be re-derived by a later allocation), while an invisible start
-    /// child is never allocated at all.
+    /// Applies the selected tab's empty state and sidebar preference to the
+    /// window's widgets: the sidebar, its header-bar toggle group, and the
+    /// `win.go-to-file`, `win.search-in-project` and `win.toggle-sidebar` enables. No
+    /// selected tab reads as the empty state. Re-applied on every real selection
+    /// change, since each tab has its own of both.
     ///
     /// Disabling `win.go-to-file` and `win.search-in-project` uses the documented
     /// global escape hatch: a disabled action's accelerator does not activate AND the
@@ -835,7 +806,7 @@ impl AppShell {
     ///
     /// The search panel is guarded TWICE, and both halves are needed: the disabled
     /// action is what the chord and the menu item see, while
-    /// [`crate::search_panel::show_decision`] over this shell's own empty flag is
+    /// [`crate::search_panel::show_decision`] over the selected tab's empty flag is
     /// what the command palette's row and `:WolfSearchInProject` meet in
     /// [`AppShell::perform`], since the palette offers a live row for every
     /// dispatched command.
@@ -844,15 +815,10 @@ impl AppShell {
     /// buffer picker's recorded reason: the captive Neovim runs in a project-less
     /// window too, and a drawer there is a working shell rather than a dead
     /// surface.
-    pub fn set_empty_state(&self, empty: bool) {
-        // Per tab: the status page covers one tab's panes, and each tab's persisted `cwd` follows the
-        // flag. Everything below is per window.
-        for tab in self.inner.tabs.entries() {
-            tab.set_empty(empty);
-        }
-        self.inner.empty.set(empty);
+    pub fn apply_selected_tab(&self) {
+        let empty = self.selected_is_empty();
         // Never `sidebar.set_visible` directly: a toggle and the empty state are two inputs to one rule,
-        // or the next `set_empty_state(false)` undoes the user's toggle.
+        // or the next selection undoes the user's toggle.
         self.apply_sidebar_visibility();
         self.inner.sidebar.toggles().set_sensitive(!empty);
         if let Some(action) = self.inner.go_to_file.borrow().as_ref() {
@@ -879,8 +845,12 @@ impl AppShell {
     /// toplevel with no focus widget at all, which kills window-level key dispatch
     /// outright.
     fn apply_sidebar_visibility(&self) {
-        let shown =
-            state_seam::sidebar_is_shown(self.inner.sidebar_shown.get(), self.inner.empty.get());
+        let wants = self
+            .inner
+            .tabs
+            .selected()
+            .is_some_and(|tab| tab.sidebar_shown());
+        let shown = state_seam::sidebar_is_shown(wants, self.selected_is_empty());
         // Sampled before `set_visible`, for `apply_overlay`'s reason: a hidden focus widget reads as none.
         if !shown && self.inner.sidebar.focus_is_inside() {
             self.focus_selected_strip();
@@ -903,24 +873,34 @@ impl AppShell {
         }
     }
 
-    /// Flips the user's sidebar preference; see [`AppShell::set_sidebar_preference`].
-    fn toggle_sidebar(&self) {
-        self.set_sidebar_preference(!self.inner.sidebar_shown.get());
+    /// Whether the selected tab is in the empty state; `true` with no selected tab.
+    fn selected_is_empty(&self) -> bool {
+        self.inner.tabs.selected().is_none_or(|tab| tab.is_empty())
     }
 
-    /// Sets the user's sidebar preference to `shown`, applies it, and records it for
-    /// persistence.
+    /// Flips the selected tab's sidebar preference; see
+    /// [`AppShell::set_sidebar_preference`].
+    fn toggle_sidebar(&self) {
+        let shown = self
+            .inner
+            .tabs
+            .selected()
+            .is_some_and(|tab| tab.sidebar_shown());
+        self.set_sidebar_preference(!shown);
+    }
+
+    /// Sets the selected tab's sidebar preference to `shown`, records it for
+    /// persistence, and applies it.
     ///
     /// The preference is what is persisted and restored — not what is on screen —
     /// so a session spent in the empty state cannot come back with the tree hidden.
+    /// The widget is per window (see `window::build`) but the preference is per tab,
+    /// so only the selected tab's changes.
     fn set_sidebar_preference(&self, shown: bool) {
-        self.inner.sidebar_shown.set(shown);
-        self.apply_sidebar_visibility();
-        // The widget is per window (see `window::build`) but the preference is per tab, so every tab
-        // records it, unselected ones included.
-        for tab in self.inner.tabs.entries() {
+        if let Some(tab) = self.inner.tabs.selected() {
             tab.set_sidebar_shown(shown);
         }
+        self.apply_sidebar_visibility();
     }
 
     /// Yanks the focused Neovim's visual-mode selection and writes it to the
@@ -2004,7 +1984,7 @@ impl AppShell {
             UiAction::ToggleFullWidth => self.send_input(InputEvent::ToggleFullWidth),
             UiAction::ToggleTerminal => self.toggle_terminal(),
             UiAction::CloseWindow => self.close_window(),
-            UiAction::MinimizeWindow => self.inner.window.minimize(),
+            UiAction::MinimizeWindow => self.minimize_window(),
             UiAction::QuitApplication => self.quit_application(),
             UiAction::OpenPreview => self.open_preview(),
             UiAction::EditSource => self.edit_source(),
@@ -2026,7 +2006,8 @@ impl AppShell {
     /// Ctrl+Shift+B hides it again and the reveal is persisted. Nothing is run; the
     /// field keeps whatever query it holds.
     fn show_search_panel(&self) {
-        if let ShowDecision::Refuse(reason) = search_panel::show_decision(!self.inner.empty.get()) {
+        if let ShowDecision::Refuse(reason) = search_panel::show_decision(!self.selected_is_empty())
+        {
             eprintln!("wolf-gnome: project search not shown: {reason}");
             return;
         }
@@ -2076,41 +2057,52 @@ impl AppShell {
         self.inner.window.close();
     }
 
+    /// Minimizes the window, telling the coordinator first: Wayland never reports a
+    /// minimize to the client, so Wolf's own is the only one the stacking order sees.
+    fn minimize_window(&self) {
+        if let Some(coordinator) = coordinator::upgrade(&self.inner.coordinator) {
+            coordinator.on_window_minimized(self.inner.window_id);
+        }
+        self.inner.window.minimize();
+    }
+
     /// Opens a new TAB in this window, with a Neovim of its own, rooted at the
-    /// selected tab's folder.
+    /// selected tab's folder, with its empty state and sidebar preference.
     ///
     /// No liveness gate and no blocking call: it starts a new process and asks the
     /// selected Neovim nothing but `WolfCore::live_cwd`, a lock read, so a wedged or
     /// dead selected tab does not stop the user opening another. The directory is
-    /// [`tabs_ui::new_tab_cwd`]'s answer, falling back to the window's launch cwd
-    /// where that answers `None` — the empty state, where the new tab is project-less
-    /// too.
+    /// [`tabs_ui::new_tab_cwd`]'s answer, falling back to the selected tab's launch
+    /// cwd where that answers `None` — the empty state, where the new tab is
+    /// project-less too.
     ///
     /// The exact opposite of [`AppShell::new_window`] in what it inherits, and the
     /// pair is easy to confuse: a tab shares this window's project, its sidebar and
     /// its overlays; a window shares nothing at all. No tab shares another's
     /// Neovim.
     fn new_tab(&self) {
-        let empty = self.inner.empty.get();
+        let Some(selected) = self.inner.tabs.selected() else {
+            return;
+        };
+        let empty = selected.is_empty();
+        let launch_cwd = selected.launch_cwd();
         let live = {
-            let cell = self.selected_core();
-            let core_ref = cell.borrow();
+            let core_ref = selected.core().borrow();
             core_ref.as_ref().and_then(WolfCore::live_cwd)
         };
-        let cwd = tabs_ui::new_tab_cwd(empty, &self.inner.launch_cwd, live.as_deref())
-            .unwrap_or_else(|| self.inner.launch_cwd.clone());
+        let cwd = tabs_ui::new_tab_cwd(empty, &launch_cwd, live.as_deref()).unwrap_or(launch_cwd);
         // A refusal has already printed why; the window keeps its tabs as they were.
         let _ = self.inner.tabs.open_tab(TabParts {
             cwd,
             empty,
-            sidebar_shown: self.inner.sidebar_shown.get(),
-            layout: None,
+            sidebar_shown: selected.sidebar_shown(),
+            saved: None,
         });
     }
 
-    /// Reacts to a tab switch: closes all three transient overlays, re-applies the
-    /// crash overlay for the newly selected tab, moves the UI focus to its Neovim,
-    /// and wakes it, so the title, the bars, the navigation buttons, the drawer
+    /// Reacts to a tab switch: closes all three transient overlays, applies the newly
+    /// selected tab's empty state and sidebar preference, re-applies the crash
+    /// overlay for it, moves the UI focus to its Neovim, and wakes it, so the title, the bars, the navigation buttons, the drawer
     /// divider, the sidebar's root and its queued commands follow on its drain. The
     /// sidebar's search panel is per window and stays as it is.
     ///
@@ -2126,6 +2118,7 @@ impl AppShell {
         self.inner.picker.close();
         self.inner.palette.close();
         self.inner.buffers.close();
+        self.apply_selected_tab();
         let Some(selected) = self.inner.tabs.selected() else {
             return;
         };
@@ -2278,9 +2271,15 @@ impl AppShell {
         *self.inner.pending_reroot.borrow_mut() = Some(path);
     }
 
-    /// Settles the sidebar's root against `live`, nvim's working directory: clears
-    /// the empty state and re-roots when they have diverged, and discards a
-    /// satisfied front-end request. Run on every wake, BEFORE the command drain.
+    /// Settles the sidebar's root against `live`, the selected tab's Neovim's working
+    /// directory: clears that tab's empty state and re-roots when they have diverged,
+    /// and discards a satisfied front-end request. Run on every wake of the selected
+    /// tab, BEFORE the command drain.
+    ///
+    /// An empty selected tab whose `live` is still its own launch cwd settles nothing,
+    /// whatever is pending: the sidebar may be rooted at another tab's folder, and
+    /// selecting the empty tab must not take it out of the empty state. A typed `:cd`
+    /// or a landed Open Folder moves its `live`, and then it settles as any tab does.
     ///
     /// **The ONE settle point**, shared by all three producers — the Open Folder
     /// dialog, an Open Recent palette row, and a `:cd` typed into Neovim — which is
@@ -2289,8 +2288,16 @@ impl AppShell {
     /// performs it. The match is exhaustive with no catch-all arm, so a new
     /// [`workspace::RerootAction`] variant is a compile error here.
     fn settle_reroot(&self, live: Option<&std::path::Path>) {
+        let selected = self.inner.tabs.selected();
+        if let Some(tab) = selected.as_ref().filter(|tab| tab.is_empty()) {
+            let launch = tab.launch_cwd();
+            let launch = std::fs::canonicalize(&launch).unwrap_or(launch);
+            if live == Some(launch.as_path()) {
+                return;
+            }
+        }
         // Both borrows are cloned out in their own statements: the arms below write
-        // back to `pending_reroot` and call `set_empty_state`, which touches widgets.
+        // back to `pending_reroot` and call `apply_selected_tab`, which touches widgets.
         let pending = self.inner.pending_reroot.borrow().clone();
         let rooted = self.inner.rooted_cwd.borrow().clone();
         match workspace::reroot_decision(pending.as_deref(), live, rooted.as_deref()) {
@@ -2308,7 +2315,10 @@ impl AppShell {
                 // Updated in the SAME settle as the re-root, which is what makes the
                 // next settle answer `Stay` and one chdir exactly one re-root.
                 *self.inner.rooted_cwd.borrow_mut() = Some(target.to_path_buf());
-                self.set_empty_state(false);
+                if let Some(tab) = selected.as_ref() {
+                    tab.set_empty(false);
+                }
+                self.apply_selected_tab();
                 self.inner.tree.reroot(&workspace::root_label(target));
             }
         }

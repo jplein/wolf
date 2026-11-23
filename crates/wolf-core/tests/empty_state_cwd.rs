@@ -4,9 +4,8 @@
 //! The captive nvim's one-shot startup `wolf_cwd` emit updates the tracked-cwd
 //! cell ONLY — it must NOT record the launch/initial directory into the
 //! recent-dirs MRU (`<state-dir>/wolf.sqlite`). A genuine later `:cd` (a
-//! real `DirChanged`) does record into the MRU. `wolf-core` does not persist cwd
-//! into a `StateStore`; the front-end reads it from each controller at snapshot
-//! time.
+//! real `DirChanged`) does record into the MRU. `wolf-core` does not persist cwd;
+//! the front-end reads it from each controller when it gathers the window state.
 //!
 //! This drives a REAL, hermetic Neovim process (no mocks) and requires
 //! `WOLF_NVIM_BIN` (the shared harness fails loudly if it is unset). Modeled

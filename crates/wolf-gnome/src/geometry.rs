@@ -160,7 +160,7 @@ fn floor_clamped(coord: f64, cell: f64, max_index: u16) -> u32 {
 /// **The fraction is of the paned's own SPAN — its width for a horizontal paned,
 /// its height for a vertical one — and `min`/`max` are the CLAMP, never the
 /// scale.** A weight is a proportion of width: that is what [`crate::layout`]'s
-/// `PaneTree` holds, what `crate::pane_layout::encode` persists, what `state.json`
+/// `PaneTree` holds, what `crate::pane_layout::encode` persists, what the saved state
 /// carries, and what a user sees on screen. Scaling by `max_position` instead hands
 /// the start child `fraction * (span - handle - end_min)` and the end child
 /// everything left, so the two differ by the end child's minimum at EVERY fraction

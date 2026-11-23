@@ -95,7 +95,7 @@
 //! own source path instead, and its `abs_path` is that path VERBATIM — never the
 //! display path — because [`crate::pane_view`] persists exactly that field as a
 //! pane-layout leaf, and a cwd-relative string there is a path relative to a
-//! working directory `state.json` has no record of.
+//! working directory the saved state has no record of.
 
 use std::path::Path;
 
@@ -423,7 +423,7 @@ pub fn preview_status(source_path: &str, display_path: &str) -> PaneStatus {
         filename: format!("{PREVIEW_STATUS_PREFIX}{basename}"),
         display_path: display_path.to_string(),
         // Verbatim, never the display path: `pane_view` persists this as a layout leaf, and
-        // `state.json` records no working directory to resolve a relativized one against.
+        // the saved state records no working directory to resolve a relativized one against.
         abs_path: source_path.to_string(),
     }
 }
@@ -1767,8 +1767,8 @@ mod tests {
     /// the field is not the display path and that it is absolute.
     ///
     /// [`crate::pane_view`] persists this field as a pane-layout leaf path, so a
-    /// relativized value is a path relative to a working directory `state.json` has
-    /// no record of: the next launch reopens it against whatever cwd it happens to
+    /// relativized value is a path relative to a working directory the saved state
+    /// has no record of: the next launch reopens it against whatever cwd it happens to
     /// have, or fails to reopen it at all.
     ///
     /// Falsifier: build the returned `PaneStatus` with `abs_path: display_path`.
@@ -1785,7 +1785,7 @@ mod tests {
         assert_eq!(
             got.abs_path, SOURCE_UNDER_CWD,
             "abs_path must be the source path verbatim. `pane_view::layout_snapshot` reads exactly \
-             this field into the persisted pane-layout leaf, and `state.json` records no working \
+             this field into the persisted pane-layout leaf, and the saved state records no working \
              directory to resolve a relative one against — so a display path here is silently \
              unopenable on the next launch."
         );

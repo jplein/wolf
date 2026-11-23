@@ -15,10 +15,9 @@
 //! replaced.
 //!
 //! The rebuild document the captive Neovim's `_G.wolf_rebuild_layout` decodes is a
-//! wire format of its own, separate from this model: the crate-private `leaf_spec`
-//! and `layout_spec` build it for both [`tab_rebuild_spec`] and
-//! [`crate::state::rebuild_layout_spec`]. It keeps `preview` and `terminal`
-//! booleans rather than `kind`, so the two producers share one path in `init.lua`.
+//! wire format of its own, separate from this model, and [`tab_rebuild_spec`] is its
+//! producer. It keeps `preview` and `terminal` booleans rather than `kind`, because
+//! that is the shape `init.lua` decodes.
 //!
 //! See `specs/application-state.md#2-the-state-model`,
 //! `specs/application-state.md#which-tab-becomes-a-directorys-project-state` and
@@ -30,7 +29,20 @@ use std::path::Path;
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-pub use crate::state::PaneOrientation;
+/// The axis along which a [`Layout`] divides its area.
+///
+/// Serialized as the lowercase strings `"horizontal"` / `"vertical"`. A
+/// `.horizontal` split stacks its panes top/bottom (dividing HEIGHT); a
+/// `.vertical` split places them side by side (dividing WIDTH) — matching the
+/// macOS `PaneTree` / `wolf-ffi` orientation table (horizontal == 0, vertical == 1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneOrientation {
+    /// Panes stacked top/bottom; the divider runs horizontally and splits HEIGHT.
+    Horizontal,
+    /// Panes side by side; the divider runs vertically and splits WIDTH.
+    Vertical,
+}
 
 /// Every open window, in stacking order, frontmost first, with minimized windows
 /// behind all others.
@@ -476,8 +488,12 @@ fn replace_missing(node: &mut Node, first: usize, replaced: &mut Vec<usize>) -> 
 /// It renders the tab as is, checking no file: pass it [`restored_tab`]'s output.
 /// An edit leaf carries its `cursor` and `top_line`, which the helper applies with
 /// the line clamped to the buffer, and the leaf `zoomed` names is marked zoomed. A
-/// zoom on the drawer marks no leaf. Total, as
-/// [`crate::state::rebuild_layout_spec`] is: a serialization error renders `"{}"`.
+/// zoom on the drawer marks no leaf.
+///
+/// Leaves are emitted in depth-first order, the order
+/// [`crate::WolfCore::rebuild_layout`] returns window handles in. Total: a
+/// serialization error renders `"{}"`, which `init.lua`'s `pcall(vim.json.decode, …)`
+/// path turns into a no-op rebuild.
 #[must_use]
 pub fn tab_rebuild_spec(content: &TabContent) -> Option<String> {
     let root = content.root.as_ref()?;
@@ -522,7 +538,7 @@ fn node_spec(node: &Node, zoomed: Option<usize>, next: &mut usize) -> serde_json
 /// `zoomed` always, plus `"cursor": {"line", "col"}` and `"top_line"` only when
 /// they are `Some`, so a document with neither is the one `init.lua` has always
 /// read.
-pub(crate) fn leaf_spec(
+fn leaf_spec(
     path: &str,
     preview: bool,
     terminal: bool,
@@ -559,7 +575,7 @@ pub(crate) fn leaf_spec(
 /// NaN and ±inf, and an unsanitized value would silently become `null` and change
 /// the document's shape. The substitution is cosmetic, since `wolf_rebuild_layout`
 /// builds the window count and topology only and never reads `weights`.
-pub(crate) fn layout_spec(
+fn layout_spec(
     orientation: PaneOrientation,
     weights: &[f64],
     children: Vec<serde_json::Value>,

@@ -6,16 +6,17 @@
 //! takes the first that [`is_usable_project`] accepts:
 //!
 //! - A terminal launch (`cargo run` from a project) yields a real project
-//!   directory, which is a project — and it WINS over anything `state.json`
-//!   remembers, because launching Wolf from a directory is the Linux idiom and
-//!   silently reopening yesterday's project instead would be surprising.
+//!   directory, which is a project — and the launch shows it, because launching
+//!   Wolf from a directory is the Linux idiom. [`crate::state_seam::restore_plans`]
+//!   asks with no restored cwd and, when no saved tab holds that directory, puts
+//!   one fresh window there in front of the saved windows, all of which restore.
 //! - A desktop-launcher / `.desktop` launch yields `$HOME` or `/`, which is
-//!   exactly "no project" — and THAT is when the cwd restored from `state.json`
-//!   (see [`crate::state_seam::restore_plans`]) gets its turn.
+//!   exactly "no project". Each saved tab's own directory is then asked as the
+//!   restored cwd, with no process cwd.
 //! - With neither usable, the empty state.
 //!
 //! Applying the SAME predicate to the restored cwd is deliberate: it means a
-//! hand-edited `state.json` pointing at `/` can never make the sidebar's
+//! hand-edited saved window state pointing at `/` can never make the sidebar's
 //! `FileSearch` traverse the whole filesystem. Treating `$HOME` as a project
 //! would point it at the whole home tree — the pathological case
 //! `wolf_core::files::SearchBounds` already exists to prune.
@@ -76,7 +77,7 @@ pub enum LaunchDecision {
 /// Decides whether the app launches into a project or into the empty state.
 ///
 /// Tries `process_cwd` FIRST and `restored` (the cwd recovered from
-/// `state.json`) SECOND, returning [`LaunchDecision::Folder`] for the first that
+/// the saved window state) SECOND, returning [`LaunchDecision::Folder`] for the first that
 /// satisfies [`is_usable_project`] — it is a directory, it is not `home`, and it
 /// is not [`FALLBACK_CWD`]. With neither usable it returns
 /// [`LaunchDecision::EmptyState`], whose `nvim_cwd` is `home` when `home` is
@@ -117,7 +118,7 @@ pub fn launch_decision(
 ///
 /// ONE predicate applied to BOTH candidates, so a restored cwd can never open a
 /// project the process cwd would have been refused for — in particular a
-/// hand-edited `state.json` naming `/` cannot point the sidebar's `FileSearch` at
+/// hand-edited saved window state naming `/` cannot point the sidebar's `FileSearch` at
 /// the whole filesystem.
 fn is_usable_project(path: &Path, home: Option<&Path>, is_dir: &impl Fn(&Path) -> bool) -> bool {
     is_dir(path) && Some(path) != home && path != Path::new(FALLBACK_CWD)
@@ -249,7 +250,7 @@ mod tests {
     const ROOT: &str = "/";
     /// A path that does NOT exist as a directory (the injected `is_dir` says no).
     const MISSING: &str = "/projects/deleted";
-    /// A second real project directory, used as the cwd recovered from `state.json`
+    /// A second real project directory, used as the cwd recovered from the saved state
     /// so it is always distinguishable from [`PROJECT`].
     const RESTORED: &str = "/projects/restored";
 
@@ -264,7 +265,7 @@ mod tests {
     /// One `launch_decision` table row: a description, the three inputs, the set of
     /// paths the injected `is_dir` reports as directories, and the expectation.
     ///
-    /// `restored` is the cwd recovered from `state.json`. Every row that predates the
+    /// `restored` is the cwd recovered from the saved state. Every row that predates the
     /// state-persistence unit carries `restored: None`, which is the COMPATIBILITY
     /// PROOF made executable: the parameter is a strict superset of the old rule, so
     /// each historical expectation must still hold unchanged.
@@ -429,7 +430,7 @@ mod tests {
                 want: Want::EmptyState(HOME),
             },
             Case {
-                // A hand-edited `state.json` naming `/` must NOT be able to point the
+                // A hand-edited saved state naming `/` must NOT be able to point the
                 // sidebar's FileSearch at the whole filesystem.
                 desc: "restored cwd == / is refused by the same predicate",
                 process_cwd: None,

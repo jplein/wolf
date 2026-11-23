@@ -5,14 +5,12 @@
 //!
 //! This drives a REAL, hermetic Neovim process (no mocks) and requires
 //! `WOLF_NVIM_BIN` (the shared harness fails loudly if it is unset). Modeled on
-//! `tests/state_save.rs` / `tests/mru_open_records.rs`, reusing
-//! `tests/common/mod.rs`.
+//! `tests/mru_open_records.rs`, reusing `tests/common/mod.rs`.
 //!
-//! Unlike `state_save.rs` (which injects an explicit `StateStore` into its own
-//! tempdir), the recent-dirs store is ALWAYS-ON and reads `state_dir()`. So this
-//! test sets `WOLF_STATE_DIR` to a fresh tempdir BEFORE starting the core (the
-//! set-if-absent hermetic default in `common/mod.rs` then leaves it alone), and
-//! inspects the physical `wolf.sqlite` under that dir.
+//! The recent-dirs store is ALWAYS-ON and reads `state_dir()`. So this test sets
+//! `WOLF_STATE_DIR` to a fresh tempdir BEFORE starting the core (the set-if-absent
+//! hermetic default in `common/mod.rs` then leaves it alone), and inspects the
+//! physical `wolf.sqlite` under that dir.
 
 mod common;
 

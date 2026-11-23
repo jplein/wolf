@@ -867,7 +867,7 @@ pub fn build(core: CoreSource, area: FocusTarget, start: bool, root_label: &str)
         root_label: RefCell::new(root_label.to_string()),
         entries_version,
         memo,
-        // Seeded visible and corrected by the first `set_empty_state`, which `window::build` makes
+        // Seeded visible and corrected by the first `apply_selected_tab`, which `window::build` makes
         // before `present()`, so the gate is right before anything renders.
         gate: RefCell::new(TreeRefreshGate::new(true)),
         coalescer: RefCell::new(RefreshCoalescer::new()),

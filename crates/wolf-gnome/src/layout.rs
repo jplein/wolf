@@ -63,7 +63,7 @@ const DEFAULT_RATIO: f64 = 0.5;
 /// test, so a collapsed pane is never returned for a move along the perpendicular
 /// direction (a zero-HEIGHT pane is unreachable by Left/Right); and
 /// [`PaneTree::layout`] copies the zero out again verbatim, so it survives the
-/// `state.json` round trip and comes back on every later launch.
+/// saved-state round trip and comes back on every later launch.
 ///
 /// This is the ARITHMETIC floor only. The pixel minimum is GTK's:
 /// `shrink_*_child(false)` plus the one-cell `set_content_width` floor in
@@ -78,7 +78,7 @@ const NEIGHBOR_EPS: f64 = 1e-9;
 
 /// The fewest children a [`Frame::Split`] may have. Enforced by
 /// [`PaneTree::from_layout`], which is the only constructor that takes a split's
-/// shape from OUTSIDE this module (a hand-edited `state.json`).
+/// shape from OUTSIDE this module (a hand-edited saved state).
 const MIN_SPLIT_CHILDREN: usize = 2;
 
 /// A pane identifier. A plain `u64` alias (not a newtype) so the tree's
@@ -274,7 +274,7 @@ impl PaneTree {
     ///
     /// Note this constructor CAN produce a tree with a same-orientation nested
     /// split — which [`PaneTree::split`] never produces but a hand-edited
-    /// `state.json` can. That is cosmetic; see the [`Frame`] invariant list.
+    /// saved state can. That is cosmetic; see the [`Frame`] invariant list.
     #[must_use]
     pub fn from_layout(layout: &PaneLayout) -> Option<Self> {
         Some(Self {
@@ -328,7 +328,7 @@ impl PaneTree {
     /// The whole split is then renormalized to sum to 1, restoring the documented
     /// [`Frame`] invariant. That is not merely drift control: [`PaneTree::from_layout`]
     /// copies a saved weight vector verbatim and never checks its total, so a
-    /// `state.json` carrying a denormalized split produces a live tree with one, and
+    /// saved state carrying a denormalized split produces a live tree with one, and
     /// this is where it is repaired.
     ///
     /// A NON-FINITE `fraction` is REFUSED (returns `false`, mutates nothing) rather
@@ -340,7 +340,7 @@ impl PaneTree {
     /// One input makes the `true` OVERSTATE what happened, and it is on the record
     /// rather than special-cased: a split whose whole run from `boundary` is zero
     /// (`[0.5, 0.5, 0.0, 0.0]` at `boundary = 2`), which no mutator here produces
-    /// and which only a hand-edited `state.json` can supply. `S` is then 0, so the
+    /// and which only a hand-edited saved state can supply. `S` is then 0, so the
     /// head is set to `clamped * 0` and the equalized remainder is scaled straight
     /// back to 0: the weights do not move, and [`PaneTree::divider_fraction`]
     /// answers [`DEFAULT_RATIO`] afterwards whatever was requested. There is no run
@@ -1515,7 +1515,7 @@ mod tests {
                   precedent)"
     )]
     fn from_layout_does_not_reshape() {
-        // A same-orientation nested split, which `split` never makes but a hand-edited `state.json` can:
+        // A same-orientation nested split, which `split` never makes but a hand-edited saved state can:
         // `from_layout` preserves it, so the tree nvim was asked for and the one GTK builds stay in step.
         let nested_same_orientation = PaneLayout::Split {
             orientation: Orientation::Vertical,
@@ -1567,7 +1567,7 @@ mod tests {
 
     #[test]
     fn from_layout_rejects_broken_invariants() {
-        // Every input is reachable from a hand-edited `state.json`; rejecting is a crash guard, since
+        // Every input is reachable from a hand-edited saved state; rejecting is a crash guard, since
         // `build_chain` indexes `children[0]` blindly and `collect_rects` divides by the weight sum.
         let cases: [(&str, PaneLayout); 8] = [
             (
@@ -2136,7 +2136,7 @@ mod tests {
                 tree.layout(),
                 before,
                 "case {desc}: a refused set_divider_fraction must leave the tree byte-for-byte \
-                 unchanged; a partial mutation would persist to `state.json` on the next wake"
+                 unchanged; a partial mutation would persist to the saved state on the next wake"
             );
         }
     }
@@ -2311,7 +2311,7 @@ mod tests {
     ///
     /// [`PaneTree::from_layout`] validates that every weight is finite and
     /// non-negative and that the total is POSITIVE. It does not check that the total
-    /// is 1, and it copies the vector verbatim. `state.json` carries those weights
+    /// is 1, and it copies the vector verbatim. The saved state carries those weights
     /// as plain JSON and `pane_layout::decode` feeds them straight to `from_layout`,
     /// so a hand-edited or foreign-written state file really does produce a live
     /// tree whose weights sum to anything positive — the precondition below STATES
@@ -2340,7 +2340,7 @@ mod tests {
     /// exactly as requested.
     #[test]
     fn set_divider_fraction_normalizes_a_denormalized_split() {
-        // The sum a hand-edited `state.json` is standing in for. Any positive
+        // The sum a hand-edited saved state is standing in for. Any positive
         // non-1 total would do; 4 keeps every expected weight exactly representable.
         const DENORMALIZED_TOTAL: f64 = 4.0;
 
@@ -2375,7 +2375,7 @@ mod tests {
         assert!(
             approx(total, 1.0),
             "after one drag the split must sum to 1, got {total} from {w:?}. The tree came out of \
-             `from_layout` summing to {DENORMALIZED_TOTAL} — which a hand-edited `state.json` can \
+             `from_layout` summing to {DENORMALIZED_TOTAL} — which a hand-edited saved state can \
              produce — so the mutator is where the documented `Frame` invariant is restored. \
              Leaving it at {DENORMALIZED_TOTAL} persists a denormalized vector back to disk on the \
              next wake, and every drag after this one compounds it."
@@ -2451,7 +2451,7 @@ mod tests {
     /// module writes strictly positive — but [`PaneTree::from_layout`] can.
     /// It rejects a negative weight and a zero-summing WHOLE vector, and
     /// `[1.0, 0.0, 0.0]` is none of those: finite, non-negative, summing to 1. So it
-    /// is copied in verbatim, and `state.json` carries exactly such a vector as
+    /// is copied in verbatim, and the saved state carries exactly such a vector as
     /// plain JSON through `pane_layout::decode`.
     ///
     /// Without the fallback the arithmetic has nothing to work with. Scaling a zero
@@ -2553,7 +2553,7 @@ mod tests {
     ///
     /// The behaviour is defensible: there is no run for a fraction to be a fraction
     /// OF, so there is nothing else the call could do with one, and the input is
-    /// reachable only from a hand-edited `state.json` because no mutator in this
+    /// reachable only from a hand-edited saved state because no mutator in this
     /// module produces a zero weight. Sibling coverage does not reach it —
     /// `set_divider_fraction_revives_an_all_zero_tail`'s run is `1.0`, only its TAIL
     /// is zero — so without this test the behaviour is invisible.

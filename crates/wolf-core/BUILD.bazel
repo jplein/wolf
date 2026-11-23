@@ -286,15 +286,6 @@ rust_test(
 )
 
 rust_test(
-    name = "state_layout",
-    srcs = ["tests/state_layout.rs"],
-    crate_root = "tests/state_layout.rs",
-    size = "small",
-    edition = "2021",
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
-)
-
-rust_test(
     name = "recent_dirs",
     srcs = ["tests/recent_dirs.rs"],
     crate_root = "tests/recent_dirs.rs",

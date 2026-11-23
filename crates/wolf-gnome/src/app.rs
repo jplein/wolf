@@ -25,7 +25,7 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::glib;
-use wolf_core::{StateStore, TerminalCommand, WolfConfig};
+use wolf_core::{AppStateStore, TerminalCommand, WolfConfig};
 
 use crate::config_seam;
 use crate::coordinator::{self, Coordinator};
@@ -217,22 +217,24 @@ pub(crate) fn smoke_terminal_command() -> Option<TerminalCommand> {
     terminal::smoke_terminal_command(raw.as_deref())
 }
 
-/// Opens the application-state store over the platform state directory.
+/// Opens the application-state store, `wolf.sqlite` in the platform state
+/// directory.
 ///
 /// `None` — with one message, not a per-wake stream — when
 /// `wolf_core::state_dir()` cannot be resolved (no `WOLF_STATE_DIR` override and
 /// no home directory). Every later state operation degrades to a no-op, so the
 /// app runs normally and simply neither restores nor saves.
 ///
-/// Called exactly ONCE per process, by [`crate::coordinator::build`]: two stores
-/// over one directory silently clobber each other's tree.
+/// Called exactly ONCE per process, by [`crate::coordinator::build`]: a second
+/// store over the same `wolf.sqlite` replaces the other's whole window state with
+/// its own.
 #[must_use]
-pub(crate) fn open_state_store() -> Option<StateStore> {
+pub(crate) fn open_state_store() -> Option<AppStateStore> {
     let Some(dir) = wolf_core::state_dir() else {
         eprintln!(
             "wolf-gnome: no state directory could be resolved; state will not be saved or restored"
         );
         return None;
     };
-    Some(StateStore::open(&dir))
+    Some(AppStateStore::open(&dir))
 }

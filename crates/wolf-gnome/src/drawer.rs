@@ -10,7 +10,7 @@
 //! ## Why the drawer is not a [`PaneTree`] leaf
 //!
 //! It lives OUTSIDE the tree, which is what forces this module to exist at all. The
-//! durable reasons (a drawer kept out of `state.json`, every `neighbor` result left
+//! durable reasons (a drawer kept out of the saved state, every `neighbor` result left
 //! unperturbed) are in `notes/wolf-gnome/window-structure.md`. The price is paid
 //! here: a pane the tree cannot see needs its own share and its own focus bridge.
 //!
@@ -42,7 +42,7 @@ pub const DRAWER_WEIGHT: f64 = 1.0 / 3.0;
 /// window starts at [`DRAWER_WEIGHT`].
 ///
 /// It is never persisted, and needs no fraction floor: a tree weight keeps one
-/// because a zero survives `state.json`, while every use of the share is clamped into
+/// because a zero survives the saved state, while every use of the share is clamped into
 /// GTK's `[min_position, max_position]`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DrawerShare(f64);

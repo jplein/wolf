@@ -52,12 +52,12 @@ use wolf_core::{
     rank_buffers, rank_matches_top_n, rank_palette, AppStateStore, Appearance, BufInfo, BufferRow,
     Cmdline, Command, CommandMru, CoreConfig, CursorShape, FileSearch, FocusDir, Grid,
     HighlightTable, InputEvent, Key, KeyEvent, LayoutIntent, Liveness, MarkdownCursor, MouseAction,
-    MouseButton, MouseEvent, PaletteRow, PaletteRowKind, PaletteWindow, PaneOrientation,
-    PaneStatus, PreviewInfo, Pum, ResolvedStyle, Rgb, ScrollDirection, ScrollEvent, SearchMatch,
-    SearchOptions, SearchSession, SplitOrientation, TabFiles, TerminalCell, TerminalCellWidth,
-    TerminalCommand, TerminalCursor, TerminalCursorStyle, TerminalFrame, TerminalId,
-    TerminalMouseEvent, TerminalMouseKind, TerminalScrollEvent, TerminalTarget, TerminalUnderline,
-    Toast, WakeFn, WinInfo, WolfCore,
+    MouseButton, MouseEvent, PaletteRow, PaletteRowKind, PaletteWindow, PaneStatus, PreviewInfo,
+    Pum, ResolvedStyle, Rgb, ScrollDirection, ScrollEvent, SearchMatch, SearchOptions,
+    SearchSession, SplitOrientation, TabFiles, TerminalCell, TerminalCellWidth, TerminalCommand,
+    TerminalCursor, TerminalCursorStyle, TerminalFrame, TerminalId, TerminalMouseEvent,
+    TerminalMouseKind, TerminalScrollEvent, TerminalTarget, TerminalUnderline, Toast, WakeFn,
+    WinInfo, WolfCore,
 };
 
 // Re-export the bridge's transparent structs so rlib consumers (the Rust tests) can name them;
@@ -1948,8 +1948,8 @@ pub fn wolf_ffi_app_state_push_layout(orientation: u8, child_count: u32, weight:
     let split_at = scratch.stack.len() - count;
     let popped = scratch.stack.split_off(split_at);
     let orientation = match orientation {
-        orientation::VERTICAL => PaneOrientation::Vertical,
-        _ => PaneOrientation::Horizontal,
+        orientation::VERTICAL => app::PaneOrientation::Vertical,
+        _ => app::PaneOrientation::Horizontal,
     };
     let weights = popped.iter().map(|(_, w)| *w).collect();
     let children = popped.into_iter().map(|(node, _)| node).collect();
@@ -2352,7 +2352,7 @@ impl FfiAppNode {
     #[must_use]
     pub fn orientation(&self) -> u8 {
         match self.layout().map(|l| l.orientation) {
-            Some(PaneOrientation::Vertical) => orientation::VERTICAL,
+            Some(app::PaneOrientation::Vertical) => orientation::VERTICAL,
             _ => orientation::HORIZONTAL,
         }
     }

@@ -57,7 +57,7 @@
 //!   `window_state` and `project_state` tables of `state_dir()/wolf.sqlite`.
 //! - [`api`]: the FFI-shaped front-end surface ([`WolfCore`]).
 //! - [`config`]: the GUI-free user-preferences reader ([`WolfConfig`]).
-//! - [`state`]: the GUI-free application-state persistence ([`StateStore`]).
+//! - [`state`]: the platform state directory and the directories Wolf keeps under it.
 
 pub mod api;
 pub mod app_state;
@@ -133,8 +133,8 @@ pub use render::{
 pub use search::{SearchMatch, SearchOptions, SearchReadGuard, SearchSession};
 pub use search_tree::{context_window, file_label, project, ContextWindow, SearchFileGroup};
 pub use state::{
-    load_state, parsers_user_dir, runtime_user_dir, seed_runtime_user_dir, spell_dir, state_dir,
-    PaneNode, PaneOrientation, StateStore, TabState, WindowState, WolfState, INIT_USER_FILE_NAME,
+    parsers_user_dir, runtime_user_dir, seed_runtime_user_dir, spell_dir, state_dir,
+    INIT_USER_FILE_NAME,
 };
 pub use terminal::{
     terminfo_dir_from_env, TerminalCell, TerminalCellWidth, TerminalCommand, TerminalCursor,

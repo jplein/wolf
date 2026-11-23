@@ -335,7 +335,7 @@ const PREVIEW_CAP_RENDER_FLOOR: u64 = 6;
 /// `PALETTE_SCENARIO` shape, with `STATUS_SCENARIO`'s `<C-w>v` split and
 /// `BUFPICK_SCENARIO`'s `wait_file`): launch + poll, settle, open the OTHER file,
 /// park the block cursor, `<C-w>v`, open the SOURCE in the new pane, drive Preview
-/// through the palette, capture A, read the window list back, freeze `state.json`,
+/// through the palette, capture A, read the window list back, freeze the state database,
 /// drive Edit Source through the palette, read the window list back again, type the
 /// live marker into the source, hide the source behind the other file, capture B, and
 /// then — with every pixel and every readback already on disk — type one SUSTAINED
@@ -389,7 +389,7 @@ const PREVIEW_CAP_RENDER_FLOOR: u64 = 6;
 ///   LAUNCH failure; nothing else in this smoke is about the preview.
 /// * `14` — a window-list readback the captive Neovim was told to write never
 ///   appeared, so the leg it belongs to cannot be checked at all.
-/// * `16` — no `state.json` existed to freeze while the preview pane was live.
+/// * `16` — no `wolf.sqlite` existed to freeze while the preview pane was live.
 ///   DISTINCT from "the persisted leaf is wrong", which exits 0 and fails an
 ///   assertion: this one means nothing was persisted at all.
 const PREVIEW_SCENARIO: &str = r#"
@@ -503,20 +503,19 @@ wait_file "$PREVIEW_READBACK_A" || exit 14
 
 # --- Freeze the persisted layout while the preview pane is still live --------
 #
-# Persistence runs on every render wake, so the live file is rewritten as soon as the
-# Edit leg below lands -- at which point BOTH leaves name the source and the
-# editor-leaf half of the assertion would prove nothing. Copying here is what pins the
-# one moment where the two leaves differ. The write itself is a tmp-file rename, so a
-# copy taken from a running app is never torn.
-if [ ! -s "$PREVIEW_STATE_SRC" ]; then
-    echo "wolf-gnome markdown-preview smoke: no state.json at $PREVIEW_STATE_SRC." >&2
+# Persistence runs on every render wake, so the live window state is rewritten as soon
+# as the Edit leg below lands -- at which point BOTH panes name the source and the
+# editor-pane half of the assertion would prove nothing. Copying here is what pins the
+# one moment where the two panes differ. The app is live, so a write may be in flight:
+# SQLite's replay of the copied -wal drops a transaction that has no commit frame yet,
+# so the copy holds the last committed window state rather than a torn one.
+if ! freeze_state "$PREVIEW_STATE_SRC" "$PREVIEW_STATE_COPY"; then
+    echo "wolf-gnome markdown-preview smoke: no wolf.sqlite in $PREVIEW_STATE_SRC." >&2
     echo "  Nothing was persisted at all, so this is not the preview flag: suspect" >&2
-    echo "  may_snapshot refusing every wake (snapshot_readiness counts previews too)," >&2
     echo "  open_state_store resolving no directory, or WOLF_STATE_DIR not reaching" >&2
     echo "  the app." >&2
     exit 16
 fi
-cp "$PREVIEW_STATE_SRC" "$PREVIEW_STATE_COPY"
 
 # --- Step 5: drive EDIT IN ANOTHER PANE through the same palette -------------
 #
@@ -570,7 +569,7 @@ grim "$OUT_PNG"
 # --- Step 9: a SUSTAINED burst, to force the STALENESS CAP -------------------
 #
 # It lands here and nowhere else. Everything read from a pixel is already on disk --
-# both captures taken, both readbacks written, state.json frozen back at step 4 --
+# both captures taken, both readbacks written, the state frozen back at step 4 --
 # so a burst at this point can perturb no assertion above it. Beside the marker it
 # would land inside an OCR'd capture instead, which is why it is not there.
 #
@@ -1190,7 +1189,7 @@ const DPI_PIN_STDERR_PREFIX: &str = "wolf-xft-dpi-pinned:";
 /// | 5 | readback A is `{Preview: <source>, <other>}` | **discriminator** — Neovim really bound a preview scratch, of the right source, in one of two windows | restore the stub `perform` arm that classified `UiAction::OpenPreview` as unhandled. NOT isolated: assertion 7 fails under it as well, and goes unevaluated only because this one aborts first. Assertion 6 does NOT fail under it — measured twice, independently: a preview that never opens leaves the source's raw Markdown on screen, so [`PREVIEW_OCR_BODY`] is satisfied by the editor grid rather than by WebKit. That is why this assertion is ordered ahead of the two OCR ones: it states the same fact WITHOUT pixels. | RED, and it aborted FIRST, which is what the reordering exists for: `after the Preview leg the captive Neovim's windows hold ["pvoth.md", "pvsrc.md"], not ["Preview: pvsrc.md", "pvoth.md"]`, with `left: ["pvoth.md", "pvsrc.md"]` against `right: ["Preview: pvsrc.md", "pvoth.md"]`. Assertions 3 and 4 stayed green and 6 onward went unevaluated; the app printed `wolf-gnome: ui action not performed: markdown preview is not wired` once per leg. Assertion 6 was then checked directly, by OCRing the retained capture A: it CONTAINS `zzbodyoscar` and lacks `preview`, so 6 would have passed under this revert and 7 is the one that would have reported next. |
 /// | 6 | capture A carries [`PREVIEW_OCR_BODY`] | **discriminator** — the web view rendered the document | delete the `self.load_preview_document(id, &html);` call in `PaneInner::refresh_previews`, leaving the `loaded.set(..)` beneath it so nothing re-arms. The pane still becomes a preview and still gets a view; the view is simply never given a document. | RED, isolated: `capture A did not contain "zzbodyoscar" — the rendered heading of pvsrc.md`. Assertions 3, 4 and 5 stayed green, so the preview really was bound and only the DOCUMENT was missing; the OCR dump beside the failure still carries the `preview:` statusbar line, which is assertion 7 passing over an empty view. |
 /// | 7 | capture A carries [`PREVIEW_OCR_STATUS`] | **discriminator** — a preview pane's statusbar comes from `preview_ui::preview_status` | in `PaneInner::refresh_pane_state`'s `Some(info)` arm, use `core.pane_status(j.grid)` for a preview pane. Preview windows are omitted from `win_buffers`, so it answers `[No Name]`. NOT isolated: it empties `abs_path` too, so assertion 8 would also fail — but 7 is evaluated first. | RED: `capture A did not contain "preview", so no pane's statusbar named itself a preview`. Assertions 3 through 6 stayed green — the web view still rendered its document — so this reddened the statusbar alone, and assertion 8 went unevaluated exactly as the revert column predicts. |
-/// | 8 | the frozen `state.json`'s two leaves | **discriminator** — `layout_snapshot` persists the per-pane preview flag, against the SOURCE path | set `preview: false` unconditionally in `pane_view::layout_snapshot`'s `LeafContent`. Reddens this alone. | RED, and isolated as claimed: `the frozen state persisted leaves [(Some("pvoth.md"), Some(false)), (Some("pvsrc.md"), Some(false))], not [(Some("pvoth.md"), Some(false)), (Some("pvsrc.md"), Some(true))]`. Assertions 3 through 7 stayed green, so both panes were right on screen and only the PERSISTED flag was wrong — which is the whole reason this one is read from a frozen file rather than from pixels. |
+/// | 8 | the frozen save's two panes | **discriminator** — `layout_snapshot` persists the per-pane preview flag, against the SOURCE path | set `preview: false` unconditionally in `pane_view::layout_snapshot`'s `LeafContent`. Reddens this alone. | RED, and isolated as claimed: `the frozen state persisted leaves [(Some("pvoth.md"), Some(false)), (Some("pvsrc.md"), Some(false))], not [(Some("pvoth.md"), Some(false)), (Some("pvsrc.md"), Some(true))]`. Assertions 3 through 7 stayed green, so both panes were right on screen and only the PERSISTED flag was wrong — which is the whole reason this one is read from a frozen file rather than from pixels. |
 /// | 9 | readback B is `{Preview: <source>, <source>}` | **discriminator** — Edit-in-another-pane bound the source into the OTHER pane, over the other file, WITHOUT replacing the preview or splitting | in `AppShell::preview_in_other_pane` and `AppShell::edit_in_other_pane`, pass `0` instead of the resolved target: core then splits, and the readback holds three windows with [`PREVIEW_OTHER_FILE`] still among them. A second revert: point `shell::perform`'s `EditInOtherPane` arm at `AppShell::edit_source`, the in-place command; the source then replaces the preview it was fired from, and the readback loses the preview scratch. | unmeasured |
 /// | 10 | capture B carries [`PREVIEW_OCR_BODY`] | precondition — the preview still shows its document after the Edit leg, so a red assertion 11 is about the body swap and not a blank or lost pane | none; do not invent one | n/a |
 /// | 11 | capture B carries [`PREVIEW_OCR_LIVE`] | **discriminator** — the LIVE EDIT reached the DOM through the JSON body swap | in `pane_view::preview_swap_payload`, encode ONCE (`Ok(serde_json::to_string(body)?)` plus the two replacements). `JSON.parse` is then handed HTML, throws `Unrecognized token '<'` on every keystroke, and the preview keeps showing the document assertion 10 just found. **A SECOND revert reaches this assertion, and the paced burst is what admits it:** neuter the `RenderDecision::Arm` arm of `PaneInner::request_preview_render` so it arms nothing. The marker's characters then coalesce into a fire nobody ever runs, and the page carries at most the leading edge's `o`. The two reverts are distinguishable from the app's stderr — the single-encoding one prints `preview body swap failed` once per keystroke, the trailing-edge one prints nothing at all — and from assertion 12, which stays inside its budget under the first and reads a count with no trailing fire in it under the second. | RED, isolated, and with the predicted stderr: `capture B did not contain "zzlivekilo" — the marker typed into the SOURCE buffer while the preview pane was live`, beside five copies of `wolf-gnome: preview body swap failed: about:blank:1:68: SyntaxError: JSON Parse error: Unrecognized token '<'`. Assertion 10 stayed green, which is the frozen-stale-document half of the signature this row names. The trailing-edge revert: RED, isolated, and with the OTHER half of the signature — the same `capture B did not contain "zzlivekilo"` failure, and `preview body swap failed` printed NOT ONCE anywhere in the run, which is what tells the two reverts apart from stderr alone. Assertion 10 stayed green and the OCR dump beside the failure still carries the rendered heading and the `preview:` statusbar, so the pane was live and only the trailing edge was missing. Measured against the scenario INCLUDING step 9, whose burst lands after both captures and disturbs this leg not at all; the run's summed `prev.render` was 2, the cold open and the marker burst's leading edge with no trailing fire in it. |
@@ -1238,17 +1237,9 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
     // The state dir `cage_command` hands the app as WOLF_STATE_DIR — the same one the
     // scenario freezes a copy of and the same one the command MRU lands in.
     let smoke_state = smoke_state_dir(&cwd);
-    let smoke_state_file = smoke_state.join(STATE_FILE_NAME);
 
-    // A directory, because `load_state` takes one; under XDG_RUNTIME_DIR so the sidebar never lists it.
-    let frozen_state_dir = runtime_dir.join("wolf_gnome_preview_state");
-    std::fs::create_dir_all(&frozen_state_dir).unwrap_or_else(|e| {
-        panic!(
-            "{SMOKE}: failed to create the frozen-state dir {}: {e}",
-            frozen_state_dir.display()
-        )
-    });
-    let frozen_state_file = frozen_state_dir.join(STATE_FILE_NAME);
+    let frozen = frozen_state_dir(&runtime_dir, "wolf_gnome_preview_state", SMOKE);
+    let frozen_state_file = frozen.join(STATE_DB_NAME);
 
     let readback_a = cwd.join(PREVIEW_READBACK_A_NAME);
     let readback_b = cwd.join(PREVIEW_READBACK_B_NAME);
@@ -1257,13 +1248,7 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
     // Assertions 12 and 13's evidence: the report the running app appends to, in this
     // smoke's own fresh runtime directory, so no earlier run's renders are in it.
     let stats_path = runtime_dir.join(PREVIEW_FRAME_STATS_FILE_NAME);
-    for path in [
-        &readback_a,
-        &readback_b,
-        &out_png_before,
-        &out_png,
-        &frozen_state_file,
-    ] {
+    for path in [&readback_a, &readback_b, &out_png_before, &out_png] {
         clear_evidence(path, SMOKE);
     }
 
@@ -1282,8 +1267,8 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
         .env("PREVIEW_CAP_FILLER", PREVIEW_CAP_FILLER)
         .env("PREVIEW_READBACK_A", &readback_a)
         .env("PREVIEW_READBACK_B", &readback_b)
-        .env("PREVIEW_STATE_SRC", &smoke_state_file)
-        .env("PREVIEW_STATE_COPY", &frozen_state_file)
+        .env("PREVIEW_STATE_SRC", &smoke_state)
+        .env("PREVIEW_STATE_COPY", &frozen)
         // For assertion 12 alone, which sums across reports, so sharing the frame-stats interval is safe.
         .env("WOLF_FRAME_STATS", "1")
         .env("WOLF_FRAME_STATS_INTERVAL", FRAME_STATS_INTERVAL_SECS)
@@ -1297,9 +1282,9 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
         "{SMOKE}: the cage markdown-preview scenario exited unsuccessfully ({status}). Exit 11: \
          the app died before it was ready for input — a LAUNCH failure, and nothing below is about \
          the preview. Exit 14: a window-list readback never appeared, so the captive Neovim never \
-         ran the typed Ex command. Exit 16: the app persisted no state.json at all while the \
-         preview pane was live, which is `may_snapshot` refusing rather than the preview flag \
-         being wrong. Otherwise wtype, grim or cp failed. Note this assertion says nothing about \
+         ran the typed Ex command. Exit 16: the app had created no wolf.sqlite while the \
+         preview pane was live, so it opened no state store, which is upstream of the preview \
+         flag. Otherwise wtype, grim or cp failed. Note this assertion says nothing about \
          whether a preview ever opened: the scenario exits 0 whatever the palette did. Captures \
          expected at {} and {}.",
         out_png_before.display(),
@@ -1397,41 +1382,33 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
         out_png_before.display()
     );
 
-    // Assertion 8 (discriminator): read from the frozen copy; the live file is rewritten on every wake
-    // and, after the Edit leg, both leaves name the source.
-    let saved = load_state(&frozen_state_dir).unwrap_or_else(|| {
-        panic!(
-            "{SMOKE}: wolf_core::load_state could not parse the frozen state at {}. `load_state` \
-             is silently-ignore, so a None means the file is absent, unreadable, malformed or \
-             carries an unsupported version — the scenario already proved it was non-empty (it \
-             exits 16 otherwise), so suspect the shape.",
-            frozen_state_file.display()
-        )
-    });
+    // Assertion 8 (discriminator): read from the frozen copy; the live state is rewritten on every
+    // wake and, after the Edit leg, both panes name the source.
+    let saved = frozen_window_state(&frozen, SMOKE, "the save frozen while the preview was live");
     let window = saved.windows.first().unwrap_or_else(|| {
         panic!(
-            "{SMOKE}: the frozen state.json carries NO windows at all, so nothing was persisted. \
-             File: {}",
+            "{SMOKE}: the frozen window state carries NO windows at all, so nothing was \
+             persisted. File: {}",
             frozen_state_file.display()
         )
     });
     let tab = window.tabs.first().unwrap_or_else(|| {
         panic!(
-            "{SMOKE}: the persisted window carries NO tabs. `snapshot_state` writes exactly one. \
-             File: {}",
+            "{SMOKE}: the persisted window carries NO tabs. `state_seam::window_entry` \
+             contributes no window without a tab. File: {}",
             frozen_state_file.display()
         )
     });
-    match &tab.layout {
-        Some(PaneNode::Split {
+    match &tab.content.root {
+        Some(Node::Layout(Layout {
             orientation,
             children,
             ..
-        }) => {
+        })) => {
             assert_eq!(
                 *orientation,
                 PaneOrientation::Vertical,
-                "{SMOKE}: the frozen state persisted a {orientation:?} split for a `<C-w>v`, which \
+                "{SMOKE}: the frozen state persisted a {orientation:?} layout for a `<C-w>v`, which \
                  divides WIDTH and must persist as Vertical. File: {}",
                 frozen_state_file.display()
             );
@@ -1449,26 +1426,26 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
             assert_eq!(
                 got,
                 want,
-                "{SMOKE}: the frozen state persisted leaves {got:?}, not {want:?} (each entry is \
-                 `(file name, preview flag)`, sorted). `Some(false)` on BOTH is a stubbed flag \
+                "{SMOKE}: the frozen state persisted panes {got:?}, not {want:?} (each entry is \
+                 `(file name, preview kind)`, sorted). `Some(false)` on BOTH is a stubbed flag \
                  — `layout_snapshot` writing `preview: false` unconditionally, so a \
-                 preview pane is restored with `:edit` and the next launch reopens the SOURCE \
-                 where the preview was. A `None` NAME on the preview leaf means \
-                 `preview_status`'s `abs_path` came back empty or relativized, which is \
-                 unopenable on the next launch since state.json records no working directory to \
-                 resolve it against. THREE entries mean the placement split a third pane. The \
+                 preview pane is saved as kind `edit`, restored with `:edit`, and the next launch \
+                 reopens the SOURCE where the preview was. A `None` NAME on the preview pane \
+                 means `preview_status`'s `abs_path` came back empty or relativized, which the \
+                 restore cannot open, since it opens a pane's path as saved. THREE entries mean \
+                 the placement split a third pane. The \
                  comparison is on the file NAME rather than the whole path because /tmp may \
                  resolve through a symlink. File: {}",
                 frozen_state_file.display()
             );
         }
         other => panic!(
-            "{SMOKE}: the frozen state persisted `layout: {other:?}` for two side-by-side panes, \
-             not a two-child Vertical split. A `None` means the snapshot gate refused every wake — \
-             which implicates `snapshot_readiness`, whose reported \
-             count must be `win_buffers.len() + previews.len()`, since a preview window appears in \
-             neither map otherwise. A `Leaf` means the split never reached the pane tree at all. \
-             File: {}",
+            "{SMOKE}: the frozen state persisted `root: {other:?}` for two side-by-side panes, \
+             not a two-child Vertical layout. A `None` means the tab was saved as an empty tab. A \
+             lone pane means the split never reached the pane tree at all, or the gather gate \
+             refused every wake and the tab contributed nothing newer — which implicates \
+             `snapshot_readiness`, whose reported count must be `win_buffers.len() + \
+             previews.len()`, since a preview window appears in neither map otherwise. File: {}",
             frozen_state_file.display()
         ),
     }
@@ -2980,8 +2957,8 @@ fn preview_document_follows_the_configured_appearance_under_cage() {
         state_dark,
         state_light,
         "{SMOKE}: both runs were pointed at the SAME state directory {}. Launch 1 quits with a \
-         preview pane open, so its `state.json` records a two-leaf layout with a live preview leaf \
-         — which launch 2 would then RESTORE, so its own Preview press would split a SECOND \
+         preview pane open, so its saved window state records a two-pane layout with a live \
+         preview pane — which launch 2 would then RESTORE, so its own Preview press would split a SECOND \
          time and put its preview in a pane none of the derived \
          rectangles below is aimed at. See `smoke_state_dir_at`.",
         state_dark.display()

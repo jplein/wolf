@@ -4,7 +4,7 @@
 //! `<C-w>w`, Toggle Terminal with the drawer open or closed, a split and an other-pane
 //! command while zoomed each unzoom. A window resize while zoomed fits the zoomed pane to the
 //! new size, and the unzoom then fits the restored layout to it. A pane zoomed at quit is
-//! saved in `state.json` and zoomed again at the next launch.
+//! saved as its tab's `zoomed` and zoomed again at the next launch.
 
 use super::pointer::MIN_DRAG_CELLS;
 use super::preview::PREVIEW_OTHER_PANE_QUERY;
@@ -1444,7 +1444,7 @@ const RELAUNCH_ZOOMED_FILE: &str = "zb.md";
 /// | `13` | run 1 exited non-zero |
 /// | `14` | run 2's app died before it was ready for input |
 /// | `15` | a run-2 readback never appeared: the keys reached no Neovim |
-/// | `16` | run 1 wrote no `state.json` |
+/// | `16` | run 1 wrote no `wolf.sqlite` |
 /// | `18` | run 1's L1 readback never appeared, after `:e` |
 /// | `19` | run 1's Z1 readback never appeared, after `:WolfZoomPane` |
 /// | `40` | an app never reported ready: `wait_ready`'s timeout in the readiness prelude |
@@ -1532,11 +1532,10 @@ fi
 app_pid=
 
 # Run 2 saves on every render wake, so run 1's save is frozen before it starts.
-if [ ! -s "$STATE_SRC" ]; then
-    echo "wolf-gnome zoom relaunch smoke: run 1 wrote no state.json at $STATE_SRC." >&2
+if ! freeze_state "$STATE_SRC" "$STATE_COPY"; then
+    echo "wolf-gnome zoom relaunch smoke: run 1 wrote no wolf.sqlite in $STATE_SRC." >&2
     exit 16
 fi
-cp "$STATE_SRC" "$STATE_COPY"
 
 # --- RUN 2: relaunch in the same cwd and state dir, and read back -------------------
 "$WOLF_BIN" &
@@ -1553,32 +1552,33 @@ wait_file "$READ_RB" || exit 15
 exit 0
 "#;
 
-/// **A pane zoomed at quit is saved as its leaf's `zoomed` mark in `state.json`, and the next
-/// launch restores the layout zoomed on it.**
+/// **A pane zoomed at quit is saved as its tab's `zoomed`, the pane's depth-first index, and
+/// the next launch restores the layout zoomed on it.**
 ///
 /// ## The scenario
 ///
 /// Two launches in one cage through [`cage_command`], sharing the cwd and the state dir.
 /// Run 1 opens [`RELAUNCH_LEFT_FILE`], reads its size back as L1, splits with `<C-w>v`,
 /// opens [`RELAUNCH_ZOOMED_FILE`] in the new right pane, zooms it with `:WolfZoomPane` and
-/// reads its size back as Z1, then quits with `:qa`. The scenario copies run 1's `state.json`
-/// before run 2 can write over it. Run 2 waits until it is ready, then reads back its window
+/// reads its size back as Z1, then quits with `:qa`. The scenario copies run 1's state
+/// database before run 2 can write over it. Run 2 waits until it is ready, then reads back its window
 /// count, the current window's size and buffer, and the other window's width.
 ///
 /// L1 is the launch pane alone, which has the whole pane area, and a zoomed pane gets that
 /// same area, so Z1 equals L1 only when the zoom happened. Every observable is a Neovim
-/// readback or the saved file; no pixel is read, so a fixture's name cannot satisfy one.
+/// readback or the saved window state; no pixel is read, so a fixture's name cannot satisfy
+/// one.
 ///
 /// ## The assertions
 ///
 /// | ID | assertion | falsifying edit | predicted red |
 /// | --- | --- | --- | --- |
 /// | — | precondition: Z1 equals L1, and both are a sized grid | none | n/a |
-/// | R1 | R-a: run 1's copy holds one window and one tab, laid out `vertical[za unzoomed, zb zoomed]` | in `layout_snapshot`, pass `None` to `encode` | R-a: no leaf zoomed |
+/// | R1 | R-a: run 1's copy holds one window and one tab, laid out `vertical[za, zb]` and zoomed on pane 1 | in `layout_snapshot`, answer `zoomed: None` | R-a: the tab is not zoomed |
 /// | R2 | R-b: run 2 has 2 windows, `zb.md` current at L1, the other window narrower than L1 | in `apply_layout_rebuild`, delete the `Restore` application | R-b: `zb.md` narrower than L1 |
 /// | R3 | the scenario exits 0 | in `readiness`, drop the zoom filter | exit 40: run 2 never reports ready |
 ///
-/// R-a is asserted before R-b, so a save that lost the mark is told apart from a restore
+/// R-a is asserted before R-b, so a save that lost the zoom is told apart from a restore
 /// that ignored it.
 #[test]
 fn a_zoomed_pane_survives_relaunch_under_cage() {
@@ -1597,24 +1597,17 @@ fn a_zoomed_pane_survives_relaunch_under_cage() {
             .unwrap_or_else(|e| panic!("{SMOKE}: failed to write {}: {e}", path.display()));
     }
 
-    let smoke_state_file = smoke_state_dir(&cwd).join(STATE_FILE_NAME);
-    // A directory, because `load_state` takes one; under the runtime dir so the sidebar never
-    // lists it.
-    let run1_state_dir = runtime_dir.join("wolf_gnome_zoom_relaunch_run1_state");
-    std::fs::create_dir_all(&run1_state_dir).unwrap_or_else(|e| {
-        panic!(
-            "{SMOKE}: failed to create the run-1 state snapshot dir {}: {e}",
-            run1_state_dir.display()
-        )
-    });
-    let run1_state_file = run1_state_dir.join(STATE_FILE_NAME);
+    let smoke_state = smoke_state_dir(&cwd);
+    let run1_state_dir =
+        frozen_state_dir(&runtime_dir, "wolf_gnome_zoom_relaunch_run1_state", SMOKE);
+    let run1_state_file = run1_state_dir.join(STATE_DB_NAME);
 
     let read = |name: &str| runtime_dir.join(format!("wolf_gnome_zoom_relaunch_{name}.txt"));
     let read_l1 = read("launch");
     let read_z1 = read("zoomed");
     let read_r = read("relaunched");
     let read_rb = read("relaunched_buffer");
-    for path in [&read_l1, &read_z1, &read_r, &read_rb, &run1_state_file] {
+    for path in [&read_l1, &read_z1, &read_r, &read_rb] {
         clear_evidence(path, SMOKE);
     }
 
@@ -1626,8 +1619,8 @@ fn a_zoomed_pane_survives_relaunch_under_cage() {
         .env("READ_Z1", &read_z1)
         .env("READ_R", &read_r)
         .env("READ_RB", &read_rb)
-        .env("STATE_SRC", &smoke_state_file)
-        .env("STATE_COPY", &run1_state_file)
+        .env("STATE_SRC", &smoke_state)
+        .env("STATE_COPY", &run1_state_dir)
         .status()
         .expect("failed to spawn `cage` for the headless zoom relaunch scenario");
     assert!(
@@ -1637,11 +1630,11 @@ fn a_zoomed_pane_survives_relaunch_under_cage() {
          run 1 exited non-zero, which implicates the close path's gather of a zoomed tab. Exit \
          14: run 2's app died before it was ready, as a panic in the restore's re-zoom would. \
          Exit 15: a run-2 readback never appeared, so the keys reached no Neovim: the focused \
-         widget may be a hidden pane's. Exit 16: run 1 wrote no state.json at {}. Exit 18 or \
+         widget may be a hidden pane's. Exit 16: run 1 wrote no wolf.sqlite in {}. Exit 18 or \
          19: a run-1 readback never appeared, after `:e` or after `:WolfZoomPane`. Exit 40: an \
          app never reported ready; in run 2 that is the readiness file waiting on the grid of \
          a pane the zoom hides, which is never allocated and so never requests one.",
-        smoke_state_file.display()
+        smoke_state.display()
     );
 
     // --- Precondition: run 1 zoomed zb ------------------------------------------
@@ -1657,51 +1650,47 @@ fn a_zoomed_pane_survives_relaunch_under_cage() {
          anything about a saved zoom."
     );
 
-    // --- R-a (R1): run 1 saved zb's leaf as the zoomed one ------------------------
-    let saved = load_state(&run1_state_dir).unwrap_or_else(|| {
-        panic!(
-            "{SMOKE}: wolf_core::load_state could not parse the frozen copy of run 1's state at \
-             {}. The scenario proved it non-empty, so suspect its shape.",
-            run1_state_file.display()
-        )
-    });
+    // --- R-a (R1): run 1 saved zb's pane as the zoomed one ------------------------
+    let saved = frozen_window_state(&run1_state_dir, SMOKE, "run 1's save");
     assert!(
         saved.windows.len() == 1 && saved.windows[0].tabs.len() == 1,
-        "{SMOKE}: run 1's state.json holds {} window(s), the first with {:?} tab(s); want one \
+        "{SMOKE}: run 1's window state holds {} window(s), the first with {:?} tab(s); want one \
          window with one tab. File: {}",
         saved.windows.len(),
         saved.windows.first().map(|w| w.tabs.len()),
         run1_state_file.display()
     );
-    let layout = &saved.windows[0].tabs[0].layout;
-    let Some(PaneNode::Split {
+    let tab = &saved.windows[0].tabs[0];
+    let root = &tab.content.root;
+    // The module's own `Layout` is a geometry readback; this is the saved model's.
+    let Some(Node::Layout(wolf_core::app_state::Layout {
         orientation: PaneOrientation::Vertical,
         children,
         ..
-    }) = layout
+    })) = root
     else {
         panic!(
-            "{SMOKE}: run 1 saved the layout {layout:?}; want a vertical split of two leaves, \
-             for the `<C-w>v`. A lone leaf or None means the split was not saved at all. File: \
-             {}",
+            "{SMOKE}: run 1 saved the root {root:?}; want a vertical layout of two panes, for \
+             the `<C-w>v`. A lone pane or None means the split was not saved at all. File: {}",
             run1_state_file.display()
         );
     };
-    let leaves: Vec<(Option<&str>, Option<bool>)> = children
-        .iter()
-        .map(|child| (leaf_tail(child), leaf_fields(child).map(|leaf| leaf.zoomed)))
-        .collect();
+    let tails: Vec<Option<&str>> = children.iter().map(leaf_tail).collect();
     assert_eq!(
-        leaves,
-        vec![
-            (Some(RELAUNCH_LEFT_FILE), Some(false)),
-            (Some(RELAUNCH_ZOOMED_FILE), Some(true)),
-        ],
-        "{SMOKE}: run 1 saved the leaves (file, zoomed) {leaves:?}; want {RELAUNCH_LEFT_FILE} \
-         unzoomed then {RELAUNCH_ZOOMED_FILE} zoomed. Both unzoomed means the save side wrote \
-         no mark: `layout_snapshot` did not pass the zoomed pane to `encode`. Both zoomed \
-         means `encode` marks every leaf of a zoomed tab; only the first zoomed means it marks \
-         the wrong id. File: {}",
+        tails,
+        vec![Some(RELAUNCH_LEFT_FILE), Some(RELAUNCH_ZOOMED_FILE)],
+        "{SMOKE}: run 1 saved the panes {tails:?}; want {RELAUNCH_LEFT_FILE} then \
+         {RELAUNCH_ZOOMED_FILE}, the order the zoom's index counts in. File: {}",
+        run1_state_file.display()
+    );
+    assert_eq!(
+        tab.content.zoomed,
+        Some(PaneRef::Pane(1)),
+        "{SMOKE}: run 1 saved the tab's zoom as {:?}; want Some(Pane(1)), \
+         {RELAUNCH_ZOOMED_FILE}'s depth-first index. None means the save side wrote no zoom: \
+         `layout_snapshot` answered no index for the zoomed pane. Some(Pane(0)) means it \
+         indexes the wrong pane; Some(Drawer) means it took the pane for the drawer. File: {}",
+        tab.content.zoomed,
         run1_state_file.display()
     );
 
@@ -1721,7 +1710,7 @@ fn a_zoomed_pane_survives_relaunch_under_cage() {
         "{SMOKE}: in run 2 {RELAUNCH_ZOOMED_FILE} is {current:?} and the other window {other_w} \
          columns wide; want {RELAUNCH_ZOOMED_FILE} at run 1's L1 {l1:?}, the whole pane area, \
          and the hidden {RELAUNCH_LEFT_FILE} narrower. {RELAUNCH_ZOOMED_FILE} at about half \
-         L1's width means the restore read the mark (R-a holds) but did not re-zoom: \
+         L1's width means the restore read the zoom (R-a holds) but did not re-zoom: \
          `apply_layout_rebuild` applied no `Restore`. Both windows at L1's width means neither \
          was split."
     );

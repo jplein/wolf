@@ -53,10 +53,11 @@ use super::restore::{
     DIVIDER_HEADING_RIGHT, DIVIDER_OCR_LEFT, DIVIDER_OCR_RIGHT, DIVIDER_W0_NAME, DIVIDER_W1_NAME,
     DIVIDER_W2_NAME, RESTORE_FILE_LEFT, RESTORE_FILE_MID, RESTORE_FILE_RIGHT, RESTORE_OCR_ALFA,
     RESTORE_OCR_BRAVO, RESTORE_OCR_CHARLIE, RESTORE_READBACK_NAME, SOLO_DECOY_FILE, SOLO_FILE,
-    SOLO_OCR_ABSENT, SOLO_OCR_PRESENT, SOLO_READBACK_NAME, TABS_RESTORE_FILES,
-    TABS_RESTORE_FILE_ONE, TABS_RESTORE_FILE_THREE, TABS_RESTORE_FILE_TWO,
-    TABS_RESTORE_READBACK_NAME, TWOWIN_FIRST_FILE, TWOWIN_NEW_WINDOW_QUERY, TWOWIN_READBACK_B_NAME,
-    TWOWIN_READBACK_R2_NAME, TWOWIN_SECOND_FILE, TWOWIN_SECOND_NAME, TWOWIN_SUBDIR,
+    SOLO_OCR_ABSENT, SOLO_OCR_PRESENT, SOLO_READBACK_NAME, STALE_STATE_FILE,
+    STALE_STATE_READBACK_NAME, TABS_RESTORE_FILES, TABS_RESTORE_FILE_ONE, TABS_RESTORE_FILE_THREE,
+    TABS_RESTORE_FILE_TWO, TABS_RESTORE_READBACK_NAME, TWOWIN_A_FIRST_FILE, TWOWIN_A_LEFT_FILE,
+    TWOWIN_A_ZOOMED_FILE, TWOWIN_B_ACTIVE_FILE, TWOWIN_B_FIRST_FILE, TWOWIN_NEW_WINDOW_QUERY,
+    TWOWIN_READBACK_B_NAME, TWOWIN_READBACK_R2_NAME,
 };
 use super::search_toggles::{
     ST_ALL_MD_FILE, ST_ALL_TXT_FILE, ST_CASE_LOWER_FILE, ST_CASE_UPPER_FILE, ST_OCR_ALL_MD,
@@ -181,8 +182,8 @@ use super::*;
 /// * `two_windows_two_neovims_and_two_saved_sessions_under_cage` captures no PNG
 ///   either, and could not use one: `cage` shows a single toplevel and declines a
 ///   `present()` on any other, so no image can show two windows. Its observables are
-///   the count of live `nvim` children of the app pid, the two-window tree in a
-///   frozen `state.json`, and `getcwd()` / `bufname('%')` strings the captive
+///   the count of live `nvim` children of the app pid, the two windows in a frozen
+///   state database, and `getcwd()` / `bufname('%')` strings the captive
 ///   Neovims write about themselves — none of which a rendered row can move. Its
 ///   fixtures are registered in [`RELAUNCH_FIXTURE_NAMES`] all the same, and carry
 ///   the one exemption in this file that goes the other way; see the eighth block of
@@ -191,14 +192,18 @@ use super::*;
 ///   one: a background tab's pane view is never drawn at all, and a tab TITLE is the
 ///   current file's name, which the per-pane statusbar strip and nvim's `:e` echo
 ///   also draw, so no term could discriminate one. Its observables are two frozen
-///   `state.json` copies and a map of the restored Neovims to the swap files they
+///   state databases and a map of the restored Neovims to the swap files they
 ///   hold open. Its fixtures are registered in [`RELAUNCH_FIXTURE_NAMES`] all the
 ///   same, for the generic loop's sake.
 /// * `a_file_saved_in_one_tab_reloads_in_another_on_switch_under_cage` and
 ///   `one_tabs_neovim_crash_restarts_only_that_tab_under_cage` capture nothing: their
 ///   observables are readbacks the tabs' Neovims write about themselves, live pids
-///   and, for the second, a frozen `state.json`. Their fixtures and readbacks are
+///   and, for the second, a frozen state database. Their fixtures and readbacks are
 ///   registered in [`RELAUNCH_FIXTURE_NAMES`] for the generic loop's sake.
+/// * `a_stale_state_json_is_deleted_at_launch_under_cage` captures nothing: its
+///   observables are whether two planted files survive the launch, a readback the
+///   Neovim writes about itself and a frozen state database. Its fixture and readback
+///   are registered in [`RELAUNCH_FIXTURE_NAMES`] for the generic loop's sake.
 /// * `config_font_size_changes_the_grid_under_cage` likewise captures no PNG: its
 ///   two observables are the `winwidth(0)` integers the captive Neovim writes about
 ///   its own grid, so no fixture filename can help or hurt it.
@@ -865,15 +870,29 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         "dragged_divider_weights_survive_relaunch_under_cage",
     ),
     // Two-window fixtures and readbacks: no OCR runs, so these rows serve the generic loop only.
-    // TWOWIN_SECOND_FILE is a path, which puts TWOWIN_SUBDIR inside the same substring loop.
     (
-        TWOWIN_FIRST_FILE,
-        "TWOWIN_FIRST_FILE",
+        TWOWIN_A_FIRST_FILE,
+        "TWOWIN_A_FIRST_FILE",
         "two_windows_two_neovims_and_two_saved_sessions_under_cage",
     ),
     (
-        TWOWIN_SECOND_FILE,
-        "TWOWIN_SECOND_FILE",
+        TWOWIN_A_LEFT_FILE,
+        "TWOWIN_A_LEFT_FILE",
+        "two_windows_two_neovims_and_two_saved_sessions_under_cage",
+    ),
+    (
+        TWOWIN_A_ZOOMED_FILE,
+        "TWOWIN_A_ZOOMED_FILE",
+        "two_windows_two_neovims_and_two_saved_sessions_under_cage",
+    ),
+    (
+        TWOWIN_B_FIRST_FILE,
+        "TWOWIN_B_FIRST_FILE",
+        "two_windows_two_neovims_and_two_saved_sessions_under_cage",
+    ),
+    (
+        TWOWIN_B_ACTIVE_FILE,
+        "TWOWIN_B_ACTIVE_FILE",
         "two_windows_two_neovims_and_two_saved_sessions_under_cage",
     ),
     (
@@ -885,6 +904,17 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         TWOWIN_READBACK_R2_NAME,
         "TWOWIN_READBACK_R2_NAME",
         "two_windows_two_neovims_and_two_saved_sessions_under_cage",
+    ),
+    // Stale-state fixture and readback: no OCR runs, so these rows serve the generic loop only.
+    (
+        STALE_STATE_FILE,
+        "STALE_STATE_FILE",
+        "a_stale_state_json_is_deleted_at_launch_under_cage",
+    ),
+    (
+        STALE_STATE_READBACK_NAME,
+        "STALE_STATE_READBACK_NAME",
+        "a_stale_state_json_is_deleted_at_launch_under_cage",
     ),
     // Three-tab fixtures and readbacks: no OCR runs, so these rows serve the generic loop only; an
     // exemption block in the guard covers their names.
@@ -1915,19 +1945,18 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// satisfiable by the very thing it is proving was drawn.
 ///
 /// The two-window smoke is the sixth and the only one of a different KIND. The five
-/// above are fixtures that must CARRY an asserted OCR term; its two fixtures are
+/// above are fixtures that must CARRY an asserted OCR term; its five fixtures are
 /// named after the strings its assertions compare against, which the rule at the top
 /// of this file forbids outright. It is exempt because it takes no capture at all —
-/// it invokes `grim` nowhere and `tesseract` nowhere — and what it compares are
-/// `TabState::layout` leaf paths out of a frozen `state.json` and `getcwd()` /
-/// `bufname('%')` strings the captive Neovim writes about itself. A sidebar row
-/// cannot write a `PaneNode::Leaf` and an `:e` toast cannot either, so the hazard
-/// the rule exists for has no route in. The names are registered in
-/// [`RELAUNCH_FIXTURE_NAMES`] regardless, so the generic loop still keeps them clear
-/// of every other smoke's terms; what the eighth block adds is the CROSSING —
-/// [`TWOWIN_FIRST_FILE`] against [`TWOWIN_SECOND_NAME`] and [`TWOWIN_SUBDIR`]
-/// against [`TEMP_CWD_BASENAME`] — without which "the two sessions were saved and
-/// restored in order" is satisfied by either window twice.
+/// it invokes `grim` nowhere and `tesseract` nowhere — and what it compares are pane
+/// paths out of a frozen window state and `getcwd()` / `bufname('%')` strings the
+/// captive Neovim writes about itself. A sidebar row cannot write a saved pane and an
+/// `:e` toast cannot either, so the hazard the rule exists for has no route in. The
+/// names are registered in [`RELAUNCH_FIXTURE_NAMES`] regardless, so the generic loop
+/// still keeps them clear of every other smoke's terms; what the eighth block adds is
+/// the CROSSING — every one of the five against every other — without which "each
+/// window and tab was saved and restored in its place" is satisfied by a window or
+/// tab standing in for another.
 ///
 /// The two project-search smokes are the seventh. [`PROJSEARCH_FILE_START`]'s NAME
 /// carries [`PROJSEARCH_OCR_TREE_ROW`], because a tree row is what says which sidebar
@@ -3175,51 +3204,31 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
 
     // The two-window exemption: fixtures named after the compared strings, safe as it reads no image.
     // See notes/crates/wolf-gnome/tests/smoke_headless/restore.rs.md#two-window-smoke-fixtures
-    assert_eq!(
-        TWOWIN_SECOND_FILE,
-        format!("{TWOWIN_SUBDIR}/{TWOWIN_SECOND_NAME}"),
-        "TWOWIN_SECOND_FILE = {TWOWIN_SECOND_FILE:?} is not TWOWIN_SUBDIR = {TWOWIN_SUBDIR:?} \
-         joined to TWOWIN_SECOND_NAME = {TWOWIN_SECOND_NAME:?}. The three are handed to the \
-         scenario separately — the joined path is what the fixture is WRITTEN at, the directory \
-         is what window B `:cd`s into, and the bare name is what it types at `:e` — so a \
-         disagreement puts the file somewhere the `:e` will not find it. The smoke would then \
-         persist a layout naming a buffer that was never loaded, and the failure would read as a \
-         restore bug."
-    );
-    assert!(
-        !TWOWIN_FIRST_FILE.contains('/'),
-        "TWOWIN_FIRST_FILE = {TWOWIN_FIRST_FILE:?} carries a path separator. It is written \
-         directly into the temp cwd and typed at `:e` while window A is rooted there, so it must \
-         be a bare filename; a path would make the `:e` resolve somewhere else and window A would \
-         persist a leaf naming a file that does not exist."
-    );
-    assert_ne!(
-        TWOWIN_FIRST_FILE, TWOWIN_SECOND_NAME,
-        "TWOWIN_FIRST_FILE and TWOWIN_SECOND_NAME are the same name ({TWOWIN_FIRST_FILE:?}). The \
-         smoke asserts that the saved leaf of window 0 names the first and the leaf of window 1 \
-         names the second, so with one name both assertions are satisfied by either window and \
-         \"the two sessions were saved in order\" stops being falsifiable — a build that wrote one \
-         window's subtree twice would pass. The comparison is on the whole final path component, \
-         which is also why a name that merely ENDS with the other's would not slip through: it is \
-         equality, not a suffix test."
-    );
-    assert_ne!(
-        TWOWIN_SUBDIR, TEMP_CWD_BASENAME,
-        "TWOWIN_SUBDIR and TEMP_CWD_BASENAME are the same name ({TWOWIN_SUBDIR:?}). The scenario's \
-         exit-24 check keys on the FINAL COMPONENT of the restored window's `getcwd()` to decide \
-         which of the two saved sessions it is looking at, and the Rust side compares the two \
-         saved `cwd` values the same way. With one name the two projects are indistinguishable by \
-         that key: a window restored at the wrong one of them would satisfy the check, and a \
-         crossed restore — each window handed the other's plan — would pass."
-    );
-    assert!(
-        !TWOWIN_SUBDIR.is_empty() && !TWOWIN_SUBDIR.contains('/'),
-        "TWOWIN_SUBDIR = {TWOWIN_SUBDIR:?} must be a single non-empty path component: it is used \
-         both as a directory to create under the temp cwd and as the basename the restored `cwd` \
-         is matched against. An empty one puts window B's project at the temp cwd itself, which \
-         is the collision the fixture layout exists to avoid: two windows on one project save \
-         the same `cwd`, and the saved order stops being readable off it."
-    );
+    let twowin = [
+        (TWOWIN_A_FIRST_FILE, "TWOWIN_A_FIRST_FILE"),
+        (TWOWIN_A_LEFT_FILE, "TWOWIN_A_LEFT_FILE"),
+        (TWOWIN_A_ZOOMED_FILE, "TWOWIN_A_ZOOMED_FILE"),
+        (TWOWIN_B_FIRST_FILE, "TWOWIN_B_FIRST_FILE"),
+        (TWOWIN_B_ACTIVE_FILE, "TWOWIN_B_ACTIVE_FILE"),
+    ];
+    for (i, &(name, name_const)) in twowin.iter().enumerate() {
+        assert!(
+            !name.is_empty() && !name.contains('/'),
+            "{name_const} = {name:?} must be a bare, non-empty filename. It is written directly \
+             into the temp cwd and typed at `:e` in a tab rooted there, so a path would make the \
+             `:e` resolve somewhere else and the tab would save a pane naming a file that does \
+             not exist."
+        );
+        for &(other, other_const) in &twowin[i + 1..] {
+            assert_ne!(
+                name, other,
+                "{name_const} and {other_const} are the same name ({name:?}). The smoke reads \
+                 which window, tab and pane is where off these names alone, compared as whole \
+                 file names: with two equal, a save that put one tab in the other's place, or a \
+                 restore that selected the wrong tab, would pass."
+            );
+        }
+    }
 
     // A copy of `palette::tests::NEW_WINDOW_PALETTE_QUERY`; this pins its shape, since a stray space or
     // capital changes `rank_matches`' terms and surfaces only as an exit 21 much later.

@@ -64,7 +64,7 @@
 //! at open, never per keystroke, and none of it is an RPC to Neovim, so this
 //! module adds no `block_on_rpc` route at all (see
 //! `notes/wolf-gnome/crash-and-stall-recovery.md`). The window walk
-//! in particular reads each window's already-cached persisted subtree, so no other
+//! in particular reads each window's already-cached persisted entry, so no other
 //! window's cores are touched.
 //!
 //! Almost all of this module is GTK widget wiring, which cannot be unit-tested
@@ -362,7 +362,7 @@ impl PaletteInner {
         *self.mru_recent.borrow_mut() = recent;
         *self.recent_dirs.borrow_mut() =
             open_recent_candidates(&recorded, live.as_deref(), Path::is_dir);
-        // The window snapshot: a walk of cached subtrees, taken with no borrow of this cell live,
+        // The window snapshot: a walk of cached window entries, taken with no borrow of this cell live,
         // because it re-enters the coordinator.
         let windows = (self.window_source)();
         *self.windows.borrow_mut() = windows;

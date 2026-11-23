@@ -54,7 +54,7 @@
 //! harness has to a claim OCR cannot make: it reads no colour, and it cannot answer
 //! "where on the page is this". A smoke whose claim no capture could carry asserts on
 //! readbacks the captive Neovim writes about its own state, on bytes on disk, on a frozen
-//! `state.json` or on its exit status alone.
+//! copy of the saved window state or on its exit status alone.
 //!
 //! A smoke that needs two app launches — a relaunch, two configured values, two windows —
 //! runs **both inside ONE `cage` instance** (one scenario string, two sequential
@@ -148,11 +148,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime};
 
 use cairo::{Context, Format, ImageSurface};
-use wolf_core::config::CONFIG_FILE_NAME;
-use wolf_core::state::STATE_FILE_NAME;
-use wolf_core::{
-    load_state, preferences_dir, state_dir, CommandMru, PaneNode, PaneOrientation, RecentDirs,
+use wolf_core::app_state::{
+    Layout, Node, Pane, PaneOrientation, PaneRef, ProjectState, Window, WindowState,
 };
+use wolf_core::config::CONFIG_FILE_NAME;
+use wolf_core::{preferences_dir, state_dir, AppStateStore, CommandMru, RecentDirs};
 use wolf_gnome::{preview_coalescer::PREVIEW_TRAILING_DELAY, CellMetrics, WINDOW_TITLE_FALLBACK};
 
 mod compose;
@@ -1340,10 +1340,9 @@ const TEMP_CWD_BASENAME: &str = "project";
 /// `wolf_core::state::state_dir()` resolves `WOLF_STATE_DIR` first and otherwise
 /// falls back to `$XDG_STATE_HOME/wolf` — on Linux `~/.local/state/wolf`. Without
 /// this override every smoke writes into the DEVELOPER'S REAL state directory:
-/// the durable per-project swap dir (`swap/<hash of cwd>/`), the three MRU sqlite
-/// files, and `state.json` itself.
-/// That last one is not untidiness. `state.json` holds the developer's real saved
-/// window size, working directory and pane layout, so without this helper running
+/// the durable per-project swap dir (`swap/<hash of cwd>/`) and `wolf.sqlite`.
+/// That last one is not untidiness. `wolf.sqlite` holds the developer's real saved
+/// windows, working directories and pane layouts, so without this helper running
 /// the test suite would read it at launch and then CLOBBER it on quit with a
 /// throwaway one-pane temp-cwd layout. [`cage_command`] is the single place it is
 /// set, and [`cage_is_only_spawned_through_the_isolating_helper`] is what keeps it
@@ -1352,7 +1351,7 @@ const TEMP_CWD_BASENAME: &str = "project";
 /// ## Why a SIBLING and not a child
 ///
 /// A child of `cwd` would be walked by the app's own `FileSearch`, which excludes
-/// only `.git/` and `.wolf/`. `state.json` and every `swap/<hash>/*.swp` would then
+/// only `.git/` and `.wolf/`. `wolf.sqlite` and every `swap/<hash>/*.swp` would then
 /// appear as rows in the file-tree sidebar and as picker candidates. That changes
 /// the page density every OCR assertion is calibrated against (see
 /// [`SIDEBAR_FILLER_COUNT`], whose measured floor exists precisely because tesseract
@@ -1372,13 +1371,13 @@ fn smoke_state_dir(cwd: &Path) -> PathBuf {
 ///
 /// [`cage_command`] hands both launches of a two-launch scenario the one directory
 /// this returns for `""`, and for the RELAUNCH smokes that sharing IS the
-/// scenario: launch 2 must read exactly the `state.json` launch 1 wrote.
+/// scenario: launch 2 must read exactly the window state launch 1 wrote.
 ///
 /// For a two-launch smoke whose subject is not restore, the same sharing is a
 /// coupling that silently changes what launch 2 is measuring.
 /// `preview_document_follows_the_configured_appearance_under_cage` is the case
 /// that forced this split: its launch 1 quits with a preview pane open, so its
-/// `state.json` records a two-leaf layout with a live preview leaf, and launch 2
+/// saved window state records a two-pane layout with a live preview pane, and launch 2
 /// would then restore TWO panes before its own Preview press. That press's
 /// split would make THREE panes rather than two, and every derived rectangle in that
 /// smoke — all of which assume the preview is the RIGHT half of two — would be aimed
@@ -1408,7 +1407,7 @@ fn smoke_state_dir_at(cwd: &Path, suffix: &str) -> PathBuf {
         panic!(
             "failed to create the smoke state dir {}: {e}. Without it the app under cage falls \
              back to the developer's real state dir and would read and overwrite their real \
-             state.json.",
+             wolf.sqlite.",
             dir.display()
         )
     });
@@ -1698,7 +1697,7 @@ const SHARED_SHADER_CACHE_DIR: &str = "wolf-smoke-shader-cache";
 /// and purely DERIVED: a hit hands back the compiled form of the exact same input a
 /// miss would have recompiled, so the only difference a warm cache can make is
 /// elapsed time. It cannot carry a fixture file, a Neovim buffer, an MRU row, a swap
-/// file or a `state.json` from one smoke into the next, so none of the coupling those
+/// file or a saved window state from one smoke into the next, so none of the coupling those
 /// two helpers exist to prevent is reachable through it.
 ///
 /// So this is shared **deliberately**. Do not "fix" it into a per-smoke directory to
@@ -1808,6 +1807,14 @@ const SMOKE_GTK_IM_MODULE: &str = "gtk-im-context-simple";
 ///
 /// `wait_file_contains <file> <needle> <label>` polls until `<file>` holds `<needle>`
 /// and returns 1 after 20 s, leaving the decision to the caller.
+///
+/// `freeze_state <state dir> <copy dir>` copies the state database into `<copy dir>`
+/// for [`frozen_window_state`], and returns 1 when `<state dir>` holds no
+/// `wolf.sqlite`. It copies the `-wal` and `-shm` sidecars it finds as well, because
+/// the app's connection may never checkpoint, so its committed rows can sit in the
+/// `-wal` alone; SQLite replays that file when the copy is opened. The main file is
+/// copied first: a checkpoint that lands between the two copies is then covered by
+/// the frames the `-wal` still holds.
 const READINESS_PRELUDE: &str = r#"
 # A non-interactive bash as sh drops an inherited PS1, so a terminal smoke's prompt
 # arrives as SMOKE_PS1 and is exported here for the shells the app starts.
@@ -1861,6 +1868,19 @@ wait_file_contains() {
     done
     echo "$3: timed out waiting for $1 to contain $2" >&2
     return 1
+}
+
+freeze_state() {
+    if [ ! -s "$1/wolf.sqlite" ]; then
+        return 1
+    fi
+    mkdir -p "$2"
+    rm -f "$2/wolf.sqlite" "$2/wolf.sqlite-wal" "$2/wolf.sqlite-shm"
+    for _fs_name in wolf.sqlite wolf.sqlite-wal wolf.sqlite-shm; do
+        if [ -e "$1/$_fs_name" ]; then
+            cp "$1/$_fs_name" "$2/$_fs_name"
+        fi
+    done
 }
 "#;
 
@@ -2211,7 +2231,7 @@ fn smoke_gtk_config_dirs(runtime: &Path) -> PathBuf {
 ///   out of the developer's real `~/.local/state/wolf/`. Read that function's doc
 ///   comment before changing anything here. It is also what lets the two RELAUNCH
 ///   smokes work at all: both launches inside one scenario are handed the same
-///   directory, so the second reads exactly the `state.json` the first wrote.
+///   directory, so the second reads exactly the window state the first wrote.
 /// * `WOLF_CONFIG_DIR` = [`smoke_config_dir`] — the isolation that keeps a smoke
 ///   run out of the developer's real `~/.config/wolf/`, and the thing that pins the
 ///   app's font family and line-height to what [`cell_metrics_for_smoke`] measures.
@@ -2538,8 +2558,8 @@ const CAGE_SPAWN_NEEDLE: &str = concat!("Command::new(\"", "cage", "\")");
 ///
 /// A smoke that builds its own `cage` command inherits the test process's
 /// environment and nothing else, so its app resolves `wolf_core::state_dir()` to the
-/// developer's REAL `~/.local/state/wolf/`. It then reads their real `state.json` at
-/// launch — restoring their window size, working directory and pane layout into a
+/// developer's REAL `~/.local/state/wolf/`. It then reads their real `wolf.sqlite` at
+/// launch — restoring their windows, working directories and pane layouts into a
 /// smoke that is supposed to start from a clean slate — and overwrites it at quit
 /// with a throwaway one-pane temp-cwd layout. The developer's saved session is
 /// destroyed by running the test suite, and the smoke stops being reproducible
@@ -2674,7 +2694,7 @@ fn cage_is_only_spawned_through_the_isolating_helper() {
          app before its first frame under WebKit's mandatory sandbox, so that smoke exits 11 \
          and reads as a launch failure in whatever change is in flight. Without \
          `WOLF_STATE_DIR` that smoke's app resolves `state_dir()` to the developer's real \
-         `~/.local/state/wolf/`, READS their real state.json at launch (so it starts from the developer's last session instead of a clean \
+         `~/.local/state/wolf/`, READS their real wolf.sqlite at launch (so it starts from the developer's last session instead of a clean \
          slate) and OVERWRITES it on quit with its own throwaway temp-cwd layout. Without \
          `WOLF_CONFIG_DIR` it resolves `preferences_dir()` from `XDG_CONFIG_HOME` or \
          `$HOME/.config` and `load_or_create` READS the developer's real wolf-config.yaml — or, \
@@ -4538,39 +4558,33 @@ fn assert_probe_cell_and_pane_origin(
     (origin_x, origin_y)
 }
 
-/// The fields of a persisted leaf the smokes read.
+/// The fields of a persisted pane the smokes read. A zoom is not among them: it is the
+/// tab's `zoomed`, a pane index, not a pane's own field.
 struct LeafFields<'a> {
     /// The buffer path, or the source path of a preview, or a terminal's directory.
     path: &'a str,
     preview: bool,
     terminal: bool,
-    zoomed: bool,
 }
 
-/// A persisted leaf's [`LeafFields`] — `None` for a split.
+/// A persisted pane's [`LeafFields`] — `None` for a layout.
 ///
-/// The one place the smokes destructure `PaneNode::Leaf`, so a field added to it
+/// The one place the smokes destructure `Node::Pane`, so a kind or field added to it
 /// touches this function and no smoke.
-fn leaf_fields(node: &PaneNode) -> Option<LeafFields<'_>> {
+fn leaf_fields(node: &Node) -> Option<LeafFields<'_>> {
     match node {
-        PaneNode::Leaf {
-            path,
-            preview,
-            terminal,
-            zoomed,
-        } => Some(LeafFields {
-            path,
-            preview: *preview,
-            terminal: *terminal,
-            zoomed: *zoomed,
+        Node::Pane(pane) => Some(LeafFields {
+            path: pane.path(),
+            preview: matches!(pane, Pane::Preview { .. }),
+            terminal: matches!(pane, Pane::Terminal { .. }),
         }),
-        PaneNode::Split { .. } => None,
+        Node::Layout(_) => None,
     }
 }
 
-/// The file NAME of a persisted leaf's path — `None` for a split, and `None` for a
-/// leaf whose path is empty or has no final component.
-fn leaf_tail(node: &PaneNode) -> Option<&str> {
+/// The file NAME of a persisted pane's path — `None` for a layout, and `None` for a
+/// pane whose path is empty or has no final component.
+fn leaf_tail(node: &Node) -> Option<&str> {
     leaf_fields(node).and_then(|leaf| Path::new(leaf.path).file_name().and_then(OsStr::to_str))
 }
 
@@ -4604,13 +4618,78 @@ fn read_window_buffer_names(path: &Path, smoke: &str) -> Vec<String> {
     names
 }
 
-/// Whether a persisted leaf is a Markdown PREVIEW — `None` for a split.
+/// Whether a persisted pane is a Markdown PREVIEW — `None` for a layout.
 ///
 /// Read beside [`leaf_tail`] rather than folded into it: the two answer different
 /// questions about one leaf, and a `(tail, preview)` pair is what
 /// `preview_pane_renders_and_edit_source_returns_under_cage` compares as a set.
-fn leaf_preview(node: &PaneNode) -> Option<bool> {
+fn leaf_preview(node: &Node) -> Option<bool> {
     leaf_fields(node).map(|leaf| leaf.preview)
+}
+
+/// The state database's file name, from `specs/application-state.md` §1.
+const STATE_DB_NAME: &str = "wolf.sqlite";
+
+/// The directory under `runtime_dir` the prelude's `freeze_state` copies a state database
+/// into, removed first so a copy from an earlier run cannot answer for this one. Under
+/// `XDG_RUNTIME_DIR`, so the sidebar never lists it; `freeze_state` creates it.
+fn frozen_state_dir(runtime_dir: &Path, name: &str, smoke: &str) -> PathBuf {
+    let dir = runtime_dir.join(name);
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir).unwrap_or_else(|e| {
+            panic!(
+                "{smoke}: failed to remove the stale frozen state dir {}: {e}",
+                dir.display()
+            )
+        });
+    }
+    dir
+}
+
+/// The window state saved in `frozen`, a copy the prelude's `freeze_state` made of a state
+/// directory, read through `AppStateStore` as the app reads it at launch.
+///
+/// Panics naming `what` when the copy holds no `wolf.sqlite`, or one with no window state.
+/// The store creates the database at its first open, so the file alone proves no save.
+fn frozen_window_state(frozen: &Path, smoke: &str, what: &str) -> WindowState {
+    let db = frozen.join(STATE_DB_NAME);
+    assert!(
+        db.is_file(),
+        "{smoke}: {what}: the frozen copy {} holds no {STATE_DB_NAME}, so the scenario never \
+         froze one; it exits with its own code when the app wrote none",
+        frozen.display()
+    );
+    AppStateStore::open(frozen)
+        .window_state()
+        .unwrap_or_else(|| {
+            panic!(
+            "{smoke}: {what}: the frozen {} holds no window state. The database exists from the \
+             store's first open, so this means no write was ever committed: the coordinator \
+             submitted nothing, every tab's gather gate stayed shut and no tab had a seed, or the \
+             writer was not flushed before the quit. A row that does not parse as \
+             `wolf_core::app_state::WindowState` reads the same way.",
+            db.display()
+        )
+        })
+}
+
+/// `directory`'s project state in `frozen`, a copy `freeze_state` made, or `None`.
+fn frozen_project_state(frozen: &Path, directory: &str) -> Option<ProjectState> {
+    AppStateStore::open(frozen).project_state(directory)
+}
+
+/// The file name of every pane under `node`, in depth-first order: the order a tab's
+/// `zoomed` indexes. `None` for a pane whose path has no file name, such as an empty one.
+fn pane_tails(node: &Node) -> Vec<Option<String>> {
+    node.panes()
+        .into_iter()
+        .map(|pane| {
+            Path::new(pane.path())
+                .file_name()
+                .and_then(OsStr::to_str)
+                .map(str::to_owned)
+        })
+        .collect()
 }
 
 /// The fifth compositor-free guard: `editor_inset`'s content-width cap CANNOT bind

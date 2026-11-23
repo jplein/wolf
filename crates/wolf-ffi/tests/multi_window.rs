@@ -2,13 +2,13 @@
 //!
 //! This drives the RUST half of the multi-core bridge against TWO REAL, hermetic
 //! Neovim instances — NO mocks, per the project testing policy. It is the sibling
-//! of `tests/state.rs` / `tests/panes.rs` (same staging / SKIP-when-unset
+//! of `tests/panes.rs` (same staging / SKIP-when-unset
 //! machinery, reusing `tests/common/mod.rs`) and exercises the per-core identity
 //! + wake-routing surface:
 //!
 //!   * `wolf_ffi_start(init_lua, cwd, cols, rows)` — NO trailing `window_index`
 //!     argument any more (state moved to the coordinator-owned snapshot builder;
-//!     see `tests/state.rs`), so each core is started with exactly four args.
+//!     see `tests/app_state.rs`), so each core is started with exactly four args.
 //!   * `WolfCoreHandle::wake_token() -> u64` — the per-core wake-routing identity
 //!     token (`#[must_use]`), minted fresh per `wolf_ffi_start`.
 //!   * `wolf_ffi_set_wake(Option<extern "C" fn(u64)>)` — the wake callback ABI
@@ -20,8 +20,7 @@
 //! The former per-index state section (`state_set_geometry` /
 //! `state_set_sidebar_visible` / `state_set_window_count` + the `:cd`
 //! persists-per-slot assertions) is GONE: those granular setters and the
-//! `window_index` slot were removed with the per-window-tabs change. The
-//! tree-shaped snapshot round-trip is covered headlessly by `tests/state.rs`.
+//! `window_index` slot were removed with the per-window-tabs change.
 //! This test keeps ONLY the wake-token identity + routing assertions.
 //!
 //! ## SINGLE #[test]

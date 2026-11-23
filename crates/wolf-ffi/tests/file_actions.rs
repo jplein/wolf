@@ -18,7 +18,7 @@
 //! `current_file()`.)
 //!
 //! This drives the RUST half against a REAL, hermetic Neovim — NO mocks, per the
-//! project testing policy. It is the sibling of `commands.rs` / `state.rs` (same
+//! project testing policy. It is the sibling of `commands.rs` (same
 //! staging / SKIP-when-unset machinery, reusing `tests/common/mod.rs`, and the
 //! same "poll `read_frame()` until attached" pattern).
 //!
@@ -36,7 +36,7 @@
 //!
 //! ## SINGLE #[test]
 //!
-//! Both file actions share ONE `#[test]` (like `commands.rs` / `state.rs`): a
+//! Both file actions share ONE `#[test]` (like `commands.rs`): a
 //! single real nvim is started, then `chdir` and `new_buffer` are exercised in
 //! sequence against it. Neither action mutates the process-global `WOLF_STATE_DIR`,
 //! so no env staging or lock is needed here.

@@ -1,5 +1,6 @@
 //! Session-restore smokes: two launches in one cage, the second reading what the first
-//! saved, for the pane layout, a lone file, tabs, two windows and dragged divider weights.
+//! saved, for the pane layout, a lone file, tabs, two windows and dragged divider weights;
+//! and one launch over a stale `state.json`, which must be deleted and not restored.
 
 use super::pointer::{
     divider_seed_span, head_width_ratio, BASELINE_TOLERANCE_CELLS, BISECT_STEPS, MIN_DRAG_CELLS,
@@ -184,8 +185,8 @@ sleep "$SETTLE"
 
 # Quit the whole application. `Coordinator::on_window_closing` is the FIRST statement
 # in the close-request handler -- while the core and the panes are still alive -- and
-# it gathers this window's subtree, commits the tree and blocks on
-# `StateStore::flush`, so state.json is on disk before the process goes.
+# it gathers this window's tabs, commits the window state and blocks on
+# `AppStateStore::flush`, so wolf.sqlite holds it before the process goes.
 wtype -- ":qa"
 wtype -k Return
 
@@ -216,7 +217,7 @@ if [ "$rc" -ne 0 ]; then
     echo "  It went away, but NOT cleanly. That implicates the close path:" >&2
     echo "  Coordinator::on_window_closing either panicked, or it holds a core.borrow()" >&2
     echo "  across wire_close's core.borrow_mut().take() (a RefCell double-borrow), or" >&2
-    echo "  StateStore::flush blocked past its timeout." >&2
+    echo "  AppStateStore::flush blocked past its timeout." >&2
     exit 13
 fi
 app_pid=
@@ -285,15 +286,15 @@ const SOLO_READBACK_EXPECTED: &str = "szulu.md";
 /// ONE `cage`. Structurally [`RESTORE_LAYOUT_SCENARIO`] with the split chords
 /// removed — that absence IS the subject.
 ///
-/// Between the two runs it copies the state file run 1 wrote to
+/// Between the two runs it copies the state database run 1 wrote into
 /// `$SOLO_STATE_COPY`, so the Rust side can assert on RUN 1'S SAVE rather than on
 /// whatever run 2 later wrote over it. That separation is what keeps the two
-/// red-run reverts distinguishable: with the SAVE-side arity guard reintroduced
-/// the copy carries `layout: null`, while with the RESTORE-side arity guard
-/// reintroduced the copy is correct and only the readback and the OCR go red.
+/// red-run reverts distinguishable: with a SAVE-side arity guard the copy carries
+/// `root: null`, while with a RESTORE-side arity guard the copy is correct and only
+/// the readback and the OCR go red.
 ///
 /// See the exit-code table above [`RELAUNCH_RESTORE_SETTLE`]; this scenario adds
-/// `16` for "run 1 wrote no state.json at all".
+/// `16` for "run 1 wrote no wolf.sqlite at all".
 const RESTORE_SOLO_SCENARIO: &str = r#"
 set -eu
 
@@ -333,8 +334,8 @@ wait_file() {
 app_pid=$!
 wait_ready "$app_pid" 11 "wolf-gnome single-pane smoke"
 
-# The whole point: a single unsplit pane holding a single file. Under the old
-# ARITY guard this shape persisted its cwd and NOTHING else.
+# The whole point: a single unsplit pane holding a single file. Under an ARITY
+# guard this shape persists its directory and NOTHING else.
 wtype -- ":e $SOLO_FILE"
 wtype -k Return
 sleep "$SETTLE"
@@ -369,17 +370,16 @@ app_pid=
 
 # --- Freeze RUN 1'S SAVE before run 2 can write over it --------------------
 #
-# Run 2 re-snapshots on every render wake, so by the time the Rust side could read
-# the live file it would hold RUN 2's tree. Copying here is what lets the two
-# red-run reverts produce DISTINGUISHABLE failures.
-if [ ! -s "$SOLO_STATE_SRC" ]; then
-    echo "wolf-gnome single-pane smoke: run 1 wrote no state.json at $SOLO_STATE_SRC." >&2
+# Run 2 re-submits on every render wake, so by the time the Rust side could read
+# the live database it would hold RUN 2's window state. Copying here is what lets
+# the two red-run reverts produce DISTINGUISHABLE failures.
+if ! freeze_state "$SOLO_STATE_SRC" "$SOLO_STATE_COPY"; then
+    echo "wolf-gnome single-pane smoke: run 1 wrote no wolf.sqlite in $SOLO_STATE_SRC." >&2
     echo "  Nothing at all was persisted, so this is not the arity guard: suspect" >&2
-    echo "  open_state_store() resolving no directory, Coordinator::on_window_closing" >&2
-    echo "  never running, or WOLF_STATE_DIR not reaching the app." >&2
+    echo "  open_state_store() resolving no directory, or WOLF_STATE_DIR not reaching" >&2
+    echo "  the app." >&2
     exit 16
 fi
-cp "$SOLO_STATE_SRC" "$SOLO_STATE_COPY"
 
 # =========================================================================
 # RUN 2 -- relaunch in the SAME cwd with the SAME state dir, and read back.
@@ -424,7 +424,7 @@ pub(crate) const TABS_RESTORE_FILE_THREE: &str = "tcharlie.md";
 const TABS_RESTORE_HEADING_THREE: &str = "# TABKEEPTHREE";
 
 /// The three fixtures in TAB ORDER — the expectation both the readback and the two
-/// frozen `state.json` files are compared against.
+/// frozen window states are compared against.
 ///
 /// Built from the three consts rather than retyped, so the smoke's expectation cannot
 /// drift from the files it writes.
@@ -441,9 +441,9 @@ pub(crate) const TABS_RESTORE_READBACK_NAME: &str = "tabs_run2.txt";
 /// The two-launch THREE-TAB RELAUNCH scenario, run as one `sh -c` string inside ONE
 /// `cage` and composed with [`with_nvim_pid_helper`]. Structurally
 /// [`RESTORE_SOLO_SCENARIO`] with two `Ctrl+Shift+T` chords and a second frozen state
-/// file.
+/// database.
 ///
-/// **Two files are frozen, and that is what keeps three reds distinguishable.**
+/// **Two databases are frozen, and that is what keeps three reds distinguishable.**
 /// `$TABS_STATE_COPY_1` is run 1's save, taken before run 2 can write over it, so the
 /// SAVE side is asserted on its own; `$TABS_STATE_COPY_2` is run 2's, taken after a
 /// quit in which tabs 1 and 2 were never selected, so what a whole launch-restore-quit
@@ -472,8 +472,8 @@ pub(crate) const TABS_RESTORE_READBACK_NAME: &str = "tabs_run2.txt";
 /// | `16` | run 2 was still alive after `:qa` |
 /// | `17` | run 2 exited NON-ZERO |
 /// | `21` | run 1 did not reach THREE live Neovims, so Ctrl+Shift+T failed and nothing below is about persistence |
-/// | `22` | run 1 wrote no `state.json` at all |
-/// | `23` | run 2 wrote no `state.json` at all |
+/// | `22` | run 1 wrote no `wolf.sqlite` at all |
+/// | `23` | run 2 wrote no `wolf.sqlite` at all |
 /// | `24` | run 2 did not restore THREE live Neovims |
 ///
 /// **A map short of three rows is deliberately not an exit code.** The map is re-read
@@ -558,13 +558,13 @@ wtype -k Return
 sleep "$SETTLE"
 
 # PRECONDITION, before anything is saved: the run really did reach three tabs, one
-# Neovim each. Without this, a one-tab state.json cannot be told apart from a run in
+# Neovim each. Without this, a one-tab window state cannot be told apart from a run in
 # which the chord never opened a tab.
 wait_nvim_count 3 21 "after two Ctrl+Shift+T chords in run 1"
 
-# Quit. `Coordinator::on_window_closing` gathers this window's subtree -- once per
-# TAB, each from its own Neovim -- commits the tree and blocks on `StateStore::flush`,
-# so state.json is on disk before the process goes.
+# Quit. `Coordinator::on_window_closing` gathers this window -- once per TAB, each
+# from its own Neovim -- commits the window state and blocks on
+# `AppStateStore::flush`, so wolf.sqlite holds it before the process goes.
 wtype -- ":qa"
 wtype -k Return
 
@@ -588,20 +588,19 @@ if [ "$rc" -ne 0 ]; then
     echo "wolf-gnome three-tab smoke: run 1 (pid $app_pid) exited $rc, not 0." >&2
     echo "  It went away, but NOT cleanly. Three tabs close in sequence here, each shutting" >&2
     echo "  its own Neovim down, so a borrow discipline that held at one tab is the first" >&2
-    echo "  suspect: the close path gathers every tab's subtree while its core is alive." >&2
+    echo "  suspect: the close path gathers every tab while its core is alive." >&2
     exit 13
 fi
 app_pid=
 
 # --- Freeze RUN 1'S SAVE before run 2 can write over it --------------------
-if [ ! -s "$TABS_STATE_SRC" ]; then
-    echo "wolf-gnome three-tab smoke: run 1 wrote no state.json at $TABS_STATE_SRC." >&2
+if ! freeze_state "$TABS_STATE_SRC" "$TABS_STATE_COPY_1"; then
+    echo "wolf-gnome three-tab smoke: run 1 wrote no wolf.sqlite in $TABS_STATE_SRC." >&2
     echo "  Nothing at all was persisted, so this is not the tab gather: suspect" >&2
-    echo "  open_state_store() resolving no directory, Coordinator::on_window_closing never" >&2
-    echo "  running, or WOLF_STATE_DIR not reaching the app." >&2
+    echo "  open_state_store() resolving no directory, or WOLF_STATE_DIR not reaching" >&2
+    echo "  the app." >&2
     exit 22
 fi
-cp "$TABS_STATE_SRC" "$TABS_STATE_COPY_1"
 
 # =========================================================================
 # RUN 2 -- relaunch in the SAME cwd with the SAME state dir, read the process
@@ -661,13 +660,12 @@ if [ "$rc" -ne 0 ]; then
 fi
 app_pid=
 
-if [ ! -s "$TABS_STATE_SRC" ]; then
-    echo "wolf-gnome three-tab smoke: run 2 wrote no state.json at $TABS_STATE_SRC." >&2
-    echo "  Run 1's copy is already frozen, so the save side is provable without this file --" >&2
+if ! freeze_state "$TABS_STATE_SRC" "$TABS_STATE_COPY_2"; then
+    echo "wolf-gnome three-tab smoke: run 2 left no wolf.sqlite in $TABS_STATE_SRC." >&2
+    echo "  Run 1's copy is already frozen, so the save side is provable without this one --" >&2
     echo "  what is missing is assertion 3's evidence. Suspect the same causes as exit 22." >&2
     exit 23
 fi
-cp "$TABS_STATE_SRC" "$TABS_STATE_COPY_2"
 
 exit 0
 "#;
@@ -803,11 +801,11 @@ pub(crate) const DIVIDER_W2_NAME: &str = "dv_widths_two.txt";
 /// machinery. The cleanup kills the HELPER first, so the app's shutdown is never
 /// racing a pointer event.
 ///
-/// Between the two runs it freezes run 1's `state.json` into `$DIV_STATE_COPY`,
-/// following the [`RESTORE_SOLO_SCENARIO`] precedent: run 2 re-snapshots on every
-/// render wake, so the live file would carry RUN 2's tree by the time the Rust side
-/// could read it — and the save-side and restore-side red runs would then be
-/// indistinguishable.
+/// Between the two runs it freezes run 1's state database into `$DIV_STATE_COPY`,
+/// following the [`RESTORE_SOLO_SCENARIO`] precedent: run 2 re-submits on every
+/// render wake, so the live database would carry RUN 2's window state by the time the
+/// Rust side could read it — and the save-side and restore-side red runs would then
+/// be indistinguishable.
 ///
 /// ## Exit codes
 ///
@@ -824,7 +822,7 @@ pub(crate) const DIVIDER_W2_NAME: &str = "dv_widths_two.txt";
 /// | `15` | the helper died mid-scenario |
 /// | `16` | run 1 was still alive after the `:qa` poll budget |
 /// | `17` | run 1 exited NON-ZERO — it went away, but not cleanly |
-/// | `18` | run 1 wrote no `state.json` at all |
+/// | `18` | run 1 wrote no `wolf.sqlite` at all |
 /// | `19` | run 2's app died before it was ready for input |
 /// | `21` | the bisection seeds did not straddle the divider |
 const DIVIDER_RELAUNCH_SCENARIO: &str = r#"
@@ -1086,8 +1084,8 @@ sleep "$SETTLE"
 read_widths "$DIV_W1"
 
 # Quit the whole application. `Coordinator::on_window_closing` is the FIRST statement
-# in the close-request handler and blocks on `StateStore::flush`, so state.json is on
-# disk before the process goes.
+# in the close-request handler and blocks on `AppStateStore::flush`, so wolf.sqlite
+# holds the window state before the process goes.
 wtype -- ":qa"
 wtype -k Return
 
@@ -1117,14 +1115,13 @@ fi
 app_pid=
 
 # --- Freeze RUN 1'S SAVE before run 2 can write over it --------------------
-if [ ! -s "$DIV_STATE_SRC" ]; then
-    echo "wolf-gnome divider relaunch smoke: run 1 wrote no state.json at $DIV_STATE_SRC." >&2
+if ! freeze_state "$DIV_STATE_SRC" "$DIV_STATE_COPY"; then
+    echo "wolf-gnome divider relaunch smoke: run 1 wrote no wolf.sqlite in $DIV_STATE_SRC." >&2
     echo "  Nothing at all was persisted, so this is not the weight write-back: suspect" >&2
-    echo "  open_state_store() resolving no directory, Coordinator::on_window_closing never" >&2
-    echo "  running, or WOLF_STATE_DIR not reaching the app." >&2
+    echo "  open_state_store() resolving no directory, or WOLF_STATE_DIR not reaching" >&2
+    echo "  the app." >&2
     exit 18
 fi
-cp "$DIV_STATE_SRC" "$DIV_STATE_COPY"
 
 # =========================================================================
 # RUN 2 -- relaunch in the SAME cwd with the SAME state dir, and read back.
@@ -1170,52 +1167,32 @@ exit 0
 // Two-window fixtures: under cage no capture can show two windows, so this smoke reads no pixels.
 // See notes/crates/wolf-gnome/tests/smoke_headless/restore.rs.md#two-window-smoke-fixtures
 
-/// The file window A opens, in the temp cwd — the first project's.
-pub(crate) const TWOWIN_FIRST_FILE: &str = "wfirst.md";
+/// Window A's first tab's file, in the temp cwd, the one project every tab of the smoke is in.
+pub(crate) const TWOWIN_A_FIRST_FILE: &str = "wafirst.md";
 
-/// Heading written into [`TWOWIN_FIRST_FILE`]. Nothing reads it: this smoke takes
-/// no capture. It exists so the file is not zero-length and so the pane has
-/// something to draw.
-const TWOWIN_FIRST_HEADING: &str = "# WINALFA";
+/// The left pane of window A's second tab, the tab A has selected at the quit.
+pub(crate) const TWOWIN_A_LEFT_FILE: &str = "waleft.md";
 
-/// The subdirectory of the temp cwd that is window B's SEPARATE project.
-///
-/// It has to be a real directory that is neither the temp cwd (or the two windows
-/// share a project, and their saved `cwd`s can no longer say which session is which)
-/// nor the app's `$HOME` (which `workspace::is_usable_project` refuses, so the restored plan would fall
-/// through to the empty state and carry no layout). A CHILD of the temp cwd
-/// satisfies both by construction; a sibling would be a child of `$HOME` and would
-/// satisfy them too, so the choice is the tidier of two correct ones rather than a
-/// constraint.
-///
-/// Its basename is what the Rust side compares `windows[1].tabs[0].cwd`'s final
-/// component against, and what the scenario's exit-24 pair check keys on — which is
-/// why the fixture guard asserts it differs from [`TEMP_CWD_BASENAME`].
-pub(crate) const TWOWIN_SUBDIR: &str = "wsub";
+/// The right pane of window A's second tab, split off with `<C-w>v` and zoomed. It is
+/// depth-first pane 1, so a saved zoom on the wrong pane, or on pane 0 by default, shows.
+pub(crate) const TWOWIN_A_ZOOMED_FILE: &str = "waright.md";
 
-/// The file window B opens, as a path RELATIVE TO THE TEMP CWD — which is what
-/// [`write_relaunch_fixtures`] joins onto it and what
-/// `RELAUNCH_FIXTURE_NAMES` registers.
-///
-/// It carries the [`TWOWIN_SUBDIR`] prefix for the reason `LINK_SOURCE_FILE`
-/// carries `LINK_FIXTURE_DIR`: registering the PREFIXED path puts the directory
-/// name inside the generic substring loop too, instead of buying this smoke a
-/// directory exemption block of the kind the title and typed-`:cd` smokes carry.
-pub(crate) const TWOWIN_SECOND_FILE: &str = "wsub/wsecond.md";
+/// Window B's first tab's file.
+pub(crate) const TWOWIN_B_FIRST_FILE: &str = "wbfirst.md";
 
-/// The bare filename of [`TWOWIN_SECOND_FILE`] — what the scenario types at `:e`
-/// once window B has `:cd`'d into [`TWOWIN_SUBDIR`], and what the Rust side
-/// compares the saved leaf's file NAME against.
-///
-/// A const rather than a `rsplit` of the path above, because both are handed to the
-/// scenario as environment variables and each is read at a different step;
-/// `restore_fixture_names_cannot_satisfy_their_own_assertions` asserts the two
-/// agree, so they cannot drift into writing the fixture in one place and opening it
-/// in another.
-pub(crate) const TWOWIN_SECOND_NAME: &str = "wsecond.md";
+/// Window B's second tab's file. That tab is B's active one at the quit, so a restore that
+/// selects a window's first tab is told apart from one that selects its saved active tab.
+pub(crate) const TWOWIN_B_ACTIVE_FILE: &str = "wbactive.md";
 
-/// Heading written into [`TWOWIN_SECOND_FILE`]. See [`TWOWIN_FIRST_HEADING`].
-const TWOWIN_SECOND_HEADING: &str = "# WINBRAVO";
+/// Every fixture of the smoke with the heading written into it. Nothing reads a heading:
+/// this smoke takes no capture, and the bodies exist only so each `:e` opens a real file.
+const TWOWIN_FIXTURES: [(&str, &str); 5] = [
+    (TWOWIN_A_FIRST_FILE, "# WINALFA"),
+    (TWOWIN_A_LEFT_FILE, "# WINBRAVO"),
+    (TWOWIN_A_ZOOMED_FILE, "# WINCHARLIE"),
+    (TWOWIN_B_FIRST_FILE, "# WINDELTA"),
+    (TWOWIN_B_ACTIVE_FILE, "# WINECHO"),
+];
 
 /// The query typed into the palette to open the second window.
 ///
@@ -1242,9 +1219,9 @@ pub(crate) const TWOWIN_NEW_WINDOW_QUERY: &str = "new window";
 /// The first line is the smoke's no-inheritance evidence: a window opened by New
 /// Window starts at `$HOME` with no project and must not inherit the invoking
 /// window's directory. The second is what keeps that evidence attributable — window
-/// A has [`TWOWIN_FIRST_FILE`] open and a new window has an unnamed buffer whatever
-/// directory it was given, so a readback naming the first file says the keystrokes
-/// reached the WRONG window and gets an exit code of its own.
+/// A has [`TWOWIN_A_ZOOMED_FILE`] current and a new window has an unnamed buffer
+/// whatever directory it was given, so a readback naming one of A's files says the
+/// keystrokes reached the WRONG window and gets an exit code of its own.
 pub(crate) const TWOWIN_READBACK_B_NAME: &str = "wtwo_bcwd.txt";
 
 /// Name of the file the FOCUSED restored window's Neovim writes after the
@@ -1254,34 +1231,21 @@ pub(crate) const TWOWIN_READBACK_B_NAME: &str = "wtwo_bcwd.txt";
 /// out of a separator a path could contain.
 pub(crate) const TWOWIN_READBACK_R2_NAME: &str = "wtwo_run2.txt";
 
-/// How many lines carrying `"tabs"` the frozen `state.json` must hold — one per
-/// persisted window, because each `WindowState` has exactly one `tabs` key however
-/// many tabs it holds, no other type has a key of that name, and `wolf_core`'s
-/// writer serializes with `serde_json::to_string_pretty`, which puts every key on
-/// its own line.
-///
-/// **This is a guard on the WRITE side that fires BEFORE run 2 launches**, and that
-/// is its whole reason for existing: without it, a build that committed only one
-/// window's subtree would sail past this point and fail later at the restore poll,
-/// where "the tree was written wrong" and "the tree was read wrong" are
-/// indistinguishable. The same masking this binary records for the first
-/// project-search smoke's assertion 6, which every falsifier reaching it reddens 5 first.
-///
-/// The count is over LINES, so it rests on the pretty-printer. If it ever reports
-/// `1` for a tree the Rust side then reads back as two windows, the formatter is
-/// what changed, not the coordinator — the scenario's message says so, and the
-/// authoritative two-window assertion is `load_state` on the frozen copy either
-/// way.
-const TWOWIN_STATE_TABS_LINES: &str = "2";
-
 /// The TWO-WINDOW scenario, run as one `sh -c` string inside ONE `cage`, with
 /// [`with_nvim_pid_helper`] prepended for `find_nvim_pid` / `wait_nvim_count`.
 ///
-/// Structurally [`RESTORE_SOLO_SCENARIO`] — two launches, a poll-and-reap of run 1,
-/// a frozen `state.json` between them — with three differences that are the
+/// Structurally [`RESTORE_TABS_SCENARIO`] — two launches, a poll-and-reap of each,
+/// a frozen state database after each — with three differences that are the
 /// subject: a second window is opened from the palette inside run 1, the quit is
-/// the `Ctrl+Shift+Q` chord rather than `:qa`, and the evidence is `/proc` plus the
-/// file rather than a capture.
+/// the `Ctrl+Shift+Q` chord rather than `:qa`, and the window focused last in run 1
+/// is the one opened second, so the saved stacking order differs from the order the
+/// windows were opened in.
+///
+/// Run 1 builds window A with two tabs, the second split and zoomed, then opens
+/// window B from the palette, `:cd`s B's empty tab into the same project, and gives
+/// B a second tab, which is B's active one when the chord quits. Run 2 launches in
+/// the project, has the focused window write its `getcwd()` and current buffer, and
+/// quits with the chord again.
 ///
 /// ## Ctrl+Shift+Q is not a stylistic choice
 ///
@@ -1298,7 +1262,7 @@ const TWOWIN_STATE_TABS_LINES: &str = "2";
 /// ## Exit codes
 ///
 /// `11`–`16` are the shared state-persistence vocabulary documented above
-/// `RELAUNCH_RESTORE_SETTLE`; `21`–`25` are this scenario's own. This scenario
+/// `RELAUNCH_RESTORE_SETTLE`; the rest are this scenario's own. This scenario
 /// calls none of `FIND_NVIM_PID_HELPER`'s exiting functions — only
 /// `find_nvim_pid`, through `wait_nvim_count`, which never exits on its own — so
 /// that fragment's `16` / `17` / `18` / `20` are unreachable here and `16` means
@@ -1311,13 +1275,16 @@ const TWOWIN_STATE_TABS_LINES: &str = "2";
 /// | `13` | run 1 exited NON-ZERO: it went away, but not cleanly |
 /// | `14` | run 2's app died before it was ready for input |
 /// | `15` | a Neovim readback file never appeared |
-/// | `16` | run 1 wrote no `state.json` at all |
-/// | `21` | run 1 did not have EXACTLY TWO live `nvim` children after the palette activation |
+/// | `16` | run 1 wrote no `wolf.sqlite` at all |
+/// | `21` | run 1 did not have EXACTLY THREE live `nvim` children after the palette activation |
 /// | `22` | the new window INHERITED the invoking window's project directory |
-/// | `23` | run 2 did not have EXACTLY TWO live `nvim` children after the restore |
-/// | `24` | the focused restored window's `getcwd()` and `bufname('%')` are not one of the two saved pairs |
-/// | `25` | run 1's `state.json` does not carry two windows' worth of tabs |
+/// | `23` | run 2 did not have EXACTLY FOUR live `nvim` children after the restore |
 /// | `26` | step 4's readback came from the INVOKING window — a focus failure, not an inheritance |
+/// | `27` | run 1 did not have EXACTLY TWO live `nvim` children after window A's Ctrl+Shift+T |
+/// | `28` | run 1 did not have EXACTLY FOUR live `nvim` children after window B's Ctrl+Shift+T |
+/// | `29` | run 2 was still alive after `Ctrl+Shift+Q` |
+/// | `30` | run 2 exited NON-ZERO |
+/// | `31` | run 2 left no `wolf.sqlite` |
 const TWOWIN_SCENARIO: &str = r#"
 set -eu
 
@@ -1327,6 +1294,10 @@ WAIT_INTERVAL=0.2
 SETTLE=1.0
 QUIT_TRIES=75
 FILE_TRIES=100
+
+# How long to wait after each Ctrl+Shift+T: the three-tab smoke's TABS_BAR_SETTLE, for
+# its reason. A timing knob only: every observable below is polled for.
+TABS_BAR_SETTLE=2.0
 
 cleanup() {
     set +e
@@ -1351,17 +1322,75 @@ wait_file() {
     return 1
 }
 
+nvim_ex() {
+    wtype -- ":$1"
+    wtype -k Return
+    sleep "$SETTLE"
+}
+
+# Quits the APPLICATION with Ctrl+Shift+Q, polls (never sleep-and-hope) for it to go,
+# then REAPS it and checks its EXIT STATUS: a process that vanished because the GTK
+# main loop panicked is just as gone as one that shut down cleanly. $1 is the exit
+# code for "still alive", $2 for "exited non-zero", $3 the run's label.
+quit_app() {
+    wtype -M ctrl -M shift -k q -m shift -m ctrl
+    tries=0
+    gone=0
+    while [ "$tries" -lt "$QUIT_TRIES" ]; do
+        if ! kill -0 "$app_pid" 2>/dev/null; then
+            gone=1
+            break
+        fi
+        tries=$((tries + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    if [ "$gone" -ne 1 ]; then
+        echo "wolf-gnome two-window smoke: $3 (pid $app_pid) is still alive after Ctrl+Shift+Q." >&2
+        echo "  That chord is the ONLY app.quit exercise in this suite. The first thing to check" >&2
+        echo "  is whether the action exists at all: Coordinator::install_app_actions installs the" >&2
+        echo "  two app.-namespace rows exactly once per process, and with no app.quit installed" >&2
+        echo "  the chord controller finds the action disabled, declines the key, and Neovim gets" >&2
+        echo "  a plain <C-Q> -- which does nothing and leaves the app running." >&2
+        echo "  The other candidates: Coordinator::quit not closing every window the APPLICATION" >&2
+        echo "  holds, or a window's close-request handler refusing." >&2
+        exit "$1"
+    fi
+    # `set -e` would abort before the status could be reported, so collect it through
+    # `||` (which is exempt from `set -e`).
+    rc=0
+    wait "$app_pid" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo "wolf-gnome two-window smoke: $3 (pid $app_pid) exited $rc, not 0." >&2
+        echo "  It went away, but NOT cleanly. Suspect a panic in Coordinator::quit or" >&2
+        echo "  Coordinator::on_window_closing (which gather, commit and block on the flush" >&2
+        echo "  first), a core.borrow() held across window::wire_close's" >&2
+        echo "  core.borrow_mut().take(), or AppStateStore::flush blocking past its timeout." >&2
+        echo "  With TWO windows and four tabs closing in sequence, a borrow discipline that" >&2
+        echo "  held at one is exactly what would first fail here." >&2
+        exit "$2"
+    fi
+    app_pid=
+}
+
 # =========================================================================
-# RUN 1 -- window A on the project, window B on the subproject, one quit.
+# RUN 1 -- window A with two tabs, then window B with two tabs, one quit.
 # =========================================================================
 "$WOLF_BIN" &
 app_pid=$!
 wait_ready "$app_pid" 11 "wolf-gnome two-window smoke"
 
-# Window A opens the first project's file, so it has a named leaf to persist.
-wtype -- ":e $TWOWIN_FIRST_FILE"
-wtype -k Return
+# --- Step 1: window A -- a lone file, then a split tab zoomed on its right pane
+nvim_ex "e $TWOWIN_A_FIRST_FILE"
+wtype -M ctrl -M shift -k t -m shift -m ctrl
+sleep "$TABS_BAR_SETTLE"
+nvim_ex "e $TWOWIN_A_LEFT_FILE"
+# VERTICAL split: the new pane opens to the RIGHT and takes focus.
+wtype -M ctrl -k w -m ctrl
+wtype -k v
 sleep "$SETTLE"
+nvim_ex "e $TWOWIN_A_ZOOMED_FILE"
+nvim_ex "WolfZoomPane"
+wait_nvim_count 2 27 "after Ctrl+Shift+T in window A"
 
 # --- Step 2: open the SECOND window, from inside THIS process ---------------
 #
@@ -1378,10 +1407,11 @@ sleep "$SETTLE"
 wtype -k Return
 sleep "$SETTLE"
 
-# --- Step 3: TWO windows means TWO Neovims -----------------------------------
+# --- Step 3: a second window means a third Neovim ----------------------------
 #
-# The load-bearing observable of the whole smoke, and the one no capture can take.
-wait_nvim_count 2 21 "after the palette activated New Window"
+# Window A's two tabs run two; window B's one tab runs the third. No capture could
+# take this observable.
+wait_nvim_count 3 21 "after the palette activated New Window"
 
 # The count is right as soon as the process exists, which is before its core has
 # bound a pane, so settle before typing an Ex command at it.
@@ -1398,19 +1428,11 @@ sleep "$RESTORE_SETTLE"
 #
 # It reads bufname('%') as well as getcwd(), and that second value is not
 # decoration: it is what separates "the new window inherited a project" from "these
-# keystrokes never reached the new window at all". Window A has TWOWIN_FIRST_FILE
-# open; a window opened by New Window has an unnamed buffer whatever cwd it was
-# given -- under the inherit defect its plan is a Folder with NO layout, so it
-# still answers an Untitled buffer, whatever the ordinal. MEASURED under that
-# defect: Untitled 2.md, not Untitled.md. The ordinal is not fixed -- the name
-# numbers up from the first free one and the collision check consults the cwd's
-# own files and swaps (UNSAVED_BUFFER_NAME documents the rule) -- and nothing
-# here keys off it, because the comparison below is against TWOWIN_FIRST_FILE
-# alone.
-#
-# So a readback naming the first file can only have come from window A, and it
-# gets its own exit code rather than being reported as an inheritance that did
-# not happen.
+# keystrokes never reached the new window at all". Window A has its zoomed file
+# current; a window opened by New Window has an unnamed buffer whatever cwd it was
+# given, whatever its ordinal. So a readback naming one of A's files can only have
+# come from window A, and it gets its own exit code rather than being reported as
+# an inheritance that did not happen.
 rm -f "$TWOWIN_B_CWD"
 wtype -- ":call writefile([getcwd(), fnamemodify(bufname('%'), ':t')], '$TWOWIN_B_CWD')"
 wtype -k Return
@@ -1420,20 +1442,21 @@ b_buf=$(sed -n 2p "$TWOWIN_B_CWD")
 echo "wolf-gnome two-window smoke: the focused NEW window reports getcwd() = $b_cwd" >&2
 echo "  and bufname('%') = $b_buf" >&2
 
-if [ "$b_buf" = "$TWOWIN_FIRST_FILE" ]; then
-    echo "wolf-gnome two-window smoke: the step-4 readback names $TWOWIN_FIRST_FILE, which only" >&2
-    echo "  the INVOKING window has open -- so these keystrokes reached window A, not the new" >&2
-    echo "  window, and nothing below would be about the new window at all." >&2
-    echo "  This is a FOCUS failure rather than a coordinator one. Two windows exist (the child" >&2
-    echo "  count above already passed), so check whether the second toplevel mapped and took" >&2
-    echo "  keyboard focus: cage shows one toplevel at a time and keeps the NEWEST on top, so" >&2
-    echo "  the newest is what wtype drives. A window whose core started but whose widget never" >&2
-    echo "  presented would leave focus where it was." >&2
-    echo "  If this is intermittent, the settle after the child-count poll is the knob -- the" >&2
-    echo "  count is satisfied as soon as the nvim process exists, which is earlier than the" >&2
-    echo "  window being ready for input." >&2
-    exit 26
-fi
+case "$b_buf" in
+    "$TWOWIN_A_FIRST_FILE" | "$TWOWIN_A_LEFT_FILE" | "$TWOWIN_A_ZOOMED_FILE")
+        echo "wolf-gnome two-window smoke: the step-4 readback names $b_buf, which only the" >&2
+        echo "  INVOKING window has open -- so these keystrokes reached window A, not the new" >&2
+        echo "  window, and nothing below would be about the new window at all." >&2
+        echo "  This is a FOCUS failure rather than a coordinator one. Three Neovims exist (the" >&2
+        echo "  child count above already passed), so check whether the second toplevel mapped" >&2
+        echo "  and took keyboard focus: cage shows one toplevel at a time and keeps the NEWEST" >&2
+        echo "  on top, so the newest is what wtype drives." >&2
+        echo "  If this is intermittent, the settle after the child-count poll is the knob -- the" >&2
+        echo "  count is satisfied as soon as the nvim process exists, which is earlier than the" >&2
+        echo "  window being ready for input." >&2
+        exit 26
+        ;;
+esac
 
 # The cwd comparison is on the final path component, deliberately. /tmp may resolve
 # through a symlink on this host, so nvim's getcwd() need not be string-equal to the
@@ -1452,166 +1475,64 @@ if [ "${b_cwd##*/}" = "$TWOWIN_PROJECT_BASE" ]; then
     exit 22
 fi
 
-# --- Step 5: give window B a project of its OWN ------------------------------
+# --- Step 5: window B joins the project, and gets a second tab ---------------
 #
-# A typed `:cd` re-roots the whole window on Neovim's own working directory -- the
-# path typed_cd_reroots_the_sidebar_under_cage drives end to end -- and the re-root
-# is also what flips this window out of the empty state, which is what makes it
-# persist a cwd at all (snapshot_cwd returns "" for an empty-state window however
-# far its nvim has wandered). ABSOLUTE, because B's cwd is $HOME at this point and a
-# relative path would resolve against the wrong root.
-wtype -- ":cd $TWOWIN_SUBDIR_ABS"
-wtype -k Return
-sleep "$SETTLE"
-wtype -- ":e $TWOWIN_SECOND_NAME"
-wtype -k Return
-sleep "$SETTLE"
+# A typed `:cd` moves the empty tab's Neovim, which takes that tab -- and only that
+# tab -- out of the empty state, so it saves a directory and a root. ABSOLUTE,
+# because B's cwd is $HOME at this point. The new tab inherits the selected tab's
+# directory, so both of B's tabs are in the project too, and B's second tab is the
+# one selected when the chord quits: the last keys of run 1 go to window B.
+nvim_ex "cd $TWOWIN_PROJECT_ABS"
+nvim_ex "e $TWOWIN_B_FIRST_FILE"
+wtype -M ctrl -M shift -k t -m shift -m ctrl
+sleep "$TABS_BAR_SETTLE"
+nvim_ex "e $TWOWIN_B_ACTIVE_FILE"
+wait_nvim_count 4 28 "after Ctrl+Shift+T in window B"
 
 # --- Step 6: quit the APPLICATION with Ctrl+Shift+Q --------------------------
 #
 # The only exercise `app.quit` gets in this binary. Coordinator::quit latches
-# shutting_down, refreshes EVERY window's subtree while every core and every pane is
-# still alive, commits the tree, blocks on the flush, and only then closes the
-# windows -- so state.json holds both sessions before the process goes.
-wtype -M ctrl -M shift -k q -m shift -m ctrl
+# shutting_down, refreshes EVERY window's tabs while every core and every pane is
+# still alive, commits the window state, blocks on the flush, and only then closes
+# the windows -- so wolf.sqlite holds both windows before the process goes.
+quit_app 12 13 "run 1"
 
-# POLL (never sleep-and-hope) for run 1 to go away, then REAP it and check its EXIT
-# STATUS. A process that vanished because the GTK main loop panicked is just as gone
-# as one that shut down cleanly, so the status is a separate code.
-tries=0
-gone=0
-while [ "$tries" -lt "$QUIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        gone=1
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-if [ "$gone" -ne 1 ]; then
-    echo "wolf-gnome two-window smoke: run 1 (pid $app_pid) is still alive after Ctrl+Shift+Q." >&2
-    echo "  That chord is the ONLY app.quit exercise in this suite. The first thing to check" >&2
-    echo "  is whether the action exists at all: Coordinator::install_app_actions installs the" >&2
-    echo "  two app.-namespace rows exactly once per process, and with no app.quit installed" >&2
-    echo "  the chord controller finds the action disabled, declines the key, and Neovim gets" >&2
-    echo "  a plain <C-Q> -- which does nothing and leaves the app running." >&2
-    echo "  The other candidates: Coordinator::quit not closing every window the APPLICATION" >&2
-    echo "  holds, or a window's close-request handler refusing." >&2
-    exit 12
-fi
-# `set -e` would abort before the status could be reported, so collect it through
-# `||` (which is exempt from `set -e`).
-rc=0
-wait "$app_pid" || rc=$?
-if [ "$rc" -ne 0 ]; then
-    echo "wolf-gnome two-window smoke: run 1 (pid $app_pid) exited $rc, not 0." >&2
-    echo "  It went away, but NOT cleanly. Suspect a panic in Coordinator::on_window_closing" >&2
-    echo "  (which gathers, commits and blocks on the flush as the FIRST statement of the" >&2
-    echo "  close handler), a core.borrow() held across window::wire_close's" >&2
-    echo "  core.borrow_mut().take(), or a StateStore::flush blocking past its timeout." >&2
-    echo "  With TWO windows closing in sequence, a borrow discipline that held at N=1 is" >&2
-    echo "  exactly what would first fail here." >&2
-    exit 13
-fi
-app_pid=
-
-# --- Step 7: the WRITE side, checked BEFORE run 2 can mask it ----------------
-if [ ! -s "$TWOWIN_STATE_SRC" ]; then
-    echo "wolf-gnome two-window smoke: run 1 wrote no state.json at $TWOWIN_STATE_SRC." >&2
+# --- Step 7: freeze run 1's save before run 2 can write over it --------------
+if ! freeze_state "$TWOWIN_STATE_SRC" "$TWOWIN_STATE_COPY"; then
+    echo "wolf-gnome two-window smoke: run 1 wrote no wolf.sqlite in $TWOWIN_STATE_SRC." >&2
     echo "  Nothing at all was persisted, so this is upstream of anything about windows:" >&2
-    echo "  suspect open_state_store() resolving no directory, Coordinator::quit's commit or" >&2
-    echo "  flush never running, or WOLF_STATE_DIR not reaching the app." >&2
+    echo "  suspect open_state_store() resolving no directory, or WOLF_STATE_DIR not" >&2
+    echo "  reaching the app." >&2
     exit 16
 fi
-# `|| true` because grep exits 1 when it counts zero, which under `set -e` would
-# abort the scenario with a status outside this table -- the same trap
-# assert_one_restart_attempt documents for `grep -c` on an empty file.
-tabs_lines=$(grep -c '"tabs"' "$TWOWIN_STATE_SRC" || true)
-if [ "$tabs_lines" -ne "$TWOWIN_STATE_TABS_LINES" ]; then
-    echo "wolf-gnome two-window smoke: run 1's state.json carries $tabs_lines line(s)" >&2
-    echo "  matching '\"tabs\"', not $TWOWIN_STATE_TABS_LINES -- one per persisted window." >&2
-    echo "  ONE means the WRITE side lost a window: Coordinator::assemble walks every live" >&2
-    echo "  window's cached subtree, so a truncation there (or a window that contributed" >&2
-    echo "  nothing) commits a one-window tree over a two-window session." >&2
-    echo "  ZERO means the file holds no window at all -- state_seam::snapshot_state answers" >&2
-    echo "  None for an empty contribution set and the coordinator then commits nothing, so" >&2
-    echo "  a zero here is a file left over from before that, not a fresh empty commit." >&2
-    echo "  This guard exists to fire BEFORE run 2 launches: without it a write-side defect" >&2
-    echo "  surfaces as a restore failure and the two become indistinguishable." >&2
-    echo "  One more cause worth ruling out, because it is not about windows at all: the" >&2
-    echo "  count is over LINES and wolf-core serializes with serde_json::to_string_pretty," >&2
-    echo "  so a switch to compact JSON would report 1 for a perfectly good two-window tree." >&2
-    echo "  The Rust side's load_state assertion is the authority either way." >&2
-    exit 25
-fi
-
-# --- Step 8: freeze run 1's save before run 2 can write over it --------------
-#
-# Run 2 re-snapshots on every render wake, so by the time the Rust side could read
-# the live file it would hold RUN 2's tree.
-cp "$TWOWIN_STATE_SRC" "$TWOWIN_STATE_COPY"
 
 # =========================================================================
-# RUN 2 -- relaunch in the SAME cwd with the SAME state dir, and read back.
+# RUN 2 -- relaunch in the SAME cwd with the SAME state dir, read back, quit.
 # =========================================================================
 "$WOLF_BIN" &
 app_pid=$!
 wait_ready "$app_pid" 14 "wolf-gnome two-window smoke"
 
-# --- Step 9: BOTH windows came back, each with its own core ------------------
-wait_nvim_count 2 23 "after the relaunch restored the saved session"
+# --- Step 8: BOTH windows came back, every tab with its own core -------------
+wait_nvim_count 4 23 "after the relaunch restored the saved session"
 
-# --- Step 10: the focused restored window holds a COHERENT session -----------
+# --- Step 9: what the FOCUSED restored window shows --------------------------
 #
 # Only one window can be typed at (cage shows one toplevel and nothing can raise
-# another), so this reads whichever window is focused and asserts the PAIR is one of
-# the two that were saved: the project directory with the first file, or the
-# subdirectory with the second. That is deliberately not a claim about WHICH window
-# has focus -- it needs no such measurement -- while still discriminating the two
-# failures that matter: `Untitled.md` (the layout was never rebuilt) matches neither
-# pair, and a window sitting in one project while showing the OTHER project's file
-# is the crossed restore that a plan-per-window mix-up produces.
+# another), and the restore maps the saved frontmost window last, so this reads the
+# window the restore put in front. The Rust side says which window and tab that is.
 rm -f "$TWOWIN_R2_READBACK"
 wtype -- ":call writefile([getcwd(), fnamemodify(bufname('%'), ':t')], '$TWOWIN_R2_READBACK')"
 wtype -k Return
 wait_file "$TWOWIN_R2_READBACK" || exit 15
-r2_cwd=$(sed -n 1p "$TWOWIN_R2_READBACK")
-r2_buf=$(sed -n 2p "$TWOWIN_R2_READBACK")
-echo "wolf-gnome two-window smoke: the focused RESTORED window reports getcwd() = $r2_cwd" >&2
-echo "  and bufname('%') = $r2_buf" >&2
 
-case "${r2_cwd##*/}" in
-    "$TWOWIN_PROJECT_BASE")
-        want_buf=$TWOWIN_FIRST_FILE
-        ;;
-    "$TWOWIN_SUBDIR_BASE")
-        want_buf=$TWOWIN_SECOND_NAME
-        ;;
-    *)
-        echo "wolf-gnome two-window smoke: the focused restored window is rooted at $r2_cwd," >&2
-        echo "  whose final component is neither $TWOWIN_PROJECT_BASE nor $TWOWIN_SUBDIR_BASE." >&2
-        echo "  Both saved windows named one of those, so this window was restored at neither" >&2
-        echo "  of the saved working directories: state_seam::restore_plans offered a plan the" >&2
-        echo "  saved tree does not contain. A home-directory answer means the plan fell" >&2
-        echo "  through to the empty state, i.e. the saved cwd was rejected as unusable." >&2
-        exit 24
-        ;;
-esac
-if [ "$r2_buf" != "$want_buf" ]; then
-    echo "wolf-gnome two-window smoke: the focused restored window is rooted at $r2_cwd but" >&2
-    echo "  shows $r2_buf, where the session saved for that directory holds $want_buf." >&2
-    echo "  Untitled.md means the saved layout was never rebuilt for this window: a tab's" >&2
-    echo "  open buffer paths ride ONLY inside TabState::layout's leaves, so a plan whose" >&2
-    echo "  layout was dropped restores the directory and nothing else. The Rust side's" >&2
-    echo "  assertions on the FROZEN copy say whether the layout was saved, which is what" >&2
-    echo "  separates a write-side loss from a restore-side one." >&2
-    echo "  The OTHER project's file here means the plans were CROSSED: each restored window" >&2
-    echo "  was handed the other's layout, which is what offering the process cwd to every" >&2
-    echo "  index produces." >&2
-    exit 24
+# --- Step 10: quit again, and freeze run 2's save ----------------------------
+quit_app 29 30 "run 2"
+if ! freeze_state "$TWOWIN_STATE_SRC" "$TWOWIN_STATE_COPY_2"; then
+    echo "wolf-gnome two-window smoke: run 2 left no wolf.sqlite in $TWOWIN_STATE_SRC." >&2
+    exit 31
 fi
 
-# The trap tears run 2 down on the way out.
 exit 0
 "#;
 
@@ -1720,7 +1641,7 @@ fn pane_width_for(panes: &[(String, i64)], name: &str, path: &Path, smoke: &str)
 ///
 /// `None` is a first-class answer, not an error: on a machine that has never run
 /// Wolf interactively — which includes CI and this host —
-/// `~/.local/state/wolf/state.json` simply does not exist, and "absent before,
+/// `~/.local/state/wolf/wolf.sqlite` simply does not exist, and "absent before,
 /// absent after" is exactly as strong an isolation proof as "unchanged". Taking
 /// `metadata().unwrap()` for the BEFORE snapshot would panic there instead.
 fn state_file_fingerprint(path: &Path) -> Option<(u64, Option<SystemTime>)> {
@@ -1729,7 +1650,7 @@ fn state_file_fingerprint(path: &Path) -> Option<(u64, Option<SystemTime>)> {
 }
 
 /// Proves the tab's PANE-SPLIT TREE survives a quit and relaunch: three panes in an
-/// asymmetric layout, each holding its own file, rebuilt from `state.json`.
+/// asymmetric layout, each holding its own file, rebuilt from the saved window state.
 ///
 /// Two app launches run inside ONE `cage` instance (see [`RESTORE_LAYOUT_SCENARIO`]
 /// and the shared exit-code table above [`RELAUNCH_RESTORE_SETTLE`]), so the smoke
@@ -1775,7 +1696,7 @@ fn state_file_fingerprint(path: &Path) -> Option<(u64, Option<SystemTime>)> {
 ///
 /// | assertion | revert | expected red symptom | measured |
 /// | --- | --- | --- | --- |
-/// | both | in `window.rs`'s `build`, delete `if let Some(layout) = plan.layout.clone() { panes.request_layout_rebuild(layout); }` — or, equivalently, make `pane_view::consume_pending_layout` `return false;` as its first statement | the readback reads `Untitled.md` instead of the three names, and the OCR carries none of `restorealfa` / `restorebravo` / `restorecharlie` | **AS PREDICTED.** Assertion 1 panicked first: `assertion 'left == right' failed … left: "Untitled.md" right: "rleft.md rmid.md rright.md"`. Because it fires first the OCR assertion is never reached, so the OCR half was confirmed out of band by running `tesseract --psm 11` over the retained PNG: zero hits for each of `restorealfa`, `restorebravo` and `restorecharlie`. Restoring the line returned the smoke to `1 passed`. |
+/// | both | in `tab_view.rs`'s `open_tab`, delete the `panes.request_layout_rebuild(restored)` call — or, equivalently, make `pane_view::consume_pending_layout` `return false;` as its first statement | the readback reads `Untitled.md` instead of the three names, and the OCR carries none of `restorealfa` / `restorebravo` / `restorecharlie` | Not re-measured since the app-state switch. |
 #[test]
 fn pane_layout_survives_relaunch_under_cage() {
     const SMOKE: &str = "pane_layout_survives_relaunch_under_cage";
@@ -1804,7 +1725,7 @@ fn pane_layout_survives_relaunch_under_cage() {
     let out_png = runtime_dir.join("wolf_gnome_restore_layout_smoke.png");
     clear_evidence(&out_png, SMOKE);
 
-    // The state dir makes both runs share one `state.json` and keeps them out of the developer's.
+    // The state dir makes both runs share one `wolf.sqlite` and keeps them out of the developer's.
     let status = cage_command(RESTORE_LAYOUT_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
@@ -1841,7 +1762,7 @@ fn pane_layout_survives_relaunch_under_cage() {
          count, the buffer identities and their order. Read it this way: `Untitled.md` alone means \
          NOTHING was restored (the saved layout was never queued, or `consume_pending_layout` \
          never fired); the three right names in the WRONG ORDER means the DFS zip is inverted \
-         somewhere between `rebuild_layout_spec`, `wolf_rebuild_layout` and `pane_layout::decode`; \
+         somewhere between `tab_rebuild_spec`, `wolf_rebuild_layout` and `pane_layout::decode`; \
          and fewer than three names means the rebuild ran but produced the wrong topology. PNG \
          kept at {}.",
         out_png.display()
@@ -1877,39 +1798,38 @@ fn pane_layout_survives_relaunch_under_cage() {
 ///
 /// This is the GTK-side regression guard for the macOS bug fixed by
 /// `fix/state-persistence-single-pane-bug`. A tab's open buffer paths have NO
-/// persistence channel of their own: they ride ONLY inside `TabState::layout`'s
-/// leaves. The macOS save side suppressed the layout by ARITY
-/// (`guard tree.leaves().count > 1 else { return nil }`), so this exact shape
-/// persisted its cwd and `sidebar_visible` and nothing else, and the file was not
-/// reopened. The fix — on both sides — is a CONTENT predicate: suppress ONLY an
-/// unnamed, non-preview lone leaf, and rebuild ANY saved layout with no arity guard
-/// at all.
+/// persistence channel of their own: they ride ONLY inside the saved tab's `root`.
+/// A save side that suppresses the tree by ARITY makes this exact shape persist its
+/// directory and sidebar and nothing else, and the file is not reopened. The rule
+/// on both sides is that a folder tab always writes its root, a lone pane included,
+/// and restore rebuilds ANY saved root but a lone empty edit pane, with no arity
+/// guard at all.
 ///
 /// ## What it asserts
 ///
 /// 1. **The regression assertion, and it is on the FILE not on pixels.** The
-///    `state.json` RUN 1 wrote (frozen by the scenario into `$SOLO_STATE_COPY`
+///    window state RUN 1 wrote (frozen by the scenario into `$SOLO_STATE_COPY`
 ///    before run 2 can write over it) carries
-///    `windows[0].tabs[0].layout == Some(Leaf { path, preview: false })` where
-///    `path` is non-empty and its file NAME is exactly `szulu.md`. The name rather
-///    than the whole path, deliberately: `/tmp` (or `TMPDIR`) may resolve through a
-///    symlink on this host, so nvim's reported `abs_path` need not be string-equal
-///    to any `PathBuf` this test could build — but an arity guard yields
-///    `layout: null`, which this catches perfectly, and an empty-path leaf cannot
-///    satisfy it either. No pixel can distinguish "the layout was saved and
-///    restored" from "the layout was never saved but the file came back another
-///    way", which is why this assertion exists at all.
+///    `windows[0].tabs[0].root == Some(Pane::Edit { path, .. })` where `path` is
+///    non-empty and its file NAME is exactly `szulu.md`. The name rather than the
+///    whole path, deliberately: `/tmp` (or `TMPDIR`) may resolve through a symlink
+///    on this host, so nvim's reported `abs_path` need not be string-equal to any
+///    `PathBuf` this test could build — but an arity guard yields `root: null`,
+///    which this catches perfectly, and an empty-path pane cannot satisfy it either.
+///    No pixel can distinguish "the layout was saved and restored" from "the layout
+///    was never saved but the file came back another way", which is why this
+///    assertion exists at all.
 /// 2. **Load-bearing, and exact:** the restored Neovim's `bufname('%')` tail is
 ///    exactly `szulu.md`.
 /// 3. **Corroboration:** OCR contains `solozulu` and does NOT contain `soloalfa`.
 /// 4. **State-dir isolation**, in four parts: this TEST process has no
 ///    `WOLF_STATE_DIR` of its own (without which the whole check would be
-///    self-referential); the smoke's own state dir holds a non-empty `state.json`,
+///    self-referential); the smoke's own state dir holds a non-empty `wolf.sqlite`,
 ///    proving the app honoured the variable; NEITHER `$HOME`-derived fallback
 ///    directory ([`HOME_STATE_DIR_FALLBACKS`], under the temp `$HOME`
-///    [`cage_command`] gives the app) holds a `state.json`, which is the positive
+///    [`cage_command`] gives the app) holds a `wolf.sqlite`, which is the positive
 ///    proof that `state_dir()` resolved the variable rather than `$HOME`; and the
-///    developer's REAL `state.json` is byte-identical across the run — including
+///    developer's REAL `wolf.sqlite` is unchanged across the run — including
 ///    the normal case where it does not exist at all, which must still not exist
 ///    afterwards. The last two are complementary, not redundant: a leak lands
 ///    inside the temp tree when `$XDG_STATE_HOME` is unset and outside it when it
@@ -1936,19 +1856,19 @@ fn pane_layout_survives_relaunch_under_cage() {
 /// first, never opened) kills the other plausible hypothesis: if the app were
 /// reopening "the first file it found", the readback would be `salfa.md` and the
 /// OCR would carry `soloalfa` — both of which the assertions catch. And assertion 1
-/// cannot be satisfied by anything except the save path writing a single-leaf
-/// layout.
+/// cannot be satisfied by anything except the save path writing a lone pane as the
+/// tab's root.
 ///
 /// ## Red-run reverts (TWO, both one-liners, and BOTH must be run)
 ///
 /// They isolate the two halves of the original bug and must produce
 /// DISTINGUISHABLE failures — which is exactly what makes assertion 1 worth having,
-/// and why the scenario freezes run 1's `state.json` before run 2 can overwrite it.
+/// and why the scenario freezes run 1's database before run 2 can overwrite it.
 ///
 /// | half | revert | expected red symptom | measured |
 /// | --- | --- | --- | --- |
-/// | SAVE side | in `state_seam::persistable_layout`, replace `if pane_layout::is_empty_leaf(&node) { None } else { Some(node) }` with `if pane_layout::leaf_count(&node) < 2 { None } else { Some(node) }` | assertion 1 fails FIRST and names the arity guard (run 1's copy carries `layout: null`); assertions 2 and 3 also fail | **AS PREDICTED.** Assertion 1 panicked first, at the `layout: None` branch of the match, with the message that begins `run 1 persisted 'layout: None' for a single unsplit pane holding szulu.md`. The frozen copy carried the tab object with `cwd` and `sidebar_visible` and **no `layout` key at all** (serde skips `None`), which is precisely the on-disk shape of the original macOS bug. OCR of the retained run-2 PNG had zero hits for both `solozulu` and `soloalfa`, so assertions 2 and 3 would have failed as well. |
-/// | RESTORE side | in `window.rs`'s `build`, wrap the `request_layout_rebuild` call in `if pane_layout::leaf_count(&layout) > 1 { … }` | assertion 1 **passes** (the save side is correct and the frozen copy proves it) while assertions 2 and 3 fail | **AS PREDICTED, and DISTINGUISHABLY.** Assertion 1 PASSED — the frozen copy carried `"layout": { "type": "leaf", "path": "…/szulu.md", "preview": false }` — and the panic moved to assertion 2: `assertion 'left == right' failed … left: "Untitled.md" right: "szulu.md"`. Two different assertions, two different line numbers, and the assertion-2 message's own self-diagnosis ("assertion 1 above already proved it WAS saved correctly … this points squarely at the restore side") named the injected defect correctly. OCR again had zero hits for `solozulu`. |
+/// | SAVE side | in `state_seam::tab_entry`, write `root: None` when `pane_layout::leaf_count(&root) < 2` | assertion 1 fails FIRST and names the arity guard (run 1's copy carries `root: null`); assertions 2 and 3 also fail | Not re-measured since the app-state switch. |
+/// | RESTORE side | in `tab_view.rs`'s `open_tab`, wrap the `request_layout_rebuild` call in `if pane_layout::leaf_count(root) > 1 { … }` | assertion 1 **passes** (the save side is correct and the frozen copy proves it) while assertions 2 and 3 fail | Not re-measured since the app-state switch. |
 #[test]
 fn single_pane_file_survives_relaunch_under_cage() {
     const SMOKE: &str = "single_pane_file_survives_relaunch_under_cage";
@@ -1974,7 +1894,7 @@ fn single_pane_file_survives_relaunch_under_cage() {
              None here means neither is resolvable — check $HOME."
         )
     });
-    let real_state_file = real_state_dir.join(STATE_FILE_NAME);
+    let real_state_file = real_state_dir.join(STATE_DB_NAME);
     let real_before = state_file_fingerprint(&real_state_file);
 
     // Assertion 5, first part: the same for `WOLF_CONFIG_DIR`, which `preferences_dir()` reads first.
@@ -2018,27 +1938,19 @@ fn single_pane_file_survives_relaunch_under_cage() {
     );
 
     // The smoke's own state dir — the SAME sibling `cage_command` computes and hands
-    // the app as WOLF_STATE_DIR, so the two runs share one `state.json`.
+    // the app as WOLF_STATE_DIR, so the two runs share one `wolf.sqlite`.
     let smoke_state = smoke_state_dir(&cwd);
-    let smoke_state_file = smoke_state.join(STATE_FILE_NAME);
+    let smoke_state_file = smoke_state.join(STATE_DB_NAME);
 
     let smoke_config = smoke_config_dir(&cwd);
     let smoke_config_file = smoke_config.join(CONFIG_FILE_NAME);
 
-    // Freezes run 1's save before run 2 overwrites it. A directory, because `load_state` takes one;
-    // under XDG_RUNTIME_DIR so the sidebar never lists it.
-    let run1_state_dir = runtime_dir.join("wolf_gnome_solo_run1_state");
-    std::fs::create_dir_all(&run1_state_dir).unwrap_or_else(|e| {
-        panic!(
-            "{SMOKE}: failed to create the run-1 state snapshot dir {}: {e}",
-            run1_state_dir.display()
-        )
-    });
-    let run1_state_file = run1_state_dir.join(STATE_FILE_NAME);
+    // Freezes run 1's save before run 2 overwrites it.
+    let run1_state_dir = frozen_state_dir(&runtime_dir, "wolf_gnome_solo_run1_state", SMOKE);
 
     let readback = cwd.join(SOLO_READBACK_NAME);
     let out_png = runtime_dir.join("wolf_gnome_restore_solo_smoke.png");
-    for path in [&readback, &out_png, &run1_state_file] {
+    for path in [&readback, &out_png] {
         clear_evidence(path, SMOKE);
     }
 
@@ -2047,8 +1959,8 @@ fn single_pane_file_survives_relaunch_under_cage() {
         .env("OUT_PNG", &out_png)
         .env("SOLO_FILE", SOLO_FILE)
         .env("SOLO_READBACK", &readback)
-        .env("SOLO_STATE_SRC", &smoke_state_file)
-        .env("SOLO_STATE_COPY", &run1_state_file)
+        .env("SOLO_STATE_SRC", &smoke_state)
+        .env("SOLO_STATE_COPY", &run1_state_dir)
         .status()
         .expect("failed to spawn `cage` for the headless single-pane relaunch scenario");
     assert!(
@@ -2058,42 +1970,34 @@ fn single_pane_file_survives_relaunch_under_cage() {
          `:qa`. Exit 13: run 1 exited NON-ZERO — it went away but not cleanly, which implicates a \
          panic in `Coordinator::on_window_closing` or a core.borrow() held across `wire_close`'s \
          core.borrow_mut().take(). Exit 14: run 2's app died before it was ready for input. Exit 15: \
-         the Neovim readback never appeared in run 2. Exit 16: run 1 wrote NO state.json at all at \
-         {} — not the arity guard (which still writes the file, with a null layout) but something \
-         upstream of it. Screenshot expected at {}.",
-        smoke_state_file.display(),
+         the Neovim readback never appeared in run 2. Exit 16: run 1 wrote NO wolf.sqlite at all \
+         in {} — not the arity guard (which still writes the window state, with a null root) but \
+         something upstream of it. Screenshot expected at {}.",
+        smoke_state.display(),
         out_png.display()
     );
 
     assert_png_present(SMOKE, &out_png);
 
-    // --- Assertion 1: RUN 1's saved layout is a single NAMED leaf --------------
-    let saved = load_state(&run1_state_dir).unwrap_or_else(|| {
-        panic!(
-            "{SMOKE}: wolf_core::load_state could not parse the frozen copy of run 1's state at \
-             {}. `load_state` is silently-ignore, so a None here means the file is absent, \
-             unreadable, malformed, or carries an unsupported version — the scenario already \
-             proved it was non-empty (it exits 16 otherwise), so suspect the shape.",
-            run1_state_file.display()
-        )
-    });
+    // --- Assertion 1: RUN 1's saved root is a single NAMED pane ----------------
+    let run1_state_file = run1_state_dir.join(STATE_DB_NAME);
+    let saved = frozen_window_state(&run1_state_dir, SMOKE, "run 1's save");
     let window = saved.windows.first().unwrap_or_else(|| {
         panic!(
-            "{SMOKE}: run 1's state.json carries NO windows at all, so nothing was persisted. \
-             `snapshot_state` writes exactly one window and one tab, so an empty `windows` means \
-             `may_snapshot` refused every snapshot (nvim not Alive, no bound pane, or no reported \
-             window) or `set_snapshot` was never called. File: {}",
+            "{SMOKE}: run 1's window state carries NO windows at all, so nothing was persisted. \
+             `state_seam::window_state` commits nothing rather than an empty state, so an empty \
+             `windows` means a writer other than the coordinator's. File: {}",
             run1_state_file.display()
         )
     });
     let tab = window.tabs.first().unwrap_or_else(|| {
         panic!(
-            "{SMOKE}: run 1's persisted window carries NO tabs. `snapshot_state` writes exactly \
-             one. File: {}",
+            "{SMOKE}: run 1's persisted window carries NO tabs. `state_seam::window_entry` \
+             contributes no window without a tab. File: {}",
             run1_state_file.display()
         )
     });
-    match tab.layout.as_ref().and_then(leaf_fields) {
+    match tab.content.root.as_ref().and_then(leaf_fields) {
         Some(LeafFields { path, preview, .. }) => {
             assert!(
                 !path.is_empty(),
@@ -2107,10 +2011,10 @@ fn single_pane_file_survives_relaunch_under_cage() {
             );
             assert!(
                 !preview,
-                "{SMOKE}: run 1 persisted the lone leaf with `preview: true`. wolf-gnome has no \
-                 Markdown preview, so `pane_layout::encode` must set the flag to false \
-                 unconditionally; a true here would make the restore call `wolf_preview_file` \
-                 instead of `:edit`. File: {}",
+                "{SMOKE}: run 1 persisted the lone pane as a preview. The pane was an editor on \
+                 {SOLO_FILE}, so `pane_layout::encode` mapped its `LeafContent` to the wrong kind; \
+                 a preview here would make the restore call `wolf_preview_file` instead of \
+                 `:edit`. File: {}",
                 run1_state_file.display()
             );
             let file_name = Path::new(path).file_name().and_then(OsStr::to_str);
@@ -2127,17 +2031,16 @@ fn single_pane_file_survives_relaunch_under_cage() {
             );
         }
         None => panic!(
-            "{SMOKE}: run 1 persisted `layout: {:?}` for a single unsplit pane holding \
-             {SOLO_FILE}, not a single named leaf. **`None` IS THE SINGLE-PANE REGRESSION**: it \
-             means the save side gated on ARITY (`leaf_count(..) > 1`) instead of on the CONTENT \
-             predicate `pane_layout::is_empty_leaf`. A tab's open buffer paths have no persistence \
-             channel of their own — they ride only inside `TabState::layout`'s leaves — so an \
-             arity guard makes the single most common shape (one window, one tab, one pane, one \
-             file) persist its cwd and nothing else, and the file is not reopened on relaunch. \
-             That is the exact macOS bug this smoke exists to keep out of the GTK front-end; see \
-             `state_seam::persistable_layout`. A SPLIT here would instead mean the run-1 scenario \
-             somehow split the pane. File: {}",
-            tab.layout,
+            "{SMOKE}: run 1 persisted `root: {:?}` for a single unsplit pane holding \
+             {SOLO_FILE}, not a single named pane. **`None` IS THE SINGLE-PANE REGRESSION**: it \
+             means the save side gated on ARITY (`leaf_count(..) > 1`), where a folder tab always \
+             writes its root. A tab's open buffer paths have no persistence channel of their own \
+             — they ride only inside the tab's `root` — so an arity guard makes the single most \
+             common shape (one window, one tab, one pane, one file) persist its directory and \
+             nothing else, and the file is not reopened on relaunch. That is the exact macOS bug \
+             this smoke exists to keep out of the GTK front-end; see `state_seam::tab_entry`. A \
+             LAYOUT here would instead mean the run-1 scenario somehow split the pane. File: {}",
+            tab.content.root,
             run1_state_file.display()
         ),
     }
@@ -2152,7 +2055,7 @@ fn single_pane_file_survives_relaunch_under_cage() {
          assertion 1 above already proved it WAS saved correctly, so with that green this points \
          squarely at the restore side: an arity guard around `request_layout_rebuild`, a \
          `consume_pending_layout` that never fires, or a `pane_layout::decode` that rejected a \
-         lone leaf. {SOLO_DECOY_FILE:?} would instead mean the app reopened the first file it \
+         lone pane. {SOLO_DECOY_FILE:?} would instead mean the app reopened the first file it \
          found rather than the saved one. PNG kept at {}.",
         out_png.display()
     );
@@ -2181,7 +2084,7 @@ fn single_pane_file_survives_relaunch_under_cage() {
     // See notes/crates/wolf-gnome/tests/smoke_headless/restore.rs.md#state-dir-isolation-checks
     let smoke_meta = std::fs::metadata(&smoke_state_file).unwrap_or_else(|e| {
         panic!(
-            "{SMOKE}: expected the smoke's own state file {} to exist after the run, but: {e}. Its \
+            "{SMOKE}: expected the smoke's own state database {} to exist after the run, but: {e}. Its \
              absence means the app did not honour WOLF_STATE_DIR — which also means it wrote \
              somewhere else, most likely the developer's real ~/.local/state/wolf/.",
             smoke_state_file.display()
@@ -2189,7 +2092,7 @@ fn single_pane_file_survives_relaunch_under_cage() {
     });
     assert!(
         smoke_meta.len() > 0,
-        "{SMOKE}: the smoke's own state file {} exists but is empty",
+        "{SMOKE}: the smoke's own state database {} exists but is empty",
         smoke_state_file.display()
     );
 
@@ -2198,24 +2101,24 @@ fn single_pane_file_survives_relaunch_under_cage() {
     assert!(
         app_home.is_dir(),
         "{SMOKE}: the app's HOME {} is not a directory, so the fallback checks below would pass \
-         vacuously — a non-existent path never holds a state.json. `make_temp_cwd` creates \
+         vacuously — a non-existent path never holds a wolf.sqlite. `make_temp_cwd` creates \
          `<unique>/project` and `cage_command` hands `<unique>` to the app as HOME, so this must \
          exist.",
         app_home.display()
     );
     for rel in HOME_STATE_DIR_FALLBACKS {
-        let leaked = app_home.join(rel).join(STATE_FILE_NAME);
+        let leaked = app_home.join(rel).join(STATE_DB_NAME);
         assert!(
             !leaked.exists(),
-            "{SMOKE}: found a state file at {} — inside the app's own $HOME. That path is what \
+            "{SMOKE}: found a state database at {} — inside the app's own $HOME. That path is what \
              `wolf_core::state::state_dir()` resolves to when WOLF_STATE_DIR is ABSENT (the \
              `dirs::state_dir()` / `dirs::data_dir()` chain, XDG default `$HOME/{rel}`), so its \
              existence means the app resolved its state directory from $HOME instead of from \
              WOLF_STATE_DIR. Every smoke is then writing application state somewhere this harness \
-             does not control: the relaunch smokes stop sharing one state.json between their two \
+             does not control: the relaunch smokes stop sharing one wolf.sqlite between their two \
              launches, and — because the $HOME redirect is a TEST fixture that does not exist on a \
              developer's machine — the same defect there writes to their real \
-             ~/.local/state/wolf/state.json, reading their saved session at launch and clobbering \
+             ~/.local/state/wolf/wolf.sqlite, reading their saved session at launch and clobbering \
              it at quit. `cage_command` is the single place WOLF_STATE_DIR is set and \
              `cage_is_only_spawned_through_the_isolating_helper` is what keeps it single; start \
              there, then check that `state_dir()` still resolves the variable FIRST.",
@@ -2227,18 +2130,18 @@ fn single_pane_file_survives_relaunch_under_cage() {
     assert_eq!(
         real_before,
         real_after,
-        "{SMOKE}: the developer's REAL state file {} changed across this smoke run (before: \
+        "{SMOKE}: the developer's REAL state database {} changed across this smoke run (before: \
          {real_before:?}, after: {real_after:?}; `None` means the file did not exist, which is \
          the normal state on a machine that has never run Wolf interactively and must stay that \
          way). This is a STATE-DIR ISOLATION FAILURE: the app under cage resolved \
          `wolf_core::state_dir()` to the real directory instead of the smoke's own, which means it \
-         READ the developer's saved window size, working directory and pane layout at launch (so \
+         READ the developer's saved windows, working directories and pane layouts at launch (so \
          this smoke did not start from a clean slate) and OVERWROTE them at quit with a throwaway \
          one-pane temp-cwd layout. `cage_command` is the single place WOLF_STATE_DIR is set, and \
          `cage_is_only_spawned_through_the_isolating_helper` is what keeps it single — start \
          there. The ONE benign cause: a real Wolf running concurrently in another terminal, which \
-         writes that file on its own render wakes; close it and re-run before concluding anything \
-         else.",
+         writes that database on its own render wakes; close it and re-run before concluding \
+         anything else.",
         real_state_file.display()
     );
 
@@ -2297,8 +2200,8 @@ fn single_pane_file_survives_relaunch_under_cage() {
     );
 }
 
-/// Asserts that a frozen `state.json` holds ONE window whose tabs are, in order,
-/// single non-preview leaves named [`TABS_RESTORE_FILES`].
+/// Asserts that a frozen window state holds ONE window whose tabs are, in order,
+/// single edit panes named [`TABS_RESTORE_FILES`].
 ///
 /// Shared by the three-tab smoke's two frozen-file assertions because the SHAPE they
 /// demand is identical; `diagnosis` is what keeps their two reds apart, since the
@@ -2306,25 +2209,17 @@ fn single_pane_file_survives_relaunch_under_cage() {
 /// prediction for their own falsifier, so a failure names the defect that produces it
 /// rather than restating the shape.
 fn assert_frozen_tabs(smoke: &str, stage: &str, state_dir: &Path, diagnosis: &str) {
-    let file = state_dir.join(STATE_FILE_NAME);
-    let saved = load_state(state_dir).unwrap_or_else(|| {
-        panic!(
-            "{smoke}: wolf_core::load_state could not parse the frozen copy of {stage}'s state at \
-             {}. `load_state` is silently-ignore, so a None here means the file is absent, \
-             unreadable, malformed, or carries an unsupported version — the scenario already \
-             proved it was non-empty (it exits 22 or 23 otherwise), so suspect the SHAPE.",
-            file.display()
-        )
-    });
+    let file = state_dir.join(STATE_DB_NAME);
+    let saved = frozen_window_state(state_dir, smoke, stage);
 
     assert_eq!(
         saved.windows.len(),
         1,
-        "{smoke}: {stage}'s state.json carries {} window(s), not 1. This smoke opens ONE window \
-         and never a second, so anything else means the tree's shape is wrong before its tabs are \
-         worth reading: ZERO means `snapshot_state` answered None (a file older than the run, or \
-         every window's contribution refused), and MORE than one means a window was registered \
-         twice or a closed one was never deregistered. File: {}",
+        "{smoke}: {stage}'s window state carries {} window(s), not 1. This smoke opens ONE \
+         window and never a second, so anything else means the state's shape is wrong before its \
+         tabs are worth reading: ZERO means a writer other than the coordinator's, which commits \
+         nothing rather than no window, and MORE than one means a window was registered twice or \
+         a closed one was never deregistered. File: {}",
         saved.windows.len(),
         file.display()
     );
@@ -2335,7 +2230,8 @@ fn assert_frozen_tabs(smoke: &str, stage: &str, state_dir: &Path, diagnosis: &st
         .tabs
         .iter()
         .map(|tab| {
-            tab.layout
+            tab.content
+                .root
                 .as_ref()
                 .and_then(leaf_fields)
                 .and_then(|leaf| Path::new(leaf.path).file_name())
@@ -2345,11 +2241,11 @@ fn assert_frozen_tabs(smoke: &str, stage: &str, state_dir: &Path, diagnosis: &st
     assert_eq!(
         window.tabs.len(),
         TABS_RESTORE_FILES.len(),
-        "{smoke}: {stage}'s persisted window carries {} tab(s), not {}; their leaves' file names, \
-         in tab order, are {leaf_names:?} (`None` for a tab with no single named leaf). \
+        "{smoke}: {stage}'s persisted window carries {} tab(s), not {}; their panes' file names, \
+         in tab order, are {leaf_names:?} (`None` for a tab with no single named pane). \
          {diagnosis} A tab's open buffer paths have NO persistence channel of their own — they \
-         ride only inside `TabState::layout`'s leaves — so a dropped tab is a lost session rather \
-         than a cosmetic miscount, and because the next launch reads exactly this file the loss is \
+         ride only inside the tab's `root` — so a dropped tab is a lost session rather than a \
+         cosmetic miscount, and because the next launch reads exactly this state the loss is \
          permanent from here. File: {}",
         window.tabs.len(),
         TABS_RESTORE_FILES.len(),
@@ -2358,12 +2254,12 @@ fn assert_frozen_tabs(smoke: &str, stage: &str, state_dir: &Path, diagnosis: &st
 
     for (index, expected) in TABS_RESTORE_FILES.into_iter().enumerate() {
         let tab = &window.tabs[index];
-        match tab.layout.as_ref().and_then(leaf_fields) {
+        match tab.content.root.as_ref().and_then(leaf_fields) {
             Some(LeafFields { path, preview, .. }) => {
                 assert!(
                     !preview,
-                    "{smoke}: {stage}'s tab {index} persisted its lone leaf with `preview: true`, \
-                     but no step of this scenario opens a preview. A true here makes the restore \
+                    "{smoke}: {stage}'s tab {index} persisted its lone pane as a preview, but no \
+                     step of this scenario opens a preview. A preview here makes the restore \
                      call `wolf_preview_file` instead of `:edit`, so the tab comes back showing a \
                      rendered document where the user had an editor. File: {}",
                     file.display()
@@ -2372,7 +2268,7 @@ fn assert_frozen_tabs(smoke: &str, stage: &str, state_dir: &Path, diagnosis: &st
                 assert_eq!(
                     leaf_name,
                     Some(expected),
-                    "{smoke}: {stage}'s tab {index} persisted a leaf naming {path:?}, whose file \
+                    "{smoke}: {stage}'s tab {index} persisted a pane naming {path:?}, whose file \
                      name is not {expected:?}. The comparison is on the file NAME rather than the \
                      whole path deliberately — /tmp may resolve through a symlink, so nvim's \
                      reported abs_path need not be string-equal to anything this test could \
@@ -2380,7 +2276,7 @@ fn assert_frozen_tabs(smoke: &str, stage: &str, state_dir: &Path, diagnosis: &st
                      deliberately different names. ANOTHER tab's file here means the tabs were \
                      assembled or restored in the wrong ORDER, which the next gather writes back, \
                      so the swap compounds on every run. `Untitled.md` means that tab's `:e` never \
-                     landed. An EMPTY path means the leaf was resolved from a window that is in \
+                     landed. An EMPTY path means the pane was resolved from a window that is in \
                      neither `Snapshot::previews` nor `Snapshot::win_buffers` and mapped to `\"\"` \
                      instead of refusing — the silent-loss shape `pane_layout::resolve_leaves` \
                      exists to make unreachable. File: {}",
@@ -2388,13 +2284,13 @@ fn assert_frozen_tabs(smoke: &str, stage: &str, state_dir: &Path, diagnosis: &st
                 );
             }
             None => panic!(
-                "{smoke}: {stage}'s tab {index} persisted `layout: {:?}` where a single named \
-                 leaf was due. **`None` is the failure that matters**: the tab is present in the \
-                 tree and carries its cwd and its sidebar preference, so every count above is \
-                 satisfied — and the tab still comes back EMPTY, because its files ride only \
-                 inside the layout. A SPLIT here would instead mean the scenario somehow split a \
-                 pane. File: {}",
-                tab.layout,
+                "{smoke}: {stage}'s tab {index} persisted `root: {:?}` where a single named pane \
+                 was due. **`None` is the failure that matters**: the tab is present in the \
+                 window and carries its directory and its sidebar preference, so every count \
+                 above is satisfied — and the tab still comes back EMPTY, because its files ride \
+                 only inside its root. A LAYOUT here would instead mean the scenario somehow \
+                 split a pane. File: {}",
+                tab.content.root,
                 file.display()
             ),
         }
@@ -2411,12 +2307,12 @@ fn assert_frozen_tabs(smoke: &str, stage: &str, state_dir: &Path, diagnosis: &st
 ///
 /// ## Why it asserts on no pixel
 ///
-/// The claim is about what reaches `state.json` and what comes back out of it, and
-/// neither is visible. A background tab's pane view is not drawn at all, so no
+/// The claim is about what reaches the saved window state and what comes back out of
+/// it, and neither is visible. A background tab's pane view is not drawn at all, so no
 /// capture could show more than one tab's content whatever the file holds; and a tab
 /// TITLE is the current file's name, which the per-pane statusbar strip and nvim's
 /// `:e` echo also draw, so no OCR term could discriminate one. The observables that
-/// DO discriminate are the process table, read through `/proc`, and a `state.json`
+/// DO discriminate are the process table, read through `/proc`, and a state database
 /// frozen before anything can write over it.
 ///
 /// ## Why THREE tabs
@@ -2433,18 +2329,18 @@ fn assert_frozen_tabs(smoke: &str, stage: &str, state_dir: &Path, diagnosis: &st
 /// [`RESTORE_TABS_SCENARIO`]'s table): run 1 reaches three live Neovims before it
 /// quits (exit 21), and run 2 restores three (exit 24). Three more are the Rust side's:
 ///
-/// 1. **The SAVE side.** `$TABS_STATE_COPY_1` — run 1's file, frozen before run 2
-///    could touch it — holds one window with THREE tabs whose layouts are single
-///    non-preview leaves named `talfa.md` / `tbravo.md` / `tcharlie.md`, in that
+/// 1. **The SAVE side.** `$TABS_STATE_COPY_1` — run 1's database, frozen before run 2
+///    could touch it — holds one window with THREE tabs whose roots are single
+///    edit panes named `talfa.md` / `tbravo.md` / `tcharlie.md`, in that
 ///    order. It runs before the scenario's exit code is read whenever run 1's copy
 ///    exists, since a save that drops tabs also fails run 2's count at exit 24, and
 ///    reading the code first would report every save break as a restore break.
 /// 2. **The RESTORE side.** The swap map has exactly three rows, each fixture held by
 ///    exactly one live Neovim, and the three pids distinct: three Neovims, each with
 ///    its own tab's file loaded.
-/// 3. **The BACKGROUND tabs' gather.** `$TABS_STATE_COPY_2` — run 2's file, after a
-///    quit in which tabs 1 and 2 were never selected — still holds the same three
-///    tabs with the same three layouts, in order, each gathered from its own Neovim.
+/// 3. **The BACKGROUND tabs' gather.** `$TABS_STATE_COPY_2` — run 2's database, after
+///    a quit in which tabs 1 and 2 were never selected — still holds the same three
+///    tabs with the same three roots, in order, each gathered from its own Neovim.
 ///
 /// ## Premise
 ///
@@ -2457,10 +2353,10 @@ fn assert_frozen_tabs(smoke: &str, stage: &str, state_dir: &Path, diagnosis: &st
 ///
 /// | # | edit | predicted red |
 /// | --- | --- | --- |
-/// | TR1a | in `WindowHandle::cached_subtree`, collect `tabs.selected()` alone | assertion 1, read before the exit status: run 1's window carries 1 tab, not 3, and the leaf list names `tcharlie.md` |
-/// | TR1b | in `state_seam::window_subtree`, truncate `tabs` to one | assertion 1: 1 tab, and the leaf list names `talfa.md` |
+/// | TR1a | in `WindowHandle::cached_window`, collect `tabs.selected()` alone | assertion 1, read before the exit status: run 1's window carries 1 tab, not 3, and the pane list names `tcharlie.md` |
+/// | TR1b | in `state_seam::window_entry`, truncate `tabs` to one | assertion 1: 1 tab, and the pane list names `talfa.md` |
 /// | TR2a | in `window::build`, open only `plan.tabs[0]` | assertion 1 passes, then the status assertion fails with exit status 24 |
-/// | TR2b | in `window::build`, pass `layout: None` for every planned tab after the first | assertion 2: no `tbravo.md` row |
+/// | TR2b | in `window::build`, pass `saved: None` for every planned tab after the first | assertion 2: no `tbravo.md` row |
 ///
 /// ## What it does NOT prove
 ///
@@ -2469,9 +2365,9 @@ fn assert_frozen_tabs(smoke: &str, stage: &str, state_dir: &Path, diagnosis: &st
 /// while its pane survives, which is timing-dependent under a compositor. Its table
 /// is what covers it.
 ///
-/// **Nothing here rests on a SEED.** `state_seam`'s `seeded_tab_state_table` covers a
-/// tab whose own gather never succeeds, which under a compositor needs its layout to
-/// bind no pane at all.
+/// **Nothing here rests on a SEED.** `tests/app_state_seam.rs`'s
+/// `a_restored_tab_contributes_its_saved_tab` covers a tab whose own gather never
+/// succeeds, which under a compositor needs its layout to bind no pane at all.
 #[test]
 fn three_tabs_survive_a_relaunch_under_cage() {
     const SMOKE: &str = "three_tabs_survive_a_relaunch_under_cage";
@@ -2481,7 +2377,7 @@ fn three_tabs_survive_a_relaunch_under_cage() {
     // Locate the freshly built binary under test.
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // One cwd for both launches: `plan_for_window` restores tabs only for the saved project.
+    // One cwd for both launches, so run 2's terminal launch restores the session as saved.
     let cwd = make_temp_cwd();
     write_relaunch_fixtures(
         SMOKE,
@@ -2494,30 +2390,19 @@ fn three_tabs_survive_a_relaunch_under_cage() {
     );
 
     // The smoke's own state dir — the SAME sibling `cage_command` computes and hands
-    // the app as WOLF_STATE_DIR, so the two runs share one `state.json`.
-    let smoke_state_file = smoke_state_dir(&cwd).join(STATE_FILE_NAME);
+    // the app as WOLF_STATE_DIR, so the two runs share one `wolf.sqlite`.
+    let smoke_state = smoke_state_dir(&cwd);
 
-    // Two frozen copies, so assertion 1's red stays apart from 3's: run 2 re-snapshots every wake, so
-    // the live file would hide which side dropped the tabs.
-    let run1_state_dir = runtime_dir.join("wolf_gnome_tabs_run1_state");
-    let run2_state_dir = runtime_dir.join("wolf_gnome_tabs_run2_state");
-    for dir in [&run1_state_dir, &run2_state_dir] {
-        std::fs::create_dir_all(dir).unwrap_or_else(|e| {
-            panic!(
-                "{SMOKE}: failed to create the state snapshot dir {}: {e}",
-                dir.display()
-            )
-        });
-    }
+    // Two frozen copies, so assertion 1's red stays apart from 3's: run 2 re-submits every wake, so
+    // the live database would hide which side dropped the tabs.
+    let run1_state_dir = frozen_state_dir(&runtime_dir, "wolf_gnome_tabs_run1_state", SMOKE);
+    let run2_state_dir = frozen_state_dir(&runtime_dir, "wolf_gnome_tabs_run2_state", SMOKE);
 
     let readback = cwd.join(TABS_RESTORE_READBACK_NAME);
-    let run1_state_file = run1_state_dir.join(STATE_FILE_NAME);
-    let run2_state_file = run2_state_dir.join(STATE_FILE_NAME);
+    let run1_state_file = run1_state_dir.join(STATE_DB_NAME);
     // Start from a clean slate: evidence that could be a previous run's leftover is
     // not evidence. `clear_evidence` removes AND asserts absent.
-    for path in [&readback, &run1_state_file, &run2_state_file] {
-        clear_evidence(path, SMOKE);
-    }
+    clear_evidence(&readback, SMOKE);
 
     let status = cage_command(
         &with_nvim_pid_helper(RESTORE_TABS_SCENARIO),
@@ -2529,9 +2414,9 @@ fn three_tabs_survive_a_relaunch_under_cage() {
     .env("TABS_FILE_TWO", TABS_RESTORE_FILE_TWO)
     .env("TABS_FILE_THREE", TABS_RESTORE_FILE_THREE)
     .env("TABS_READBACK", &readback)
-    .env("TABS_STATE_SRC", &smoke_state_file)
-    .env("TABS_STATE_COPY_1", &run1_state_file)
-    .env("TABS_STATE_COPY_2", &run2_state_file)
+    .env("TABS_STATE_SRC", &smoke_state)
+    .env("TABS_STATE_COPY_1", &run1_state_dir)
+    .env("TABS_STATE_COPY_2", &run2_state_dir)
     .status()
     .expect("failed to spawn `cage` for the headless three-tab relaunch scenario");
     // Assertion 1, the SAVE side, before the status: a save that drops tabs also exits 24.
@@ -2544,8 +2429,8 @@ fn three_tabs_survive_a_relaunch_under_cage() {
             "The scenario's exit-21 check already proved the window really held THREE tabs, one \
              Neovim each, when it quit, so this is the SAVE side and nothing else. ONE tab is the \
              red for two different defects, and the NAME the survivor carries tells them apart: \
-             talfa.md means `state_seam::window_subtree` truncated its tabs vec, since \
-             `truncate(1)` keeps the FIRST entry; tcharlie.md means `window::cached_subtree` \
+             talfa.md means `state_seam::window_entry` truncated its tabs vec, since \
+             `truncate(1)` keeps the FIRST entry; tcharlie.md means `window::cached_window` \
              gathered `tabs.selected()` alone instead of every entry, since that is the tab the \
              user was on at the quit.",
         );
@@ -2564,17 +2449,17 @@ fn three_tabs_survive_a_relaunch_under_cage() {
          the planned tabs.\n\
          Exit 21: run 1 never reached three live Neovims, so Ctrl+Shift+T failed and nothing \
          here is about persistence. That is deliberately separated from the Rust side's \
-         assertions, because a one-tab state.json and a chord that never fired look identical in \
-         the file.\n\
-         Exit 22: run 1 wrote NO state.json at all at {} — upstream of anything about tabs.\n\
-         Exit 23: run 2 wrote NO state.json at all, so assertion 3's evidence is missing \
+         assertions, because a one-tab window state and a chord that never fired look identical \
+         in the database.\n\
+         Exit 22: run 1 wrote NO wolf.sqlite at all in {} — upstream of anything about tabs.\n\
+         Exit 23: run 2 left NO wolf.sqlite at all, so assertion 3's evidence is missing \
          (assertion 1 has already passed on run 1's frozen copy).\n\
          Exit 24: run 2 did not restore three live Neovims. Assertion 1 has already passed on run \
          1's frozen copy, so run 1 saved all three tabs and this is the RESTORE alone: \
          `window::build` did not open every planned tab, or a tab's `WolfCore::start` failed (its \
          stderr line says so).\n\
          The scenario's own stderr names the candidate causes for each in order.",
-        smoke_state_file.display()
+        smoke_state.display()
     );
 
     // Assertion 2: the restore side, read from the process table rather than any one Neovim.
@@ -2596,8 +2481,8 @@ fn three_tabs_survive_a_relaunch_under_cage() {
             holders.len() == 1,
             "{SMOKE}: after the relaunch, {} live Neovim(s) hold {expected:?}'s swap file open \
              ({holders:?}), not exactly one. The whole map was {rows:?}. NONE for a tab past the \
-             first means its restored Neovim never loaded its layout: `window::build` handed that \
-             tab no layout, or its pane view never rebuilt it. NONE for every fixture with three \
+             first means its restored Neovim never loaded its root: `window::build` handed that \
+             tab no saved tab, or its pane view never rebuilt it. NONE for every fixture with three \
              Neovims live means the premise failed instead: read `/proc/<pid>/fd` by hand. MORE \
              than one means two tabs' Neovims loaded the same file, i.e. layouts were crossed \
              between tabs. The scenario re-read the map until three rows or its budget ran out, \
@@ -2631,17 +2516,45 @@ fn three_tabs_survive_a_relaunch_under_cage() {
         &run2_state_dir,
         "Assertion 2 above already proved all three tabs were RESTORED, each into a Neovim of its \
          own, so a tab missing here was lost between the restore and the quit — by the very act \
-         of running. Tabs 1 and 2 are never selected in run 2, so their leaves can only come from \
-         a gather that reads every tab's own Neovim; `layout: None` on them, with tab 0 intact, \
-         is a gather that reads the selected tab alone.",
+         of running. Tabs 1 and 2 are never selected in run 2, so their panes can only come from \
+         a gather that reads every tab's own Neovim, or from their seeds; `root: None` on them, \
+         with tab 0 intact, is a gather that reads the selected tab alone and no seed.",
     );
 }
 
-/// Proves the whole multi-window claim in one scenario: **two windows, two
-/// Neovims, both sessions in one `state.json`, and both restored at relaunch.**
+/// One saved tab as the two-window smoke compares it: its directory, the file name of
+/// each of its panes in depth-first order, and its zoom.
+type TabSummary = (String, Vec<Option<String>>, Option<PaneRef>);
+
+/// One saved window as the two-window smoke compares it: its tabs in page order and its
+/// active tab. The frame is left out, since a relaunch need not restore the same size.
+type WindowSummary = (Vec<TabSummary>, usize);
+
+fn window_summary(window: &Window) -> WindowSummary {
+    let tabs = window
+        .tabs
+        .iter()
+        .map(|tab| {
+            (
+                tab.directory.clone(),
+                tab.content
+                    .root
+                    .as_ref()
+                    .map(pane_tails)
+                    .unwrap_or_default(),
+                tab.content.zoomed,
+            )
+        })
+        .collect();
+    (tabs, window.active_tab)
+}
+
+/// **Two windows of two tabs each survive a quit and relaunch in their stacking order,
+/// each on its saved active tab and with its zoom, and the project both windows share
+/// stores the frontmost window's active tab.**
 ///
-/// Two app launches run inside ONE `cage` instance (see [`TWOWIN_SCENARIO`]), so
-/// the smoke holds one cage slot and no second compositor is started.
+/// Two app launches run inside ONE `cage` instance (see [`TWOWIN_SCENARIO`]), so the
+/// smoke holds one cage slot and no second compositor is started.
 ///
 /// ## Why it asserts on no pixel, and why that is the honest shape
 ///
@@ -2649,30 +2562,18 @@ fn three_tabs_survive_a_relaunch_under_cage() {
 /// visible at any point in time." MEASURED under `cage`: two
 /// `adw::ApplicationWindow`s in one process both exist and `app.windows()` reports
 /// 2, but the newest toplevel stays on top and presenting the backgrounded first
-/// window does **not** raise it. So no capture can show two windows and none can
-/// bring the first one back — a screenshot here would be a picture of one window,
-/// which is exactly what a build with no second window at all produces.
+/// window does **not** raise it. So no capture can show two windows. The observables
+/// that discriminate are the count of live `nvim` children of the app pid, the state
+/// database each run wrote, frozen after it quit, and the `getcwd()` and current
+/// buffer the focused window's Neovim writes about itself.
 ///
-/// The two observables that DO discriminate are both techniques this binary already
-/// proves it can read: the count of live `nvim` children of the app pid (the crash
-/// smokes' `/proc` scan, extended by `wait_nvim_count`) and the `state.json` run 1
-/// wrote, frozen before run 2 can overwrite it (the solo relaunch smoke's
-/// `load_state` on a frozen copy).
+/// ## Why the order is observable
 ///
-/// ## Why it earns its seconds
-///
-/// Every headless test in this crate can only see values the front-end computed —
-/// never that GTK really built a second window over a second core, and never that
-/// the store received a two-window tree. The failure this smoke exists to catch is
-/// SILENT: two `StateStore`s over one directory both report a successful flush, the
-/// file holds whichever tree was written last, and each store still claims its own
-/// in memory, so one window's entire session is lost with no panic and no error and
-/// a green headless suite. The `nvim`-child count and the frozen file are the only
-/// two observables that tell that apart.
-///
-/// MEASURED cost: 16.73 s run ALONE, and +16.55 s / +17.38 s on two full-suite
-/// runs — the cheapest of this binary's two-launch smokes despite starting four
-/// Neovims across its two runs.
+/// Window A is opened first and window B second, so the coordinator's registry lists
+/// A first, while B is the window that gains focus last, so the stacking order puts B
+/// first. A save in registry order and a save in stacking order therefore differ. On
+/// the restore side, the window mapped last is the one `cage` shows and keys reach,
+/// so the readback says which window the restore put in front.
 ///
 /// ## The route to the second window is forced
 ///
@@ -2680,9 +2581,8 @@ fn three_tabs_survive_a_relaunch_under_cage() {
 /// cage has its own private `dbus-run-session` bus, so a second launch while the
 /// first is alive hands off to it through single-instance activation, which
 /// exercises the launch path rather than a second window. The palette is the only
-/// route this harness can drive — New Window
-/// carries no accelerator, and the primary menu popover cannot be clicked (see the
-/// deliberate gaps in `tests/README.md`).
+/// route this harness can drive — New Window carries no accelerator, and the primary
+/// menu popover cannot be clicked (see the deliberate gaps in `tests/README.md`).
 ///
 /// ## Step 6 is `app.quit`'s ONLY coverage in this suite
 ///
@@ -2695,25 +2595,34 @@ fn three_tabs_survive_a_relaunch_under_cage() {
 /// ## What it asserts
 ///
 /// The scenario's own checks run inside `cage` and each carries its own exit code
-/// (see [`TWOWIN_SCENARIO`]'s table): two windows means two live `nvim` children
-/// after the palette activation and again after the relaunch, the new window did not
-/// inherit a project, the frozen `state.json` carries two windows' worth of tabs,
-/// and the focused restored window holds a coherent session. Four more are the Rust
-/// side's, on the frozen copy of run 1's save:
+/// (see [`TWOWIN_SCENARIO`]'s table): the Neovim count after each tab and window is
+/// opened and after the relaunch, and the new window's not inheriting a project.
+/// Five more are the Rust side's, in this order:
 ///
-/// 1. `load_state` parses the frozen file and it carries **exactly two** windows.
-/// 2. Each window carries exactly one tab.
-/// 3. The two tabs' `cwd` values name the two projects **in saved order**: window 0
-///    at the temp cwd, window 1 at its subdirectory. Compared on the final path
-///    component, because `/tmp` may resolve through a symlink and nvim's reported
-///    path need not be string-equal to anything this test could build — the
-///    component itself is exact.
-/// 4. Each tab's `layout` is a non-preview leaf whose file NAME is that window's own
-///    fixture. This is the assertion no readback can make: a tab's open buffer paths
-///    ride ONLY inside `TabState::layout`'s leaves, so a tree that carried two
-///    windows with no layouts would satisfy 1–3 and restore two empty windows.
+/// 1. Run 1's save holds two windows, B's first. It is read before the exit status
+///    whenever run 1's copy exists, so a write-side failure is never reported as a
+///    restore one.
+/// 2. Each window's tabs, in page order, with their files and kinds: B holds
+///    `wbfirst.md` and `wbactive.md` with the second active; A holds `wafirst.md`
+///    and `vertical[waleft.md, waright.md]` with the second active and zoomed on its
+///    pane 1. Every tab is in the project, and no frame carries a position.
+/// 3. The project's stored state is B's active tab with B's frame: §4's first rule,
+///    for a directory open in two windows whose active tabs are both in it.
+/// 4. Run 2's focused window is B on its saved active tab: the readback names the
+///    project and `wbactive.md`.
+/// 5. Run 2's save repeats run 1's: the windows in the same order, each tab's
+///    directory, panes and zoom, and each window's active tab.
+///
+/// ## Premise
+///
+/// The S1f row rests on window A's active tab gathering in run 2 although A is
+/// behind B. A restored tab whose gather never opens contributes the tab run 1 saved,
+/// zoom included, which would hide a restore that dropped the zoom. Unmeasured.
 ///
 /// ## What it does NOT prove
+///
+/// **Nothing here minimizes a window.** `cage` ignores a minimize request, so the
+/// minimized half of the stacking order is the seam tables' alone.
 ///
 /// **Nothing here observes the `SwitchWindow` raise.** `Coordinator::raise` calls
 /// `present()`, which `cage` declines, so the palette's Switch to Window rows are
@@ -2722,32 +2631,30 @@ fn three_tabs_survive_a_relaunch_under_cage() {
 /// **Nothing here closes one of two windows**, so `close_commit`'s `DropSubtree` arm
 /// is untouched — and on the LAST window that arm is not merely unobserved but
 /// indistinguishable from a no-op, because an empty contribution set means "commit
-/// nothing" rather than "commit an empty tree". Its table in `state_seam.rs` is what
+/// nothing" rather than "commit an empty state". Its table in `state_seam.rs` is what
 /// covers the rule.
 ///
 /// **It does not discriminate the close path from the per-wake commit.** The quit
-/// path's commit has already been preceded by per-wake commits of the same tree, so
-/// this smoke's `state.json` would be right by either route; that redundancy is
-/// pre-existing and is recorded in `tests/README.md`.
+/// path's commit has already been preceded by per-wake commits of the same windows,
+/// so this smoke's save would be right by either route; that redundancy is recorded
+/// in `tests/README.md`.
 ///
-/// **Which window has focus after a restore is not asserted**, deliberately. Only
-/// one window can be typed at under `cage` and nothing can raise another, so step 10
-/// reads whichever window is focused and asserts the PAIR it reports is one of the
-/// two that were saved. That discriminates `Untitled.md` (no layout was rebuilt) and
-/// a crossed restore (a window sitting in one project while showing the other's
-/// file) without resting on an unmeasured claim about focus order.
+/// ## Falsifiers (each run alone)
 ///
-/// ## Red-run falsifiers (all three, plus step 6's, each run alone)
+/// | # | edit | predicted red | measured |
+/// | --- | --- | --- | --- |
+/// | S1a | in `state_seam::window_state`, keep the input order | assertion 1: window 0 is A | — |
+/// | S1b | delete the `on_window_focused` call in `window.rs`'s `is-active` handler | assertion 1: window 0 is A | — |
+/// | S1c | in `restore_session`, build the plans front to back | assertion 4: the readback names `waright.md` | — |
+/// | S1d | in `window::build`, select the first opened tab | assertion 4: the readback names `wbfirst.md` | — |
+/// | S1e | in `layout_snapshot`, answer `zoomed: None` | assertion 2: A's second tab saved unzoomed | — |
+/// | S1f | in `apply_layout_rebuild`, skip the `ZoomEvent::Restore` | assertion 5: run 2 saved A's second tab unzoomed | — |
+/// | F1 | in `command_action.rs`, restore `Command::NewWindow => UiAction::Deferred(..)` | exit 21, with a count of 2 | Not re-measured since the app-state switch. |
+/// | F3 | in `coordinator.rs`'s `open_new_window`, pass the process cwd to `restore_plans` | exit 22 | Not re-measured since the app-state switch. |
+/// | step 6 | in `coordinator.rs`, delete the body of `install_app_actions` | exit 12 | Not re-measured since the app-state switch. |
 ///
-/// | # | edit | predicted red | isolated | measured |
-/// | --- | --- | --- | --- | --- |
-/// | F1 | in `command_action.rs`, restore `Command::NewWindow => UiAction::Deferred(..)` | the palette's classification filter drops the New Window row, so the typed query lists nothing, Enter dispatches nothing, and step 3 aborts with **exit 21** and `count=1` — steps 4–10 unreached | within the smoke, yes; across the suite no (`command_action.rs`'s and `actions.rs`'s tables redden too) | **AS PREDICTED.** Exit 21 at step 3: `expected EXACTLY 2 live Neovim child(ren) … the last scan counted 1`. The count poll exhausts its budget rather than answering early, so the run is LONGER than the green one — 26.39 s. Steps 4–10 are unreached by construction, which is what makes the exit code readable on its own. |
-/// | F2 | in `coordinator.rs`, make `assemble` walk `self.handles().iter().take(1)` | step 7 aborts with **exit 25** (`grep -c` reports 1); run 2 never launches, so the restore poll cannot mask it | **yes** — this is exactly why step 7 exists | **AS PREDICTED.** Exit 25 at step 7: `run 1's state.json carries 1 line(s) matching '"tabs"', not 2`. The isolation claim is MEASURED rather than argued: 11.77 s against 16.73 s green — SHORTER than the passing run, because run 2 never launched. That timing is the evidence that the write-side guard fires before the restore poll can turn a write-side defect into a read-side one. |
-/// | F3 | in `coordinator.rs`, make `open_new_window` pass the process cwd into `restore_plans` | step 4's readback is the project directory and the smoke aborts with **exit 22**; steps 5–10 unreached | **yes** (step 3 passes first) | **AS PREDICTED, and exit 22 rather than exit 26** — the discrimination those two codes exist for. The readback was `getcwd() = …/project` with `bufname('%') = Untitled 2.md`, so the focus guard passed first (the keystrokes DID reach the new window) and the inheritance check is what fired. 8.91 s. The `Untitled 2.md` is also why step 4's comment names no fixed ordinal. |
-/// | step 6 | in `coordinator.rs`, delete the body of `install_app_actions` | Ctrl+Shift+Q resolves no action, falls through to Neovim as a plain `<C-Q>`, the app stays alive, and step 6 aborts with **exit 12** | **yes** — nothing else in this suite activates an `app.` action | **AS PREDICTED.** Exit 12 at step 6: `run 1 (pid …) is still alive after Ctrl+Shift+Q`. Steps 3, 4 and 5 all passed first — two live `nvim` children, no inherited project, window B re-rooted — so the failure is isolated to `app.quit` and says nothing about building the second window. 26.88 s. |
-///
-/// Each `measured` cell is from a run of that edit ALONE, per `tests/README.md`'s
-/// "A red-run demonstration is a deliverable, not a formality".
+/// Each row is run alone, per `tests/README.md`'s "A red-run demonstration is a
+/// deliverable, not a formality".
 #[test]
 fn two_windows_two_neovims_and_two_saved_sessions_under_cage() {
     const SMOKE: &str = "two_windows_two_neovims_and_two_saved_sessions_under_cage";
@@ -2757,26 +2664,14 @@ fn two_windows_two_neovims_and_two_saved_sessions_under_cage() {
     // Locate the freshly built binary under test.
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // A fresh temp cwd shared by BOTH launches, holding window A's file and — in a
-    // subdirectory of its own — window B's SECOND project.
+    // A fresh temp cwd shared by BOTH launches and every tab: the one project.
     let cwd = make_temp_cwd();
-    // `write_relaunch_fixtures` creates no parents. Two projects, so the two saved `cwd`s tell the
-    // windows' sessions apart.
-    let subdir = cwd.join(TWOWIN_SUBDIR);
-    std::fs::create_dir_all(&subdir).unwrap_or_else(|e| {
-        panic!(
-            "{SMOKE}: failed to create the second project's directory {}: {e}",
-            subdir.display()
-        )
-    });
-    write_relaunch_fixtures(
-        SMOKE,
-        &cwd,
-        &[
-            (TWOWIN_FIRST_FILE, TWOWIN_FIRST_HEADING),
-            (TWOWIN_SECOND_FILE, TWOWIN_SECOND_HEADING),
-        ],
-    );
+    write_relaunch_fixtures(SMOKE, &cwd, &TWOWIN_FIXTURES);
+    let project = std::fs::canonicalize(&cwd)
+        .unwrap_or_else(|e| panic!("{SMOKE}: failed to canonicalize {}: {e}", cwd.display()))
+        .to_str()
+        .unwrap_or_else(|| panic!("{SMOKE}: the temp cwd {} is not UTF-8", cwd.display()))
+        .to_owned();
 
     // Exit 22 compares the last component of window B's `getcwd()`, symlink-proof only while HOME (B's
     // correct answer) cannot share it; asserted so a rename reddens here with its cause named.
@@ -2793,23 +2688,14 @@ fn two_windows_two_neovims_and_two_saved_sessions_under_cage() {
     );
 
     // The smoke's own state dir — the SAME sibling `cage_command` computes and hands
-    // the app as WOLF_STATE_DIR, so the two runs share one `state.json`.
-    let smoke_state_file = smoke_state_dir(&cwd).join(STATE_FILE_NAME);
-
-    // Freezes run 1's save before run 2 overwrites it. A directory, because `load_state` takes one;
-    // under XDG_RUNTIME_DIR so the sidebar never lists it.
-    let run1_state_dir = runtime_dir.join("wolf_gnome_twowin_run1_state");
-    std::fs::create_dir_all(&run1_state_dir).unwrap_or_else(|e| {
-        panic!(
-            "{SMOKE}: failed to create the run-1 state snapshot dir {}: {e}",
-            run1_state_dir.display()
-        )
-    });
-    let run1_state_file = run1_state_dir.join(STATE_FILE_NAME);
+    // the app as WOLF_STATE_DIR, so the two runs share one `wolf.sqlite`.
+    let smoke_state = smoke_state_dir(&cwd);
+    let run1_state_dir = frozen_state_dir(&runtime_dir, "wolf_gnome_twowin_run1_state", SMOKE);
+    let run2_state_dir = frozen_state_dir(&runtime_dir, "wolf_gnome_twowin_run2_state", SMOKE);
 
     let b_cwd_readback = cwd.join(TWOWIN_READBACK_B_NAME);
     let run2_readback = cwd.join(TWOWIN_READBACK_R2_NAME);
-    for path in [&b_cwd_readback, &run2_readback, &run1_state_file] {
+    for path in [&b_cwd_readback, &run2_readback] {
         clear_evidence(path, SMOKE);
     }
 
@@ -2817,20 +2703,143 @@ fn two_windows_two_neovims_and_two_saved_sessions_under_cage() {
     let scenario = with_nvim_pid_helper(TWOWIN_SCENARIO);
     let status = cage_command(&scenario, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
-        .env("TWOWIN_FIRST_FILE", TWOWIN_FIRST_FILE)
-        .env("TWOWIN_SECOND_NAME", TWOWIN_SECOND_NAME)
-        .env("TWOWIN_SUBDIR_ABS", &subdir)
-        .env("TWOWIN_SUBDIR_BASE", TWOWIN_SUBDIR)
+        .env("TWOWIN_A_FIRST_FILE", TWOWIN_A_FIRST_FILE)
+        .env("TWOWIN_A_LEFT_FILE", TWOWIN_A_LEFT_FILE)
+        .env("TWOWIN_A_ZOOMED_FILE", TWOWIN_A_ZOOMED_FILE)
+        .env("TWOWIN_B_FIRST_FILE", TWOWIN_B_FIRST_FILE)
+        .env("TWOWIN_B_ACTIVE_FILE", TWOWIN_B_ACTIVE_FILE)
+        .env("TWOWIN_PROJECT_ABS", &cwd)
         .env("TWOWIN_PROJECT_BASE", TEMP_CWD_BASENAME)
         .env("TWOWIN_NEW_WINDOW_QUERY", TWOWIN_NEW_WINDOW_QUERY)
         .env("TWOWIN_B_CWD", &b_cwd_readback)
         .env("TWOWIN_R2_READBACK", &run2_readback)
-        .env("TWOWIN_STATE_SRC", &smoke_state_file)
-        .env("TWOWIN_STATE_COPY", &run1_state_file)
-        .env("TWOWIN_STATE_TABS_LINES", TWOWIN_STATE_TABS_LINES)
+        .env("TWOWIN_STATE_SRC", &smoke_state)
+        .env("TWOWIN_STATE_COPY", &run1_state_dir)
+        .env("TWOWIN_STATE_COPY_2", &run2_state_dir)
         .env("RESTORE_SETTLE", RELAUNCH_RESTORE_SETTLE)
         .status()
         .expect("failed to spawn `cage` for the headless two-window scenario");
+
+    // Assertions 1-3 read run 1's copy before the status, so a write-side failure that also
+    // breaks the restore is reported as what it is. The copy exists only past run 1's quit.
+    let run1 = run1_state_dir
+        .join(STATE_DB_NAME)
+        .exists()
+        .then(|| frozen_window_state(&run1_state_dir, SMOKE, "run 1's save"));
+    if let Some(saved) = &run1 {
+        let firsts: Vec<Option<String>> = saved
+            .windows
+            .iter()
+            .map(|window| {
+                window
+                    .tabs
+                    .first()
+                    .and_then(|tab| tab.content.root.as_ref())
+                    .and_then(|root| pane_tails(root).into_iter().next().flatten())
+            })
+            .collect();
+        assert_eq!(
+            firsts,
+            [
+                Some(TWOWIN_B_FIRST_FILE.to_owned()),
+                Some(TWOWIN_A_FIRST_FILE.to_owned())
+            ],
+            "{SMOKE}: run 1 saved windows whose first tabs show {firsts:?}; want window B's \
+             ({TWOWIN_B_FIRST_FILE}) first, then window A's ({TWOWIN_A_FIRST_FILE}). B gained \
+             focus last, so it is the frontmost window and the window state lists it first. A \
+             first means the windows were written in the order they were opened: \
+             `state_seam::window_state` did not order them by the stacking order, or no focus \
+             change ever reached it (`Coordinator::on_window_focused` from the window's \
+             `is-active` handler). One entry means the save lost a window; `None` for B means \
+             its tab never left the empty state, so the typed `:cd` did not un-empty it. Frozen \
+             copy: {}",
+            run1_state_dir.display()
+        );
+
+        let tails = |names: &[&str]| -> Vec<Option<String>> {
+            names.iter().map(|name| Some((*name).to_owned())).collect()
+        };
+        let expected: Vec<WindowSummary> = vec![
+            (
+                vec![
+                    (project.clone(), tails(&[TWOWIN_B_FIRST_FILE]), None),
+                    (project.clone(), tails(&[TWOWIN_B_ACTIVE_FILE]), None),
+                ],
+                1,
+            ),
+            (
+                vec![
+                    (project.clone(), tails(&[TWOWIN_A_FIRST_FILE]), None),
+                    (
+                        project.clone(),
+                        tails(&[TWOWIN_A_LEFT_FILE, TWOWIN_A_ZOOMED_FILE]),
+                        Some(PaneRef::Pane(1)),
+                    ),
+                ],
+                1,
+            ),
+        ];
+        let got: Vec<WindowSummary> = saved.windows.iter().map(window_summary).collect();
+        assert_eq!(
+            got,
+            expected,
+            "{SMOKE}: run 1 saved the windows ((directory, panes, zoomed) per tab, active tab) \
+             {got:?}; want {expected:?}. Read it this way: a tab missing means the save dropped \
+             it; a directory other than {project:?} means a tab's Neovim is not where the \
+             scenario put it, and \"\" means that tab was saved as an empty tab; A's second tab \
+             with zoomed None means the zoom was not saved (`layout_snapshot` answers no index), \
+             and Some(Pane(0)) that it names the wrong pane; an active tab of 0 means the \
+             selected tab is not what is written. Frozen copy: {}",
+            run1_state_dir.display()
+        );
+        for (w, window) in saved.windows.iter().enumerate() {
+            assert!(
+                window.frame.x.is_none() && window.frame.y.is_none(),
+                "{SMOKE}: run 1 saved window {w} with the position ({:?}, {:?}); want both null, \
+                 since a Wayland client is never told its position and a number would be read \
+                 back as one. Frozen copy: {}",
+                window.frame.x,
+                window.frame.y,
+                run1_state_dir.display()
+            );
+            for (t, tab) in window.tabs.iter().enumerate() {
+                let kinds_ok = tab.content.root.as_ref().is_some_and(|root| {
+                    root.panes()
+                        .iter()
+                        .all(|pane| matches!(pane, Pane::Edit { .. }))
+                });
+                assert!(
+                    kinds_ok,
+                    "{SMOKE}: run 1 saved window {w}'s tab {t} with the root {:?}; every pane the \
+                     scenario opens is an editor, so each must be saved as kind `edit`. Frozen \
+                     copy: {}",
+                    tab.content.root,
+                    run1_state_dir.display()
+                );
+            }
+        }
+
+        // Assertion 3: §4's first rule picks the frontmost window whose active tab is in the
+        // directory, and both windows' active tabs are.
+        let front = &saved.windows[0];
+        let stored = frozen_project_state(&run1_state_dir, &project);
+        let want = ProjectState {
+            frame: front.frame,
+            tab: front.tabs[front.active_tab].content.clone(),
+        };
+        assert_eq!(
+            stored.as_ref(),
+            Some(&want),
+            "{SMOKE}: run 1 stored the project state {stored:?} for {project:?}; want window B's \
+             active tab ({TWOWIN_B_ACTIVE_FILE}) with B's frame. Window A's active tab \
+             ({TWOWIN_A_LEFT_FILE} beside {TWOWIN_A_ZOOMED_FILE}) means the project state was \
+             chosen from a window order other than the one saved, or from the last window \
+             written; None means no project state was written for a directory with tabs open. \
+             Frozen copy: {}",
+            run1_state_dir.display()
+        );
+    }
+
     assert!(
         status.success(),
         "{SMOKE}: the cage two-window scenario exited unsuccessfully ({status}). Read the exit \
@@ -2844,128 +2853,321 @@ fn two_windows_two_neovims_and_two_saved_sessions_under_cage() {
          sequence here, so a borrow discipline that held at one window is the first suspect.\n\
          Exit 14: run 2's app died before it was ready for input.\n\
          Exit 15: a Neovim readback file never appeared.\n\
-         Exit 16: run 1 wrote NO state.json at all at {} — upstream of anything about windows.\n\
-         Exit 21: run 1 did not have EXACTLY TWO live `nvim` children after the palette \
-         activation. Each window's one tab runs a core of its own, so a count of 1 means \
-         no second window was built (check `ui_action_for(Command::NewWindow)`, \
-         `AppShell::perform`'s arm, and `Coordinator::open_new_window`).\n\
+         Exit 16: run 1 wrote NO wolf.sqlite at all in {} — upstream of anything about windows.\n\
+         Exit 21: run 1 did not have EXACTLY THREE live `nvim` children after the palette \
+         activation. Every tab runs a core of its own, so a count of 2 means no second window \
+         was built (check `ui_action_for(Command::NewWindow)`, `AppShell::perform`'s arm, and \
+         `Coordinator::open_new_window`).\n\
          Exit 22: the new window INHERITED the invoking window's project directory. New Window \
          must build its plan from no saved state and no process cwd.\n\
-         Exit 23: run 2 did not have EXACTLY TWO live `nvim` children after the restore, so \
-         `restore_plans` did not walk every saved window.\n\
-         Exit 24: the focused restored window's `getcwd()` / `bufname('%')` pair is not one of the \
-         two that were saved.\n\
-         Exit 25: run 1's state.json does not carry two windows' worth of tabs — a WRITE-side \
-         failure, caught deliberately before run 2 could mask it as a restore failure.\n\
-         Exit 26: step 4's readback came from the INVOKING window (it names the first project's \
-         file, which only that window has open), so the keystrokes never reached the new one. That \
-         is a focus failure and NOT the inheritance exit 22 reports; the two are separated so \
-         neither can be read as the other.\n\
+         Exit 23: run 2 did not have EXACTLY FOUR live `nvim` children after the restore, so \
+         the restore did not plan every saved window and tab. Assertions 1 and 2 have already \
+         passed on run 1's copy, so this is the restore alone.\n\
+         Exit 26: step 4's readback came from the INVOKING window (it names one of window A's \
+         files), so the keystrokes never reached the new one. That is a focus failure and NOT \
+         the inheritance exit 22 reports.\n\
+         Exit 27: window A's Ctrl+Shift+T did not reach two live Neovims, so nothing below is \
+         about windows.\n\
+         Exit 28: window B's Ctrl+Shift+T did not reach four live Neovims: a New Tab in a window \
+         opened after launch opened no tab.\n\
+         Exit 29 or 30: run 2 was still alive after Ctrl+Shift+Q, or exited non-zero, as 12 and \
+         13 are for run 1.\n\
+         Exit 31: run 2 left no wolf.sqlite, so assertion 5's evidence is missing.\n\
          The scenario's own stderr names the candidate causes for each in order.",
-        smoke_state_file.display()
+        smoke_state.display()
     );
-
-    // --- Assertions 1-4: RUN 1's frozen save holds BOTH sessions, in order -----
-    let saved = load_state(&run1_state_dir).unwrap_or_else(|| {
+    let run1 = run1.unwrap_or_else(|| {
         panic!(
-            "{SMOKE}: wolf_core::load_state could not parse the frozen copy of run 1's state at \
-             {}. `load_state` is silently-ignore, so a None here means the file is absent, \
-             unreadable, malformed, or carries an unsupported version — the scenario already \
-             proved it was non-empty and that it held two windows' worth of tabs (it exits 16 and \
-             25 otherwise), so suspect the shape rather than the contents.",
-            run1_state_file.display()
+            "{SMOKE}: the scenario exited 0 but froze no copy of run 1's save in {}",
+            run1_state_dir.display()
         )
     });
-    assert_eq!(
-        saved.windows.len(),
-        2,
-        "{SMOKE}: run 1's state.json carries {} window(s), not 2. This is the smoke's whole claim \
-         on the write side. ONE means the tree lost a window between the two windows' subtrees and \
-         the file: `Coordinator::assemble` collects every live window's cached subtree in registry \
-         order, and a window that contributed nothing — its `may_snapshot` gate shut and no cached \
-         subtree ever gathered — drops out of the tree silently. ZERO means \
-         `state_seam::snapshot_state` answered None, which the coordinator turns into \"commit \
-         nothing\", so a zero here is a file older than the run. MORE than two means a window was \
-         registered twice or a closed one was never deregistered. The scenario's exit-25 guard \
-         already counted two `\"tabs\"` lines in this same file, so a disagreement between the two \
-         means the tree's SHAPE is wrong rather than its size. File: {}",
-        saved.windows.len(),
-        run1_state_file.display()
+
+    // Assertion 4: the restore put window B in front, on its saved active tab.
+    let raw = read_readback(&run2_readback, SMOKE);
+    let mut lines = raw.lines().map(str::trim);
+    let (r2_cwd, r2_buf) = (
+        lines.next().unwrap_or_default(),
+        lines.next().unwrap_or_default(),
+    );
+    assert!(
+        r2_cwd == project && r2_buf == TWOWIN_B_ACTIVE_FILE,
+        "{SMOKE}: after the relaunch the focused window's Neovim is at {r2_cwd:?} showing \
+         {r2_buf:?}; want {project:?} showing {TWOWIN_B_ACTIVE_FILE}, window B's saved active \
+         tab. {TWOWIN_A_ZOOMED_FILE} or {TWOWIN_A_LEFT_FILE} means window A was mapped last, so \
+         the restore did not map the saved frontmost window last; {TWOWIN_B_FIRST_FILE} means \
+         window B came back on its first tab rather than its saved active one; an `Untitled` \
+         buffer means the focused tab's saved root was never rebuilt. Readback kept at {}.",
+        run2_readback.display()
     );
 
-    for (index, dir_name, file_name) in [
-        (0_usize, TEMP_CWD_BASENAME, TWOWIN_FIRST_FILE),
-        (1_usize, TWOWIN_SUBDIR, TWOWIN_SECOND_NAME),
-    ] {
-        let window = &saved.windows[index];
-        assert_eq!(
-            window.tabs.len(),
-            1,
-            "{SMOKE}: run 1's window {index} carries {} tab(s), not 1. `window_subtree` writes \
-             every tab the window contributes and this scenario opens one per window, so anything \
-             else means the subtree gathered a tab the window does not have. File: {}",
-            window.tabs.len(),
-            run1_state_file.display()
-        );
-        let tab = &window.tabs[0];
-
-        // The last component only, since /tmp may resolve through a symlink; the two projects differ there.
-        let cwd_name = Path::new(&tab.cwd).file_name().and_then(OsStr::to_str);
-        assert_eq!(
-            cwd_name,
-            Some(dir_name),
-            "{SMOKE}: run 1's window {index} persisted cwd {:?}, whose final component is not \
-             {dir_name:?}. `None` means the cwd is the empty string, which is what \
-             `state_seam::snapshot_cwd` writes for a window still in the EMPTY STATE however far \
-             its Neovim has wandered — for window 1 that means the typed `:cd` never re-rooted the \
-             window, so `settle_reroot` never called `set_empty_state(false)`. The OTHER \
-             project's name here means the two windows' subtrees were assembled in the wrong \
-             ORDER, and since restore is positional that hands each window the other's session on \
-             the next launch. File: {}",
-            tab.cwd,
-            run1_state_file.display()
-        );
-
-        match tab.layout.as_ref().and_then(leaf_fields) {
-            Some(LeafFields { path, preview, .. }) => {
-                assert!(
-                    !preview,
-                    "{SMOKE}: run 1's window {index} persisted its lone leaf with `preview: true`, \
-                     but no scenario step opens a preview. A true here makes the restore call \
-                     `wolf_preview_file` instead of `:edit`. File: {}",
-                    run1_state_file.display()
-                );
-                let leaf_name = Path::new(path).file_name().and_then(OsStr::to_str);
-                assert_eq!(
-                    leaf_name,
-                    Some(file_name),
-                    "{SMOKE}: run 1's window {index} persisted a leaf naming {path:?}, whose file \
-                     name is not {file_name:?}. The comparison is on the file NAME rather than the \
-                     whole path deliberately (/tmp may resolve through a symlink), but the name is \
-                     exact — and the two fixtures are deliberately different names, so the OTHER \
-                     window's file here means the subtrees were assembled in the wrong order. \
-                     `Untitled.md` means that window's `:e` never landed before the quit. File: {}",
-                    run1_state_file.display()
-                );
-            }
-            None => panic!(
-                "{SMOKE}: run 1's window {index} persisted `layout: {:?}` where a single \
-                 named leaf was due. **`None` is the failure that matters**: a tab's open buffer \
-                 paths have NO persistence channel of their own — they ride only inside \
-                 `TabState::layout`'s leaves — so a tree that carries both windows and neither \
-                 layout satisfies every count in this test and still restores two EMPTY windows. \
-                 For window 1 specifically, a `None` is also what a suppressed-by-arity save \
-                 produces; `state_seam::persistable_layout` must gate on \
-                 `pane_layout::is_empty_leaf` and never on a leaf count. A SPLIT here would \
-                 instead mean the scenario somehow split a pane. File: {}",
-                tab.layout,
-                run1_state_file.display()
-            ),
-        }
-    }
+    // Assertion 5: run 2's save repeats run 1's, which also re-proves the zoom was restored.
+    let run2 = frozen_window_state(&run2_state_dir, SMOKE, "run 2's save");
+    let first: Vec<WindowSummary> = run1.windows.iter().map(window_summary).collect();
+    let second: Vec<WindowSummary> = run2.windows.iter().map(window_summary).collect();
+    assert_eq!(
+        second,
+        first,
+        "{SMOKE}: run 2 saved the windows {second:?}, where run 1 saved {first:?} (each \
+         ((directory, panes, zoomed) per tab, active tab)). A's second tab unzoomed here alone \
+         means run 2 restored the layout but not its zoom, so its own gather saved it \
+         unzoomed: `apply_layout_rebuild` applied no `ZoomEvent::Restore`. The windows in the \
+         other order means run 2's stacking order was not seeded from the plans, or the \
+         window mapped last was not the saved frontmost. A different active tab means the \
+         restore selected another tab. Frozen copies: {} and {}",
+        run1_state_dir.display(),
+        run2_state_dir.display()
+    );
 }
 
-/// A dragged divider's weights reach `state.json` and come back on the next launch.
+// Stale-state fixtures: no capture is taken, so the names serve the generic fixture loop only.
+
+/// The file the planted `state.json` names as its one tab's pane. It exists in the temp cwd,
+/// so an import of the planted file would have a real file to restore.
+pub(crate) const STALE_STATE_FILE: &str = "sjplanted.md";
+
+/// Name of the file the launched window's Neovim writes two lines into: its window count
+/// and the tail of `bufname('%')`.
+pub(crate) const STALE_STATE_READBACK_NAME: &str = "sjread.txt";
+
+/// The legacy state files of `specs/application-state.md` §1 "Files Wolf removes" that
+/// [`a_stale_state_json_is_deleted_at_launch_under_cage`] plants, each a well-formed file of
+/// the old format.
+const STALE_STATE_NAMES: [&str; 2] = ["state.json", "state.json.tmp"];
+
+/// The scenario of [`a_stale_state_json_is_deleted_at_launch_under_cage`]: one launch into a
+/// state directory holding a planted `state.json` and `state.json.tmp`, a check that both
+/// are gone once the app is ready, a readback of what the window shows, and a quit.
+///
+/// ## Exit codes
+///
+/// | code | meaning |
+/// | --- | --- |
+/// | `11` | the app died before it was ready for input |
+/// | `12` | the app was still alive after `:qa` |
+/// | `13` | the app exited non-zero |
+/// | `15` | the Neovim readback never appeared |
+/// | `16` | the app left no `wolf.sqlite` |
+/// | `21` | `state.json` still exists once the app is ready |
+/// | `22` | `state.json.tmp` still exists once the app is ready |
+const STALE_STATE_SCENARIO: &str = r#"
+set -eu
+
+WAIT_INTERVAL=0.2
+QUIT_TRIES=75
+FILE_TRIES=100
+
+cleanup() {
+    set +e
+    if [ -n "${app_pid:-}" ]; then
+        kill "$app_pid" 2>/dev/null
+        wait "$app_pid" 2>/dev/null
+    fi
+}
+trap cleanup EXIT INT TERM HUP
+
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome stale-state smoke: readback file $f never appeared (or stayed empty)." >&2
+    return 1
+}
+
+"$WOLF_BIN" &
+app_pid=$!
+wait_ready "$app_pid" 11 "wolf-gnome stale-state smoke"
+
+# The store opens before the first window is built, so both files are gone by now.
+if [ -e "$STALE_STATE_DIR/state.json" ]; then
+    echo "wolf-gnome stale-state smoke: $STALE_STATE_DIR/state.json survived the launch." >&2
+    echo "  The store's open deletes the legacy files: suspect state.json missing from its" >&2
+    echo "  removal list, or the app opening no store in this directory." >&2
+    exit 21
+fi
+if [ -e "$STALE_STATE_DIR/state.json.tmp" ]; then
+    echo "wolf-gnome stale-state smoke: $STALE_STATE_DIR/state.json.tmp survived the launch," >&2
+    echo "  while state.json did not: the removal list names the one and not the other." >&2
+    exit 22
+fi
+
+wtype -- ":call writefile([printf('%d', winnr('\$')), fnamemodify(bufname('%'), ':t')], '$STALE_READBACK')"
+wtype -k Return
+wait_file "$STALE_READBACK" || exit 15
+
+wtype -- ":qa"
+wtype -k Return
+tries=0
+gone=0
+while [ "$tries" -lt "$QUIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        gone=1
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+if [ "$gone" -ne 1 ]; then
+    echo "wolf-gnome stale-state smoke: the app (pid $app_pid) is still alive after :qa." >&2
+    exit 12
+fi
+rc=0
+wait "$app_pid" || rc=$?
+if [ "$rc" -ne 0 ]; then
+    echo "wolf-gnome stale-state smoke: the app (pid $app_pid) exited $rc, not 0." >&2
+    exit 13
+fi
+app_pid=
+
+if ! freeze_state "$STALE_STATE_DIR" "$STALE_STATE_COPY"; then
+    echo "wolf-gnome stale-state smoke: the app left no wolf.sqlite in $STALE_STATE_DIR." >&2
+    exit 16
+fi
+
+exit 0
+"#;
+
+/// **A stale `state.json` and `state.json.tmp` in the state directory are deleted at
+/// launch, and nothing of them is restored.**
+///
+/// One launch in one cage. The smoke's state directory holds a well-formed file of the old
+/// format under each of [`STALE_STATE_NAMES`]: one window whose one tab is at the temp cwd
+/// and shows [`STALE_STATE_FILE`], which exists there, so an import would have a whole
+/// window to restore. The scenario exits with its own code when either file is still there
+/// once the app is ready; the app opens its store, and so deletes them, before it builds a
+/// window.
+///
+/// ## Premises
+///
+/// Two observations confirm the launch imported nothing, and no edit to the deletion can
+/// make either fail, since nothing reads the planted files:
+///
+/// - The launched window holds one pane, on a buffer other than [`STALE_STATE_FILE`].
+/// - The save the app leaves at its quit names [`STALE_STATE_FILE`] in no pane.
+///
+/// ## Falsifiers (each run alone)
+///
+/// | # | edit | predicted red |
+/// | --- | --- | --- |
+/// | S2a | remove `"state.json"` from `db.rs`'s `LEGACY_FILE_NAMES` | exit 21 |
+/// | S2b | remove `"state.json.tmp"` from `LEGACY_FILE_NAMES` | exit 22 |
+#[test]
+fn a_stale_state_json_is_deleted_at_launch_under_cage() {
+    const SMOKE: &str = "a_stale_state_json_is_deleted_at_launch_under_cage";
+
+    let runtime_dir = require_smoke_env();
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    let cwd = make_temp_cwd();
+    write_relaunch_fixtures(SMOKE, &cwd, &[(STALE_STATE_FILE, "# SJPLANTED")]);
+    let project = std::fs::canonicalize(&cwd)
+        .unwrap_or_else(|e| panic!("{SMOKE}: failed to canonicalize {}: {e}", cwd.display()));
+
+    // The old format: a version header and a tree of windows, each tab with its cwd and layout.
+    let old = serde_json::json!({
+        "version": 1,
+        "windows": [{
+            "x": 0.0,
+            "y": 0.0,
+            "width": 1280.0,
+            "height": 720.0,
+            "tabs": [{
+                "cwd": project.to_string_lossy(),
+                "sidebar_visible": true,
+                "layout": {
+                    "type": "leaf",
+                    "path": project.join(STALE_STATE_FILE).to_string_lossy(),
+                    "preview": false,
+                },
+            }],
+        }],
+    });
+    let text = serde_json::to_string_pretty(&old)
+        .unwrap_or_else(|e| panic!("{SMOKE}: failed to render the old state file: {e}"));
+    let smoke_state = smoke_state_dir(&cwd);
+    for name in STALE_STATE_NAMES {
+        let path = smoke_state.join(name);
+        std::fs::write(&path, &text)
+            .unwrap_or_else(|e| panic!("{SMOKE}: failed to plant {}: {e}", path.display()));
+    }
+
+    let frozen = frozen_state_dir(&runtime_dir, "wolf_gnome_stale_state_copy", SMOKE);
+    let readback = cwd.join(STALE_STATE_READBACK_NAME);
+    clear_evidence(&readback, SMOKE);
+
+    let status = cage_command(STALE_STATE_SCENARIO, &cwd, &runtime_dir)
+        .env("WOLF_BIN", bin)
+        .env("STALE_STATE_DIR", &smoke_state)
+        .env("STALE_STATE_COPY", &frozen)
+        .env("STALE_READBACK", &readback)
+        .status()
+        .expect("failed to spawn `cage` for the headless stale-state scenario");
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage stale-state scenario exited unsuccessfully ({status}). Exit 21: \
+         state.json was still in {} once the app was ready, so the store's open did not delete \
+         it. Exit 22: state.json.tmp was, while state.json was not, so the open deletes one and \
+         not the other. Exit 11: the app died before it was ready, which a launch that tried to \
+         read the planted file and failed would also do. Exit 12 or 13: the quit hung or was \
+         not clean. Exit 15: the Neovim readback never appeared. Exit 16: the app left no \
+         wolf.sqlite. Exit 40: the app never reported ready.",
+        smoke_state.display()
+    );
+
+    // Premise: the window shows one pane, on none of the planted file.
+    let raw = read_readback(&readback, SMOKE);
+    let mut lines = raw.lines().map(str::trim);
+    let (windows, buffer) = (
+        lines.next().unwrap_or_default(),
+        lines.next().unwrap_or_default(),
+    );
+    assert!(
+        windows == "1" && buffer != STALE_STATE_FILE,
+        "{SMOKE}: the launched window's Neovim reports {windows} window(s) on {buffer:?}; want one \
+         window on a buffer other than {STALE_STATE_FILE}. {STALE_STATE_FILE} means the launch \
+         restored the planted state.json's tab, which nothing may import. Readback kept at {}.",
+        readback.display()
+    );
+
+    // Premise: nothing of the planted file reached the save.
+    let saved = frozen_window_state(&frozen, SMOKE, "the save at the quit");
+    let planted: Vec<(usize, usize)> = saved
+        .windows
+        .iter()
+        .enumerate()
+        .flat_map(|(w, window)| {
+            window
+                .tabs
+                .iter()
+                .enumerate()
+                .map(move |(t, tab)| (w, t, tab))
+        })
+        .filter(|(_, _, tab)| {
+            tab.content.root.as_ref().is_some_and(|root| {
+                pane_tails(root)
+                    .iter()
+                    .any(|tail| tail.as_deref() == Some(STALE_STATE_FILE))
+            })
+        })
+        .map(|(w, t, _)| (w, t))
+        .collect();
+    assert!(
+        planted.is_empty(),
+        "{SMOKE}: the save at the quit shows {STALE_STATE_FILE} in the (window, tab)s \
+         {planted:?}. No step of the scenario opens it, so the planted state.json was imported. \
+         Frozen copy: {}",
+        frozen.display()
+    );
+}
+
+/// A dragged divider's weights reach the saved window state and come back on the next
+/// launch.
 ///
 /// The round trip, driven by a weight that is NOT an equal share — which is what
 /// makes "the saved weights were applied" distinguishable from "the equal-share
@@ -2978,9 +3180,9 @@ fn two_windows_two_neovims_and_two_saved_sessions_under_cage() {
 ///
 /// ## What it asserts
 ///
-/// 1. **The save side, on the FILE.** The `state.json` RUN 1 wrote — frozen by the
-///    scenario before run 2 can write over it — carries a `Vertical` split of two
-///    named leaves whose weights sum to 1 and differ by at least
+/// 1. **The save side, on the DATABASE.** The window state RUN 1 wrote — frozen by
+///    the scenario before run 2 can write over it — carries a `Vertical` layout of two
+///    named panes whose weights sum to 1 and differ by at least
 ///    [`MIN_WEIGHT_GAP`]. Only a drag writes such a vector, through
 ///    `PaneTree::set_divider_fraction`; `layout.rs`'s other writers produce `1/n` and
 ///    `[0.5, 0.5]`.
@@ -3124,19 +3326,12 @@ fn dragged_divider_weights_survive_relaunch_under_cage() {
     );
 
     // The smoke's own state dir — the SAME one `cage_command` hands the app as
-    // WOLF_STATE_DIR, so the two runs share one `state.json`.
-    let smoke_state_file = smoke_state_dir(&cwd).join(STATE_FILE_NAME);
+    // WOLF_STATE_DIR, so the two runs share one `wolf.sqlite`.
+    let smoke_state = smoke_state_dir(&cwd);
 
-    // Freezes run 1's save. A directory, because `load_state` takes one; under XDG_RUNTIME_DIR so the
-    // sidebar never lists it.
-    let run1_state_dir = runtime_dir.join("wolf_gnome_divider_run1_state");
-    std::fs::create_dir_all(&run1_state_dir).unwrap_or_else(|e| {
-        panic!(
-            "{SMOKE}: failed to create the run-1 state snapshot dir {}: {e}",
-            run1_state_dir.display()
-        )
-    });
-    let run1_state_file = run1_state_dir.join(STATE_FILE_NAME);
+    // Freezes run 1's save.
+    let run1_state_dir = frozen_state_dir(&runtime_dir, "wolf_gnome_divider_run1_state", SMOKE);
+    let run1_state_file = run1_state_dir.join(STATE_DB_NAME);
 
     let w_base = cwd.join(DIVIDER_W0_NAME);
     let w_drag = cwd.join(DIVIDER_W1_NAME);
@@ -3145,14 +3340,7 @@ fn dragged_divider_weights_survive_relaunch_under_cage() {
     // watches the cwd.
     let probe = runtime_dir.join("wolf_gnome_divider_relaunch_probe.txt");
     let out_png = runtime_dir.join("wolf_gnome_divider_relaunch_smoke.png");
-    for path in [
-        &w_base,
-        &w_drag,
-        &w_restored,
-        &probe,
-        &out_png,
-        &run1_state_file,
-    ] {
+    for path in [&w_base, &w_drag, &w_restored, &probe, &out_png] {
         clear_evidence(path, SMOKE);
     }
 
@@ -3178,8 +3366,8 @@ fn dragged_divider_weights_survive_relaunch_under_cage() {
         .env("D_HI", seed_hi.to_string())
         .env("BISECT_STEPS", BISECT_STEPS.to_string())
         .env("RELAUNCH_DRAG_PX", DIVIDER_RELAUNCH_DRAG_PX.to_string())
-        .env("DIV_STATE_SRC", &smoke_state_file)
-        .env("DIV_STATE_COPY", &run1_state_file)
+        .env("DIV_STATE_SRC", &smoke_state)
+        .env("DIV_STATE_COPY", &run1_state_dir)
         .status()
         .expect("failed to spawn `cage` for the headless divider relaunch scenario");
 
@@ -3200,7 +3388,7 @@ fn dragged_divider_weights_survive_relaunch_under_cage() {
          Exit 16: run 1 was still alive after `:qa`.\n\
          Exit 17: run 1 exited NON-ZERO — it went away, but not cleanly, which implicates \
          `Coordinator::on_window_closing`.\n\
-         Exit 18: run 1 wrote NO state.json at all at {}, which is upstream of anything about \
+         Exit 18: run 1 wrote NO wolf.sqlite at all in {}, which is upstream of anything about \
          weights.\n\
          Exit 19: run 2's app died before it was ready for input.\n\
          Exit 21: the bisection seeds ({seed_lo}, {seed_hi}) did not straddle the divider; the \
@@ -3208,7 +3396,7 @@ fn dragged_divider_weights_survive_relaunch_under_cage() {
          `click_positions_the_cursor_under_cage` fails on its own if the pane origin moved.\n\
          Screenshot expected at {}.\n\
          wolf-pointer-inject stderr was:\n{helper_err}",
-        smoke_state_file.display(),
+        smoke_state.display(),
         out_png.display()
     );
 
@@ -3286,35 +3474,27 @@ fn dragged_divider_weights_survive_relaunch_under_cage() {
     );
 
     // --- Assertion 1: RUN 1's saved weights are NOT equal shares ---------------
-    let saved = load_state(&run1_state_dir).unwrap_or_else(|| {
-        panic!(
-            "{SMOKE}: wolf_core::load_state could not parse the frozen copy of run 1's state at {}. \
-             `load_state` is silently-ignore, so a None means the file is absent, unreadable, \
-             malformed or of an unsupported version — the scenario already proved it was non-empty \
-             (it exits 18 otherwise), so suspect the shape.",
-            run1_state_file.display()
-        )
-    });
+    let saved = frozen_window_state(&run1_state_dir, SMOKE, "run 1's save");
     let window = saved.windows.first().unwrap_or_else(|| {
         panic!(
-            "{SMOKE}: run 1's state.json carries NO windows at all, so nothing was persisted. File: \
-             {}",
+            "{SMOKE}: run 1's window state carries NO windows at all, so nothing was persisted. \
+             File: {}",
             run1_state_file.display()
         )
     });
     let tab = window.tabs.first().unwrap_or_else(|| {
         panic!(
-            "{SMOKE}: run 1's persisted window carries NO tabs. `snapshot_state` writes exactly \
-             one. File: {}",
+            "{SMOKE}: run 1's persisted window carries NO tabs. `state_seam::window_entry` \
+             contributes no window without a tab. File: {}",
             run1_state_file.display()
         )
     });
-    match &tab.layout {
-        Some(PaneNode::Split {
+    match &tab.content.root {
+        Some(Node::Layout(Layout {
             orientation,
             weights,
             children,
-        }) => {
+        })) => {
             assert_eq!(
                 *orientation,
                 PaneOrientation::Vertical,
@@ -3326,10 +3506,10 @@ fn dragged_divider_weights_survive_relaunch_under_cage() {
             assert_eq!(
                 tails,
                 vec![Some(DIVIDER_FILE_LEFT), Some(DIVIDER_FILE_RIGHT)],
-                "{SMOKE}: run 1 persisted leaves naming {tails:?}, not the two fixture files in \
+                "{SMOKE}: run 1 persisted panes naming {tails:?}, not the two fixture files in \
                  left-to-right order. The weights below are parallel to THIS child order, so they \
-                 cannot be read at all until it is right. A `None` entry is a nested split where a \
-                 leaf belongs; the comparison is on the file NAME rather than the whole path \
+                 cannot be read at all until it is right. A `None` entry is a nested layout where a \
+                 pane belongs; the comparison is on the file NAME rather than the whole path \
                  because /tmp may resolve through a symlink. File: {}",
                 run1_state_file.display()
             );
@@ -3366,11 +3546,11 @@ fn dragged_divider_weights_survive_relaunch_under_cage() {
             );
         }
         other => panic!(
-            "{SMOKE}: run 1 persisted `layout: {other:?}` for two side-by-side panes, not a \
-             two-child Vertical split. A `None` means nothing was persisted at all (the snapshot \
-             gate refused every wake) and a `Leaf` means the split never reached the pane tree — \
-             either way this is the topology failure `pane_layout_survives_relaunch_under_cage` \
-             owns, not a weight failure. File: {}",
+            "{SMOKE}: run 1 persisted `root: {other:?}` for two side-by-side panes, not a \
+             two-child Vertical layout. A `None` means the tab was saved as an empty tab, and a \
+             lone pane means the split never reached the pane tree — either way this is the \
+             topology failure `pane_layout_survives_relaunch_under_cage` owns, not a weight \
+             failure. File: {}",
             run1_state_file.display()
         ),
     }

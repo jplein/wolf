@@ -392,7 +392,7 @@ const STALL_RPC_TIMEOUT_MS: &str = "800";
 /// different failures and must not fold into one. A scenario that calls only that
 /// function therefore cannot reach `16`, `17`, `18` or `20` from this fragment at
 /// all, which is what lets `TWOWIN_SCENARIO` reuse `16` for the state-persistence
-/// table's meaning ("run 1 wrote no `state.json`") without ambiguity.
+/// table's meaning ("run 1 wrote no `wolf.sqlite`") without ambiguity.
 const FIND_NVIM_PID_HELPER: &str = r#"
 # How many WAIT_INTERVAL polls make up the "no respawn" quiet window. 20 * 0.2s =
 # 4s, matching the interval the feature's manual sanity run used. A timing knob
@@ -2256,7 +2256,7 @@ pub(crate) const TABCRASH_READ_NAME: &str = "cr_after.txt";
 /// Ctrl+Shift+T starts tab 2's Neovim, whose pid is the other live `nvim` child, and tab 2
 /// opens [`TABCRASH_FILE_B`]. With tab 2 selected, tab 1's Neovim is SIGKILLed. A third pid
 /// must appear, tab 2's must stay live and the app with it; then tab 2's buffer is read back,
-/// `:qa` saves the session and `state.json` is frozen.
+/// `:qa` saves the session and the state database is frozen.
 ///
 /// ## Exit codes
 ///
@@ -2273,7 +2273,7 @@ pub(crate) const TABCRASH_READ_NAME: &str = "cr_after.txt";
 /// | `22` | no live `nvim` child other than tab 1's could be named as tab 2's |
 /// | `23` | no new Neovim appeared after the kill: the background tab was not restarted |
 /// | `24` | tab 2's Neovim died with tab 1's, or was closed by its restart |
-/// | `25` | the app wrote no `state.json` |
+/// | `25` | the app wrote no `wolf.sqlite` |
 const TABCRASH_SCENARIO: &str = r#"
 set -eu
 
@@ -2426,11 +2426,10 @@ if [ "$rc" -ne 0 ]; then
     exit 13
 fi
 
-if [ ! -s "$TABCRASH_STATE_SRC" ]; then
-    echo "wolf-gnome per-tab crash smoke: the app wrote no state.json at $TABCRASH_STATE_SRC." >&2
+if ! freeze_state "$TABCRASH_STATE_SRC" "$TABCRASH_STATE_COPY"; then
+    echo "wolf-gnome per-tab crash smoke: the app wrote no wolf.sqlite in $TABCRASH_STATE_SRC." >&2
     exit 25
 fi
-cp "$TABCRASH_STATE_SRC" "$TABCRASH_STATE_COPY"
 exit 0
 "#;
 
@@ -2471,20 +2470,10 @@ fn one_tabs_neovim_crash_restarts_only_that_tab_under_cage() {
     );
 
     let read = cwd.join(TABCRASH_READ_NAME);
-    let state_src = smoke_state_dir(&cwd).join(STATE_FILE_NAME);
-    // Under XDG_RUNTIME_DIR, so the sidebar never lists it. A directory, because `load_state`
-    // takes one.
-    let state_dir = runtime_dir.join("wolf_gnome_tabcrash_state");
-    std::fs::create_dir_all(&state_dir).unwrap_or_else(|e| {
-        panic!(
-            "{SMOKE}: failed to create the state snapshot dir {}: {e}",
-            state_dir.display()
-        )
-    });
-    let state_copy = state_dir.join(STATE_FILE_NAME);
-    for path in [&read, &state_copy] {
-        clear_evidence(path, SMOKE);
-    }
+    let state_src = smoke_state_dir(&cwd);
+    let state_dir = frozen_state_dir(&runtime_dir, "wolf_gnome_tabcrash_state", SMOKE);
+    let state_copy = state_dir.join(STATE_DB_NAME);
+    clear_evidence(&read, SMOKE);
 
     let status = cage_command(&with_nvim_pid_helper(TABCRASH_SCENARIO), &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
@@ -2492,7 +2481,7 @@ fn one_tabs_neovim_crash_restarts_only_that_tab_under_cage() {
         .env("TABCRASH_FILE_B", TABCRASH_FILE_B)
         .env("TABCRASH_READ", &read)
         .env("TABCRASH_STATE_SRC", &state_src)
-        .env("TABCRASH_STATE_COPY", &state_copy)
+        .env("TABCRASH_STATE_COPY", &state_dir)
         .status()
         .expect("failed to spawn `cage` for the headless per-tab crash scenario");
     assert!(
@@ -2513,7 +2502,7 @@ fn one_tabs_neovim_crash_restarts_only_that_tab_under_cage() {
          not schedule its automatic restart, or schedules it only for the selected tab.\n\
          Exit 24: tab 2's Neovim died with tab 1's or was closed by tab 1's restart: the restart \
          touched a tab other than its own.\n\
-         Exit 25: no state.json was written at {}.",
+         Exit 25: no wolf.sqlite was written in {}.",
         state_src.display()
     );
 
@@ -2529,13 +2518,7 @@ fn one_tabs_neovim_crash_restarts_only_that_tab_under_cage() {
     );
 
     // Assertion 4: both tabs, in order, each holding its own file.
-    let saved = load_state(&state_dir).unwrap_or_else(|| {
-        panic!(
-            "{SMOKE}: wolf_core::load_state could not parse the frozen state at {}. The scenario \
-             proved it was non-empty, so suspect its shape.",
-            state_copy.display()
-        )
-    });
+    let saved = frozen_window_state(&state_dir, SMOKE, "the save at the quit");
     assert_eq!(
         saved.windows.len(),
         1,
@@ -2548,7 +2531,7 @@ fn one_tabs_neovim_crash_restarts_only_that_tab_under_cage() {
         .tabs
         .iter()
         .map(|tab| {
-            tab.layout.as_ref().and_then(leaf_fields).map(|leaf| {
+            tab.content.root.as_ref().and_then(leaf_fields).map(|leaf| {
                 Path::new(leaf.path)
                     .file_name()
                     .and_then(OsStr::to_str)
@@ -2564,8 +2547,8 @@ fn one_tabs_neovim_crash_restarts_only_that_tab_under_cage() {
     assert_eq!(
         leaves,
         want,
-        "{SMOKE}: the saved session's tabs carry the lone leaves {leaves:?}, not {want:?}. One \
-         tab means the restart collapsed the window to a single tab. `Untitled.md` (or no leaf) \
+        "{SMOKE}: the saved session's tabs carry the lone panes {leaves:?}, not {want:?}. One \
+         tab means the restart collapsed the window to a single tab. `Untitled.md` (or no pane) \
          in tab 0 means the restarted Neovim never reopened {TABCRASH_FILE_A:?}: the captured \
          files went to another tab's core, or nowhere. Tab 1 without {TABCRASH_FILE_B:?} means \
          the selected tab lost its file to the other tab's restart. File: {}",

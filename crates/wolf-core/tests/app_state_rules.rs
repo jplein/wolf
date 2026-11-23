@@ -9,7 +9,9 @@
 //! - §5's pane rules, through `restored_tab`: a missing edit file or preview source restores as
 //!   an empty edit pane in the same position, a zoom on such a pane or one that would hide
 //!   nothing is dropped, and a focused pane keeps the focus.
-//! - The document `tab_rebuild_spec` renders for the captive Neovim's `wolf_rebuild_layout`.
+//! - The document `tab_rebuild_spec` renders for the captive Neovim's `wolf_rebuild_layout`:
+//!   its leaves numbered depth-first through nested layouts, as a `PaneRef` counts them, and a
+//!   non-finite weight rendered as `0.0`, so the split keeps its shape.
 //!
 //! The existence checks run against real files in a tempdir. Windows are built in code, with
 //! directories named after their role (`D` the one asked about, `X` and `Y` others).
@@ -563,5 +565,107 @@ fn the_rebuild_document_carries_kind_cursor_and_zoom() {
         tab_rebuild_spec(&TabContent::default()),
         None,
         "premise: a tab with no root has no rebuild document"
+    );
+}
+
+/// The leaves of the rebuild document `node`, depth-first, as `(path, zoomed)`.
+fn doc_leaves(node: &Value, out: &mut Vec<(String, Option<bool>)>) {
+    let map = object(node, "a rebuild document node");
+    if map.get("leaf").and_then(Value::as_bool) == Some(true) {
+        let path = map
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or("<no path>");
+        out.push((path.to_owned(), map.get("zoomed").and_then(Value::as_bool)));
+        return;
+    }
+    let children = map
+        .get("children")
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("a split must carry children; node: {node}"));
+    for child in children {
+        doc_leaves(child, out);
+    }
+}
+
+#[test]
+fn the_rebuild_document_numbers_nested_panes_depth_first() {
+    let tab = TabContent {
+        root: Some(layout(
+            PaneOrientation::Vertical,
+            vec![0.3, 0.4, 0.3],
+            vec![
+                edit("/srv/nest/a.md"),
+                layout(
+                    PaneOrientation::Horizontal,
+                    vec![0.5, 0.5],
+                    vec![edit("/srv/nest/b.md"), preview("/srv/nest/c.md", 0.0)],
+                ),
+                terminal("/srv/nest/d"),
+            ],
+        )),
+        zoomed: Some(PaneRef::Pane(3)),
+        ..TabContent::default()
+    };
+
+    let spec = tab_rebuild_spec(&tab).expect("a tab with a root must render a rebuild document");
+    let doc: Value = serde_json::from_str(&spec)
+        .unwrap_or_else(|err| panic!("the rebuild document must be JSON: {err}\n{spec}"));
+    let mut leaves = Vec::new();
+    doc_leaves(&doc, &mut leaves);
+    let paths: Vec<&str> = leaves.iter().map(|(p, _)| p.as_str()).collect();
+    assert_eq!(
+        paths,
+        [
+            "/srv/nest/a.md",
+            "/srv/nest/b.md",
+            "/srv/nest/c.md",
+            "/srv/nest/d"
+        ],
+        "the document must hold the four panes in depth-first order, the nested split's two \
+         between a and d; document: {doc}"
+    );
+    let zoomed: Vec<Option<bool>> = leaves.iter().map(|(_, z)| *z).collect();
+    assert_eq!(
+        zoomed,
+        [Some(false), Some(false), Some(false), Some(true)],
+        "zoomed: Pane(3) names d, the fourth pane depth-first, so d alone must be marked. No \
+         leaf marked means the count restarts inside the nested split, or is not carried past \
+         it; b or c marked means the nested panes are numbered from another base. Document: \
+         {doc}"
+    );
+}
+
+#[test]
+fn a_non_finite_weight_renders_as_zero() {
+    let tab = content(Some(layout(
+        PaneOrientation::Horizontal,
+        vec![f64::NAN, f64::INFINITY],
+        vec![edit("/srv/weights/top.md"), edit("/srv/weights/bottom.md")],
+    )));
+
+    let spec = tab_rebuild_spec(&tab).expect("a tab with a root must render a rebuild document");
+    let doc: Value = serde_json::from_str(&spec)
+        .unwrap_or_else(|err| panic!("the rebuild document must be JSON: {err}\n{spec}"));
+    let split = object(&doc, "the rebuild document's root");
+    assert_eq!(
+        split.get("weights"),
+        Some(&serde_json::json!([0.0, 0.0])),
+        "NaN and infinity must render as 0.0; nulls mean the weights went out unsanitized, \
+         which JSON cannot hold, and a missing key means the split lost its weights. \
+         Document: {doc}"
+    );
+    assert_eq!(
+        split.get("orientation").and_then(Value::as_str),
+        Some("h"),
+        "the split must keep its orientation; document: {doc}"
+    );
+    let mut leaves = Vec::new();
+    doc_leaves(&doc, &mut leaves);
+    let paths: Vec<&str> = leaves.iter().map(|(p, _)| p.as_str()).collect();
+    assert_eq!(
+        paths,
+        ["/srv/weights/top.md", "/srv/weights/bottom.md"],
+        "the split must keep both panes in order; document: {doc}"
     );
 }

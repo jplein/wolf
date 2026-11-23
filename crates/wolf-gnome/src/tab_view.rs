@@ -42,10 +42,18 @@
 //! ## Restore
 //!
 //! `window::build` opens every planned tab before it builds any other widget,
-//! each with its own Neovim and its saved layout queued on its pane view through
-//! [`crate::pane_view::PaneHandle::request_layout_rebuild`]. Each layout is
+//! each with its own Neovim and its saved tab, as
+//! `wolf_core::app_state::restored_tab` rewrites it, queued on its pane view
+//! through [`crate::pane_view::PaneHandle::request_layout_rebuild`]. Each layout is
 //! realized on its own tab's first wake with a pane, against that tab's own
 //! Neovim, so a background tab is restored like the selected one.
+//!
+//! ## Tab recency
+//!
+//! The view keeps its tabs' [`TabRecency`]: a real selection change moves the
+//! selected tab to the front and a closed tab is forgotten.
+//! [`TabsHandle::seed_recency`] reseeds it after a restore, because opening each
+//! planned tab selects it in turn.
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -55,16 +63,17 @@ use std::sync::Arc;
 use adw::prelude::*;
 use gtk::glib;
 
-use wolf_core::{
-    CoreConfig, Liveness, PaneNode, TabState, TerminalId, WakeFn, WolfConfig, WolfCore,
-};
+use wolf_core::app_state::Tab;
+use wolf_core::{CoreConfig, Liveness, TerminalId, WakeFn, WolfConfig, WolfCore};
 
 use crate::appearance;
 use crate::drawer::DrawerShare;
+use crate::pane_layout;
 use crate::pane_view::{self, PaneHandle};
 use crate::persistence::{self, StateHandle, StateParts};
 use crate::picker::FocusTarget;
 use crate::shell;
+use crate::stacking::TabRecency;
 use crate::tabs_ui::{self, TabClose, TabId};
 use crate::CellMetrics;
 
@@ -112,24 +121,23 @@ pub struct TabsParts<'a> {
 
 /// What [`TabsHandle::open_tab`] needs for ONE tab.
 pub struct TabParts {
-    /// The directory this tab's Neovim starts in, and the seed its persisted
-    /// subtree carries until Neovim reports a live one.
-    /// [`crate::tabs_ui::new_tab_cwd`] decides it for a new tab; a restored tab
-    /// gets the window's planned cwd.
+    /// The directory this tab's Neovim starts in, and the directory it persists
+    /// until Neovim reports a live one. [`crate::tabs_ui::new_tab_cwd`] decides it
+    /// for a new tab; a restored tab gets its own planned cwd.
     pub cwd: PathBuf,
-    /// Whether the window is in the empty state, which hides this tab's panes
-    /// behind its own status page.
+    /// Whether the tab opens in the empty state, which hides its panes behind its
+    /// own status page.
     pub empty: bool,
-    /// The user's sidebar PREFERENCE, which is what this tab persists.
+    /// The user's sidebar PREFERENCE for this tab, which is what it persists.
     pub sidebar_shown: bool,
-    /// The pane tree this tab was RESTORED with, or `None` for a tab the user
-    /// opened.
+    /// The tab as it was SAVED, or `None` for a tab the user opened.
     ///
-    /// Two consumers, and both are needed. The pane view realizes it on this tab's
-    /// first wake with a window grid. And [`crate::persistence`] keeps it as the
-    /// SEED this tab contributes until its own first gather succeeds — which for a
-    /// tab whose realization bound no pane is never.
-    pub layout: Option<PaneNode>,
+    /// Two consumers, and both are needed. The pane view realizes its root on this
+    /// tab's first wake with a window grid, unless the tab is empty. And
+    /// [`crate::persistence`] keeps it as the SEED this tab contributes until its own
+    /// first gather succeeds — which for a tab whose realization bound no pane is
+    /// never.
+    pub saved: Option<Tab>,
 }
 
 /// One tab's restart state, read and written by [`crate::shell`]'s restart path.
@@ -168,8 +176,8 @@ struct TabInner {
     restart: TabRestart,
     /// This tab's pane view — its `DrawingArea`s, cmdline strip, toast and popup.
     panes: PaneHandle,
-    /// This tab's own contribution to `state.json`. Every tab's is read by
-    /// `window::WindowHandle::cached_subtree`, which orders them by
+    /// This tab's own contribution to the saved window state. Every tab's is read
+    /// by `window::WindowHandle::cached_window`, which orders them by
     /// [`TabHandle::page_position`].
     state: StateHandle,
     /// This tab's empty-state page, an overlay child above its panes.
@@ -249,7 +257,7 @@ impl TabHandle {
     /// the bar — `AdwTabBar` offers no property that turns dragging off — so it is the
     /// only authority for the order the user arranged. [`TabsHandle::entries`] is
     /// insertion order and does not track it. Read by
-    /// `window::WindowHandle::cached_subtree`, which pairs it with
+    /// `window::WindowHandle::cached_window`, which pairs it with
     /// [`TabHandle::cached_tab`] and sorts through
     /// [`crate::state_seam::ordered_tab_states`] so the persisted order is the one
     /// the user sees.
@@ -284,20 +292,39 @@ impl TabHandle {
         self.inner.view.selected_page().as_ref() == Some(&self.inner.page)
     }
 
-    /// Shows or hides this tab's empty state and keeps its persisted `cwd` in step.
+    /// Shows or hides this tab's empty state and keeps its persisted directory in
+    /// step.
     ///
     /// The widget half is per tab because the empty state is opaque and full-bleed
     /// over a tab's own panes; the sidebar, its header-bar toggle group and the
-    /// `win.` actions the empty state also drives are per window and stay in
-    /// [`crate::shell::AppShell::set_empty_state`].
+    /// `win.` actions the empty state also drives are per window and follow the
+    /// selected tab through [`crate::shell::AppShell::apply_selected_tab`].
     pub fn set_empty(&self, empty: bool) {
         self.inner.empty_state.set_visible(empty);
         self.inner.state.set_empty(empty);
     }
 
-    /// Records the user's sidebar PREFERENCE for this tab's persisted subtree.
+    /// Whether this tab is in the empty state.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.inner.state.is_empty()
+    }
+
+    /// Records the user's sidebar PREFERENCE for this tab.
     pub fn set_sidebar_shown(&self, shown: bool) {
         self.inner.state.set_sidebar_shown(shown);
+    }
+
+    /// The user's sidebar preference for this tab.
+    #[must_use]
+    pub fn sidebar_shown(&self) -> bool {
+        self.inner.state.sidebar_shown()
+    }
+
+    /// The cwd this tab's core was launched with.
+    #[must_use]
+    pub fn launch_cwd(&self) -> PathBuf {
+        self.inner.state.launch_cwd().to_path_buf()
     }
 
     /// Re-gathers this tab's persisted state.
@@ -305,11 +332,11 @@ impl TabHandle {
         self.inner.state.refresh_tab();
     }
 
-    /// This tab's contribution to its window's subtree; see
+    /// This tab's contribution to its window's entry; see
     /// [`crate::persistence::StateHandle::cached_tab`] for what a tab that has
     /// never gathered contributes.
     #[must_use]
-    pub fn cached_tab(&self) -> Option<TabState> {
+    pub fn cached_tab(&self) -> Option<Tab> {
         self.inner.state.cached_tab()
     }
 
@@ -376,6 +403,8 @@ struct TabsInner {
     closing: Cell<bool>,
     /// The tab whose Neovim was last told it holds the UI focus, or `None`.
     ui_focused: Cell<Option<TabId>>,
+    /// The tabs, most recently selected first.
+    recency: RefCell<TabRecency>,
     /// What to run after a real selection change, set by
     /// [`TabsHandle::connect_selected`]. An `Rc` rather than a `Box` so it can be
     /// cloned out of the `RefCell` before it is called — the callback re-enters this
@@ -446,9 +475,17 @@ impl TabsInner {
         appearance::apply_at_launch(&self.config, &core);
 
         let panes = pane_view::build(&core, &self.metrics, &self.drawer_share);
-        // Realized at this tab's first wake with a window grid, with no arity guard.
-        if let Some(layout) = parts.layout.clone() {
-            panes.request_layout_rebuild(layout);
+        // Realized at this tab's first wake with a window grid, with no arity guard; a lone
+        // empty edit pane is what the fresh tab already shows.
+        if let Some(saved) = parts.saved.as_ref().filter(|_| !parts.empty) {
+            let restored = wolf_core::app_state::restored_tab(&saved.content);
+            if restored
+                .root
+                .as_ref()
+                .is_some_and(|root| !pane_layout::is_empty_leaf(root))
+            {
+                panes.request_layout_rebuild(restored);
+            }
         }
 
         // Stacking per `window::build`: empty state, message toast, completion popup. The transient and
@@ -466,7 +503,7 @@ impl TabsInner {
             launch_cwd: parts.cwd,
             empty: parts.empty,
             sidebar_shown: parts.sidebar_shown,
-            restored_layout: parts.layout,
+            saved: parts.saved,
         });
 
         let id = TabId(self.next_id.get());
@@ -507,6 +544,7 @@ impl TabsInner {
         let Some(entry) = self.selected() else {
             return;
         };
+        self.recency.borrow_mut().select(entry.id());
         // Cloned out in its own statement: the callback closes overlays, whose
         // focus-return resolves back through this module.
         let callback = self.on_selected.borrow().clone();
@@ -536,6 +574,7 @@ impl TabsInner {
                 self.deregister(page);
                 self.view.close_page_finish(page, true);
                 if let Some(entry) = entry {
+                    self.recency.borrow_mut().remove(entry.id());
                     entry.shutdown();
                 }
                 // The survivor's drain re-derives the title, the bars and the drawer divider.
@@ -597,7 +636,8 @@ pub struct TabsHandle {
 /// No page exists yet: `window::build` opens the planned tabs next, and
 /// [`TabsHandle::open_tab`] is callable from any point after this. It needs no
 /// window of its own — [`StateParts`] carries none, and the size that reaches
-/// `state.json` is read at commit time by `window::WindowHandle::cached_subtree`.
+/// the saved window state is read at commit time by
+/// `window::WindowHandle::cached_window`.
 #[must_use]
 pub fn build(parts: TabsParts<'_>) -> TabsHandle {
     let view = adw::TabView::new();
@@ -618,6 +658,7 @@ pub fn build(parts: TabsParts<'_>) -> TabsHandle {
             next_id: Cell::new(0),
             closing: Cell::new(false),
             ui_focused: Cell::new(None),
+            recency: RefCell::new(TabRecency::default()),
             on_selected: RefCell::new(None),
             on_wake: RefCell::new(None),
             on_closing: RefCell::new(None),
@@ -681,6 +722,27 @@ impl TabsHandle {
         self.inner.view.set_selected_page(tab.page());
     }
 
+    /// Reseeds the tab recency with the selected tab first and the rest in page
+    /// order, as a restored window's recency starts.
+    pub fn seed_recency(&self) {
+        let mut tabs: Vec<(i32, TabId)> = self
+            .entries()
+            .iter()
+            .map(|tab| (tab.page_position(), tab.id()))
+            .collect();
+        tabs.sort_by_key(|(position, _)| *position);
+        let ids: Vec<TabId> = tabs.into_iter().map(|(_, id)| id).collect();
+        let selected = self.selected().map(|tab| tab.id());
+        let active = ids.iter().position(|&id| Some(id) == selected).unwrap_or(0);
+        *self.inner.recency.borrow_mut() = TabRecency::seeded(&ids, active);
+    }
+
+    /// The tabs, most recently selected first.
+    #[must_use]
+    pub fn recency(&self) -> TabRecency {
+        self.inner.recency.borrow().clone()
+    }
+
     /// The selected tab, or `None` before the first page exists.
     ///
     /// The FOCUS, overlay and core answer: which tab's cmdline strip an overlay
@@ -712,15 +774,15 @@ impl TabsHandle {
     ///
     /// A `Vec` [`TabsInner::open_tab`] pushes each new page onto, with nothing
     /// reconciling it against [`adw::TabView`]'s page positions — so it diverges from
-    /// the bar the first time the user reorders a tab. Every caller here is an
-    /// order-insensitive fan-out (wake each tab, toggle each tab's sidebar, count
-    /// them), so this is left alone deliberately rather than sorted for one consumer.
+    /// the bar the first time the user reorders a tab. Most callers are
+    /// order-insensitive fan-outs (wake each tab, count them), so this is left alone
+    /// deliberately rather than sorted for the others.
     ///
-    /// The ONE caller that needs the user's arrangement is
-    /// `window::WindowHandle::cached_subtree`, because [`crate::state_seam`]'s
-    /// `restore_plans` replays a saved window's tabs positionally. It pairs each entry
-    /// with [`TabHandle::page_position`] and sorts through
-    /// [`crate::state_seam::ordered_tab_states`].
+    /// The callers that need the user's arrangement pair each entry with
+    /// [`TabHandle::page_position`] and sort: `window::WindowHandle::cached_window`,
+    /// through [`crate::state_seam::ordered_tab_states`], because
+    /// [`crate::state_seam`]'s `restore_plans` replays a saved window's tabs
+    /// positionally, and [`TabsHandle::seed_recency`].
     #[must_use]
     pub fn entries(&self) -> Vec<TabHandle> {
         self.inner.entries.borrow().clone()

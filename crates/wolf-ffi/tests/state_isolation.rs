@@ -257,7 +257,7 @@ fn isolated_payload() {
         tree,
         expected,
         "a test core wrote into the planted state dir {}; everything under it is listed \
-         (swap/, wolf.sqlite or state.json there means the core still used the default)",
+         (swap/ or wolf.sqlite there means the core still used the default)",
         planted_root.display()
     );
     let body = std::fs::read(&planted_file).expect("failed to read back the planted file");

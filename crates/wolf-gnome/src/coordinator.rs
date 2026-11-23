@@ -6,11 +6,14 @@
 //! what lives here is only what a SECOND copy of would be wrong rather than
 //! merely wasteful:
 //!
-//! - **The [`StateStore`].** Two stores opened over one directory silently
-//!   clobber each other: both report a successful flush, the file ends up
-//!   holding whichever tree was written last, and each store still claims its
-//!   own tree in memory — so one window's entire session is lost with no panic
-//!   and no error.
+//! - **The [`AppStateStore`].** A second store over the same `wolf.sqlite`
+//!   keeps its own unchanged-tree baseline, and each of its writes replaces the
+//!   whole window state the other wrote — so one window's entire session is lost
+//!   with no panic and no error.
+//! - **The stacking order** ([`StackingOrder`]). Wayland lets a client query
+//!   neither which window is in front nor which is minimized, so the order is kept
+//!   here from every window's focus changes and Wolf's own Minimize, seeded at
+//!   launch from the saved window state.
 //! - **The config.** One file, one read. N reads are N chances for two windows
 //!   to disagree about the font mid-session.
 //! - **The [`CellMetrics`].** Deterministic given the config, and already shared
@@ -37,20 +40,20 @@
 //!
 //! ## The state protocol
 //!
-//! Each window CONTRIBUTES a `WindowState` subtree assembled from its own tabs'
-//! contributions ([`crate::persistence::StateHandle::refresh_tab`], gathered per
-//! tab), and the coordinator assembles the tree and commits it.
+//! Each window CONTRIBUTES a `Window` entry and its tab recency, assembled from its
+//! own tabs' contributions ([`crate::persistence::StateHandle::refresh_tab`],
+//! gathered per tab), and the coordinator orders them by the stacking order and
+//! submits the window state.
 //!
 //! **"An empty contribution set commits nothing" holds at TWO levels**, and
 //! for the same reason at each. A tab whose [`crate::state_seam::may_snapshot`]
 //! gate is shut — or whose leaves would not resolve — contributes what it last
 //! cached rather than vanishing; a window none of whose tabs contributed
-//! contributes nothing at all rather than a `tabs: []` window, which restore reads
-//! back as the empty state
-//! ([`crate::state_seam::window_subtree`]); and a contribution set of windows that
-//! is empty commits NOTHING — see [`crate::state_seam::snapshot_state`], whose
+//! contributes nothing at all rather than a `tabs: []` window
+//! ([`crate::state_seam::window_entry`]); and a contribution set of windows that
+//! is empty commits NOTHING — see [`crate::state_seam::window_state`], whose
 //! `None` is what stops a launch that never bound a pane from overwriting a good
-//! save with an empty file.
+//! save with an empty one.
 
 use std::cell::{Cell, RefCell};
 use std::io::Write;
@@ -60,23 +63,25 @@ use std::time::Duration;
 
 use adw::prelude::*;
 use gtk::gio;
-use wolf_core::{PaletteWindow, StateStore, WolfConfig, WolfState};
+use wolf_core::app_state::WindowState;
+use wolf_core::{AppStateStore, PaletteWindow, WolfConfig};
 
 use crate::actions;
 use crate::app;
 use crate::command_action::{ui_action_for, UiAction};
 use crate::ready_seam::{self, Blocker, ReadyStep, WindowReadiness};
+use crate::stacking::StackingOrder;
 use crate::state_seam::{self, CloseCommit, RestorePlan};
 use crate::window::{self, WindowHandle, WindowParts};
 use crate::workspace;
 use crate::CellMetrics;
 
 /// How long the close and quit paths block waiting for the writer thread to land
-/// the final snapshot, mirroring `wolf-ffi`'s shutdown flush.
+/// the final window state, mirroring `wolf-ffi`'s shutdown flush.
 ///
-/// The writer coalesces at 100 ms and each write is one small `serde_json`
-/// document plus a rename, so two seconds is generous; it exists to bound the
-/// quit path against a wedged filesystem, not to be reached.
+/// The writer coalesces briefly and each write is one small SQLite transaction,
+/// so two seconds is generous; it exists to bound the quit path against a wedged
+/// filesystem, not to be reached.
 const STATE_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// What a launch window that is no longer registered contributes to the readiness
@@ -105,15 +110,17 @@ pub type WindowId = u16;
 pub struct CoordinatorInner {
     /// The ONE state store, or `None` when no state directory could be resolved
     /// (state is then neither saved nor restored).
-    store: Option<StateStore>,
+    store: Option<AppStateStore>,
     /// The user configuration, read once at `activate`.
     config: WolfConfig,
     /// The cell metrics measured once from [`CoordinatorInner::config`], shared
     /// by `Rc` with every window's draw and resize closures.
     metrics: Rc<CellMetrics>,
-    /// The live windows, in the order they were opened — which is the order the
-    /// next snapshot writes them back in.
+    /// The live windows, in the order they were opened. [`CoordinatorInner::stacking`]
+    /// orders them for the save.
     windows: RefCell<Vec<WindowHandle>>,
+    /// The window stacking order, kept from focus changes and Wolf's own Minimize.
+    stacking: RefCell<StackingOrder>,
     /// The next id to mint; see [`Coordinator::mint_id`].
     next_id: Cell<WindowId>,
     /// Latched by [`Coordinator::quit`] BEFORE any window is closed, so each
@@ -162,6 +169,7 @@ pub fn build() -> Coordinator {
             config,
             metrics,
             windows: RefCell::new(Vec::new()),
+            stacking: RefCell::new(StackingOrder::default()),
             next_id: Cell::new(0),
             shutting_down: Cell::new(false),
             ready: RefCell::new(app::ready_file_path().map(|path| ReadyProbe {
@@ -290,9 +298,16 @@ impl Coordinator {
         }
     }
 
-    /// Restores the whole saved SESSION: one window per saved window, in saved
-    /// order, or exactly one empty-state window when there is nothing to
-    /// restore.
+    /// Restores the whole saved SESSION: every saved window, or exactly one
+    /// empty-state window when there is nothing to restore.
+    ///
+    /// The plans are frontmost first, and they are built BACKMOST first: a Wayland
+    /// client cannot raise itself and a compositor focuses a newly mapped toplevel,
+    /// so the frontmost window has to be the last one mapped. Every window is built
+    /// and registered here, so no commit sees part of the session, but the frontmost
+    /// is presented only once every other window that is not minimized has painted
+    /// ([`WindowHandle::show_after`]). The stacking order is seeded from the plans
+    /// once every window is built.
     ///
     /// A window opens when at least one of its tabs' cores starts; one where none
     /// does is skipped and does not abort the others. If none opens at all the
@@ -303,8 +318,12 @@ impl Coordinator {
             .ok()
             .map(|cwd| std::fs::canonicalize(&cwd).unwrap_or(cwd));
         let home = workspace::home_dir();
-        // `state()` falls back to defaults on any load failure, and loading never rewrites the file.
-        let saved = self.inner.store.as_ref().map(StateStore::state);
+        // `None` for no saved state and for one that cannot be read; reading never rewrites it.
+        let saved = self
+            .inner
+            .store
+            .as_ref()
+            .and_then(AppStateStore::window_state);
         let plans = state_seam::restore_plans(
             saved.as_ref(),
             process_cwd.as_deref(),
@@ -312,10 +331,33 @@ impl Coordinator {
             Path::is_dir,
         );
 
-        let opened: Vec<WindowId> = plans
+        // Backmost first; the frontmost plan, index 0, is built last and presented last.
+        let mut built: Vec<(WindowHandle, bool)> = Vec::new();
+        let mut front = None;
+        for (index, plan) in plans.iter().enumerate().rev() {
+            let Some(handle) = self.open_window(app.upcast_ref(), plan, index != 0) else {
+                continue;
+            };
+            if index == 0 {
+                front = Some(handle.clone());
+            }
+            built.push((handle, plan.minimized));
+        }
+        let seeded: Vec<(WindowId, bool)> = built
             .iter()
-            .filter_map(|plan| self.open_window(app.upcast_ref(), plan))
+            .rev()
+            .map(|(handle, minimized)| (handle.id(), *minimized))
             .collect();
+        *self.inner.stacking.borrow_mut() = StackingOrder::seeded(&seeded);
+        if let Some(front) = front {
+            let others: Vec<WindowHandle> = built
+                .iter()
+                .filter(|(handle, minimized)| !minimized && handle.id() != front.id())
+                .map(|(handle, _)| handle.clone())
+                .collect();
+            front.show_after(&others);
+        }
+        let opened: Vec<WindowId> = seeded.iter().map(|(id, _)| *id).collect();
         if opened.is_empty() {
             eprintln!(
                 "wolf-gnome: no window could be opened for any of the {} restored plans; exiting",
@@ -355,16 +397,21 @@ impl Coordinator {
             eprintln!("wolf-gnome: restore_plans returned no plan for a new window; none opened");
             return;
         };
-        if self.open_window(app.upcast_ref(), &plan).is_none() {
+        if self.open_window(app.upcast_ref(), &plan, true).is_none() {
             eprintln!(
                 "wolf-gnome: the new window's tab failed to start its core; no window was opened"
             );
         }
     }
 
-    /// Builds one window for `plan` and registers it. Answers its id, or `None`
-    /// when it did not open.
-    fn open_window(&self, app: &gtk::Application, plan: &RestorePlan) -> Option<WindowId> {
+    /// Builds one window for `plan` and registers it, presenting it when `present`
+    /// holds. Answers its handle, or `None` when it did not open.
+    fn open_window(
+        &self,
+        app: &gtk::Application,
+        plan: &RestorePlan,
+        present: bool,
+    ) -> Option<WindowHandle> {
         let id = self.mint_id();
         window::build(WindowParts {
             app,
@@ -373,8 +420,8 @@ impl Coordinator {
             plan,
             config: &self.inner.config,
             metrics: &self.inner.metrics,
+            present,
         })
-        .map(|handle| handle.id())
     }
 
     /// Whether the readiness probe is armed and has not fired.
@@ -508,15 +555,34 @@ impl Coordinator {
         id
     }
 
-    /// Commits the tree on `waking`'s render wake: refresh that window's subtree,
+    /// Commits the tree on `waking`'s render wake: refresh that window's tabs,
     /// then assemble from every window's cache.
     ///
-    /// O(1) gather and O(N) assembly, and `StateStore::set_snapshot` still no-ops
-    /// on an identical tree — so "a snapshot on every wake is affordable" holds
+    /// O(1) gather and O(N) assembly, and `AppStateStore::submit` still no-ops on
+    /// an identical tree — so "a snapshot on every wake is affordable" holds
     /// unchanged.
     pub fn commit(&self, waking: WindowId) {
         self.refresh(waking);
         self.commit_tree();
+    }
+
+    /// `id` gained focus: it moves to the front of the stacking order, and the
+    /// window state is committed unless the application is quitting.
+    pub fn on_window_focused(&self, id: WindowId) {
+        self.inner.stacking.borrow_mut().focus(id);
+        if !self.inner.shutting_down.get() {
+            self.commit_tree();
+        }
+    }
+
+    /// `id` is being minimized by Wolf's own Minimize, the only minimize Wayland
+    /// lets the client see: it moves behind every window that is not, and the
+    /// window state is committed unless the application is quitting.
+    pub fn on_window_minimized(&self, id: WindowId) {
+        self.inner.stacking.borrow_mut().minimize(id);
+        if !self.inner.shutting_down.get() {
+            self.commit_tree();
+        }
     }
 
     /// Handles one window's `close-request`, BEFORE its core is torn down.
@@ -544,7 +610,7 @@ impl Coordinator {
             }
             CloseCommit::DropSubtree => {
                 // Deregistered before assembling. Another window is live here, so the set is never empty; an empty
-                // set commits nothing (`state_seam::snapshot_state`), leaving the closed window in `state.json`.
+                // set commits nothing (`state_seam::window_state`), leaving the closed window saved.
                 self.deregister(id);
                 self.commit_tree();
                 self.flush();
@@ -593,7 +659,7 @@ impl Coordinator {
     /// query like any other.
     ///
     /// Each entry's `cwd` is that window's [`WindowHandle::display_cwd`] — the
-    /// same string it contributes to `state.json` — so a window is offered under
+    /// directory its active tab contributes to the saved window state — so a window is offered under
     /// the directory it would be RESTORED at, and an empty-state window carries
     /// `""`, which core renders as "Switch to Window: Untitled". One rule with two
     /// consumers, rather than a second notion of where a window is.
@@ -637,39 +703,43 @@ impl Coordinator {
         self.inner.windows.borrow().clone()
     }
 
-    /// Re-gathers one window's subtree, if it is still registered.
+    /// Re-gathers one window's tabs, if it is still registered.
     fn refresh(&self, id: WindowId) {
         if let Some(handle) = self.handles().into_iter().find(|handle| handle.id() == id) {
             handle.refresh_subtree();
         }
     }
 
-    /// Re-gathers every window's subtree.
+    /// Re-gathers every window's tabs.
     fn refresh_all(&self) {
         for handle in self.handles() {
             handle.refresh_subtree();
         }
     }
 
-    /// Assembles the tree from every window's cached subtree, in window order.
-    fn assemble(&self) -> Option<WolfState> {
-        state_seam::snapshot_state(
-            self.handles()
-                .iter()
-                .filter_map(WindowHandle::cached_subtree)
-                .collect(),
-        )
+    /// Assembles the window state from every window's cached entry, in stacking
+    /// order, with each window's tab recency.
+    fn assemble(&self) -> Option<(WindowState, Vec<Vec<usize>>)> {
+        let windows = self
+            .handles()
+            .iter()
+            .filter_map(|handle| {
+                let (window, recency) = handle.cached_window()?;
+                Some((handle.id(), window, recency))
+            })
+            .collect();
+        state_seam::window_state(windows, &self.inner.stacking.borrow())
     }
 
-    /// Submits the assembled tree to the store, or submits nothing at all.
+    /// Submits the assembled window state to the store, or submits nothing at all.
     fn commit_tree(&self) {
         let Some(store) = &self.inner.store else {
             return;
         };
-        let Some(tree) = self.assemble() else {
+        let Some((state, recency)) = self.assemble() else {
             return;
         };
-        store.set_snapshot(tree);
+        store.submit(state, recency);
     }
 
     /// Blocks until the writer thread has landed everything submitted so far.
@@ -679,8 +749,8 @@ impl Coordinator {
         };
         if !store.flush(STATE_FLUSH_TIMEOUT) {
             eprintln!(
-                "wolf-gnome: timed out after {STATE_FLUSH_TIMEOUT:?} waiting for state.json to \
-                 be written; the last session may not have been saved"
+                "wolf-gnome: timed out after {STATE_FLUSH_TIMEOUT:?} waiting for the window state \
+                 to be written; the last session may not have been saved"
             );
         }
     }
@@ -693,6 +763,7 @@ impl Coordinator {
             .windows
             .borrow_mut()
             .retain(|handle| handle.id() != id);
+        self.inner.stacking.borrow_mut().remove(id);
     }
 }
 
@@ -723,7 +794,7 @@ mod tests {
     /// while a live window still holds it makes
     /// [`Coordinator::on_window_closing`] deregister a DIFFERENT window than the
     /// one that closed — so the closing window stays in the tree that
-    /// [`Coordinator::assemble`] writes to `state.json`, and the surviving one is
+    /// [`Coordinator::assemble`] writes to the store, and the surviving one is
     /// dropped from it — and it makes [`Coordinator::raise`] present the wrong
     /// window for a palette row the user picked by its directory.
     ///
@@ -825,7 +896,7 @@ mod tests {
                 case.want,
                 "case: {} — next_free_id({}, {:?}) is not {}. The id is the REGISTRY KEY: an id \
                  a live window already holds makes `on_window_closing` deregister the wrong \
-                 window (so the closing window's subtree stays in `state.json` and the surviving \
+                 window (so the closing window stays in the saved window state and the surviving \
                  window's is dropped) and makes `raise` present the wrong window for a palette \
                  row the user picked by its directory. An id that is free but skipped costs \
                  nothing but means the counter no longer describes what it claims to.",

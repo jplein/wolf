@@ -208,7 +208,7 @@ fn parse_project(directory: &str, text: &str) -> Option<ProjectState> {
         .ok()
 }
 
-/// The `wolf-app-state-writer` thread body, the same loop as `StateStore`'s.
+/// The `wolf-app-state-writer` thread body.
 ///
 /// It waits for a pending generation, sleeps [`WRITE_COALESCE_DELAY`] with the
 /// lock dropped, takes the latest tree and recency, writes them with no lock held,

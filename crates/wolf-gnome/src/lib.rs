@@ -57,14 +57,15 @@
 //!
 //! The windowed application restores its state at launch and persists it as it
 //! runs: [`app::run`] activates a [`mod@coordinator`], which opens the ONE
-//! `wolf_core::StateStore` over `state.json` before any widget exists and turns
-//! the loaded tree into one [`RestorePlan`] per saved window (working directory,
-//! window size, and one [`state_seam::TabPlan`] per saved tab). Each
-//! [`mod@window`] opens every saved tab with its own Neovim, each realizing its saved
-//! layout through `WolfCore::rebuild_layout` on its own first wake, and, via
-//! [`persistence`], gathers EVERY tab on every commit and at `close-request`; the window
-//! assembles its tabs into a subtree and the coordinator assembles those subtrees
-//! into the tree and commits it.
+//! `wolf_core::AppStateStore` over `wolf.sqlite` before any widget exists and turns
+//! the saved window state into one [`RestorePlan`] per saved window, frontmost
+//! first (window size, active tab, minimized, and one [`state_seam::TabPlan`] per
+//! saved tab at its own directory). Each [`mod@window`] opens every saved tab with
+//! its own Neovim, each realizing its saved layout through
+//! `WolfCore::rebuild_layout` on its own first wake, and, via [`persistence`],
+//! gathers EVERY tab on every commit and at `close-request`; the window assembles
+//! its tabs into an entry and the coordinator orders the entries by the
+//! [`mod@stacking`] order it keeps from focus changes and submits them.
 //!
 //! [`window::build`] builds an `adw::ApplicationWindow` with a
 //! header bar whose editor area is a **native pane view** ([`pane_view`]) — a tree
@@ -148,6 +149,7 @@ pub mod search_panel;
 pub mod shell;
 pub mod sidebar;
 pub mod sidebar_toggles;
+pub mod stacking;
 pub mod state_seam;
 pub mod statusbar_layout;
 pub mod tab_view;

@@ -13,10 +13,11 @@ use std::path::PathBuf;
 
 use gdk::ModifierType;
 
+use wolf_core::app_state::{Layout, Node, Pane, PaneOrientation};
 use wolf_core::{
-    Key, KeyEvent, Liveness, MouseButton, PaneNode, PaneOrientation, ResolvedStyle, Rgb,
-    TerminalCell, TerminalCellWidth, TerminalCommand, TerminalCursor, TerminalCursorStyle,
-    TerminalFrame, TerminalId, TerminalScrollbar, TerminalUnderline,
+    Key, KeyEvent, Liveness, MouseButton, ResolvedStyle, Rgb, TerminalCell, TerminalCellWidth,
+    TerminalCommand, TerminalCursor, TerminalCursorStyle, TerminalFrame, TerminalId,
+    TerminalScrollbar, TerminalUnderline,
 };
 use wolf_gnome::clipboard_ui::{copy_decision, CopyPress};
 use wolf_gnome::editor_inset::GridRect;
@@ -1001,51 +1002,44 @@ fn a_terminal_pane_persists_as_a_terminal_leaf() {
         weights: vec![0.25, 0.75],
     };
     assert_eq!(
-        encode(&layout, &contents, None),
-        PaneNode::Split {
+        encode(&layout, &contents),
+        Node::Layout(Layout {
             orientation: PaneOrientation::Vertical,
             weights: vec![0.25, 0.75],
             children: vec![
-                PaneNode::Leaf {
+                Node::Pane(Pane::Edit {
                     path: "/proj/a.md".to_owned(),
-                    preview: false,
-                    terminal: false,
-                    zoomed: false,
-                },
-                PaneNode::Leaf {
+                    cursor: None,
+                    top_line: None,
+                }),
+                Node::Pane(Pane::Terminal {
                     path: "/proj/sub".to_owned(),
-                    preview: false,
-                    terminal: true,
-                    zoomed: false,
-                },
+                }),
             ],
-        },
-        "a terminal pane must encode as a terminal leaf carrying its cwd, beside an editor leaf \
-         that is not one; `terminal: false` on the second leaf means WinContent::Terminal \
-         resolves like a buffer"
+        }),
+        "a terminal pane must encode as a pane of kind terminal carrying its cwd, beside an edit \
+         pane; an edit pane in the second place means WinContent::Terminal resolves like a \
+         buffer"
     );
 
-    let lone_node = encode(&PaneLayout::Leaf(lone), &contents, None);
+    let lone_node = encode(&PaneLayout::Leaf(lone), &contents);
     assert_eq!(
         lone_node,
-        PaneNode::Leaf {
+        Node::Pane(Pane::Terminal {
             path: String::new(),
-            preview: false,
-            terminal: true,
-            zoomed: false,
-        },
-        "a lone terminal pane with no known cwd must encode as a terminal leaf with an empty path"
+        }),
+        "a lone terminal pane with no known cwd must encode as a terminal pane with an empty path"
     );
     assert!(
         !is_empty_leaf(&lone_node),
-        "a lone terminal leaf is not an empty-state pane and must persist; true means \
-         is_empty_leaf ignores `terminal`"
+        "a lone terminal pane is not an empty pane and must be rebuilt at restore; true means \
+         is_empty_leaf ignores the pane's kind"
     );
     let empty_contents: HashMap<PaneId, _> =
         resolve_leaves(&[(lone, WinContent::Buffer(String::new()))])
             .expect("an unnamed buffer resolves");
     assert!(
-        is_empty_leaf(&encode(&PaneLayout::Leaf(lone), &empty_contents, None)),
-        "control: a lone unnamed editor pane is still the empty leaf the predicate suppresses"
+        is_empty_leaf(&encode(&PaneLayout::Leaf(lone), &empty_contents)),
+        "control: a lone unnamed editor pane is the empty pane restore does not rebuild"
     );
 }

@@ -9,20 +9,20 @@
 //! since GTK allocates the one host shown and needs no rect. K11 to K13 compose
 //! `focus_origin`, `drawer::focus_target` and `zoomed_after` as `PaneInner::apply_focus` does.
 //!
-//! P1 and P2 take their ids from `PaneLayoutCodecTests.swift`. P3 is this file's own: the
-//! Swift P3 covers the FFI push-builder's tokens, which GNOME does not have, so here P3 is
-//! the `encode` and `decode` round trip a relaunch makes.
+//! G6a pins `pane_layout::leaf_index`, the depth-first index a saved tab's `zoomed` names. P3
+//! is this file's own: the `leaf_index`, `encode` and `decode` round trip a relaunch makes,
+//! since this front-end has no FFI push-builder for the Swift P3 to cover.
 //!
 //! Pure: no display, no Neovim and no compositor. What the pane area shows for an answer is
 //! `smoke_headless/zoom_pane.rs`'s question.
 
 use std::collections::HashMap;
 
-use wolf_core::{FocusDir, PaneNode, PaneOrientation};
+use wolf_core::FocusDir;
 use wolf_gnome::drawer::{focus_target, DrawerState};
 use wolf_gnome::layout::{Orientation, PaneId, PaneLayout, PaneTree};
 use wolf_gnome::other_pane_seam::Target;
-use wolf_gnome::pane_layout::{decode, encode, zoomed_leaf_index, LeafContent};
+use wolf_gnome::pane_layout::{decode, encode, leaf_index, LeafContent};
 use wolf_gnome::pane_zoom::{
     focus_origin, other_pane_target, shown_alone, zoomed_after, ZoomEvent,
 };
@@ -479,133 +479,58 @@ fn editor(path: &str) -> LeafContent {
     }
 }
 
-/// A persisted editor leaf at `path`, marked when `zoomed`.
-fn leaf(path: &str, zoomed: bool) -> PaneNode {
-    PaneNode::Leaf {
-        path: path.to_owned(),
-        preview: false,
-        terminal: false,
-        zoomed,
-    }
-}
-
-/// P1: `encode` marks the leaf whose id is `zoomed` and no other; a `zoomed` id that is not a
-/// leaf of the layout, the drawer's, marks none, and neither does an unzoomed view.
+/// G6a: `leaf_index` is a pane's depth-first index among the layout's leaves, the index a saved
+/// tab's `zoomed` names; the drawer, which is no leaf of the layout, has none.
 #[test]
-fn encode_marks_only_the_zoomed_leaf() {
+fn the_zoomed_pane_s_index_is_its_depth_first_leaf_index() {
     let mut tree = PaneTree::new(P1);
-    tree.split(P1, P2, Orientation::Vertical);
-    tree.split(P2, P3, Orientation::Vertical);
+    tree.split(P1, P3, Orientation::Vertical);
+    tree.split(P1, P2, Orientation::Horizontal);
     let layout = tree.layout();
     let PaneLayout::Split {
         orientation: Orientation::Vertical,
-        weights: thirds,
         children,
+        ..
     } = &layout
     else {
-        panic!("premise: splitting 1 and then 2 vertically must give a vertical split: {layout:?}");
+        panic!("premise: the root must be the vertical split of 1 and 3: {layout:?}");
     };
-    assert_eq!(
-        children,
-        &vec![
-            PaneLayout::Leaf(P1),
-            PaneLayout::Leaf(P2),
-            PaneLayout::Leaf(P3)
-        ],
-        "premise: the split must hold 1, 2 and 3 flat, or the middle leaf is not pane 2"
+    assert!(
+        matches!(
+            children.as_slice(),
+            [PaneLayout::Split { orientation: Orientation::Horizontal, children: column, .. },
+             PaneLayout::Leaf(P3)]
+                if column == &vec![PaneLayout::Leaf(P1), PaneLayout::Leaf(P2)]
+        ),
+        "premise: the layout must be vertical[horizontal[1, 2], 3], or pane 2 is not a nested \
+         leaf: {layout:?}"
     );
-    let contents: HashMap<PaneId, LeafContent> = HashMap::from([
-        (P1, editor("/notes/a.md")),
-        (P2, editor("/notes/b.md")),
-        (P3, editor("/notes/c.md")),
-    ]);
-    let split = |children: Vec<PaneNode>| PaneNode::Split {
-        orientation: PaneOrientation::Vertical,
-        children,
-        weights: thirds.clone(),
-    };
-    let unmarked = || {
-        vec![
-            leaf("/notes/a.md", false),
-            leaf("/notes/b.md", false),
-            leaf("/notes/c.md", false),
-        ]
-    };
 
+    let indices: Vec<Option<usize>> = [P1, P2, P3]
+        .iter()
+        .map(|&id| leaf_index(&layout, id))
+        .collect();
     assert_eq!(
-        encode(&layout, &contents, Some(P2)),
-        split(vec![
-            leaf("/notes/a.md", false),
-            leaf("/notes/b.md", true),
-            leaf("/notes/c.md", false),
-        ]),
-        "zoomed on 2, only the middle leaf may carry zoomed: true. No mark means encode ignores \
-         `zoomed` and the zoom is never saved; a mark on 1 or 3 too means it marks every leaf"
+        indices,
+        [Some(0), Some(1), Some(2)],
+        "panes 1, 2 and 3 are depth-first leaves 0, 1 and 2. [0, 0, 1] means the index is the \
+         position of the root's child holding the pane, so a zoom saved on 2 restores on 1; \
+         [0, 1, 0] means it counts within the pane's own split"
     );
     assert_eq!(
-        encode(&layout, &contents, Some(DRAWER)),
-        split(unmarked()),
-        "zoomed on the drawer, which is not a layout leaf, no leaf may be marked: the drawer is \
-         not persisted, so a zoomed drawer persists unzoomed. A mark means encode marks on any \
-         zoom rather than on the leaf's id"
-    );
-    assert_eq!(
-        encode(&layout, &contents, None),
-        split(unmarked()),
-        "unzoomed, no leaf may be marked; a mark means a relaunch zooms a tab nobody zoomed"
-    );
-}
-
-/// `vertical[a, horizontal[b, c]]`, with the leaves whose paths are in `marked` zoomed.
-fn nested(marked: &[&str]) -> PaneNode {
-    let leaf_of = |path: &str| leaf(path, marked.contains(&path));
-    PaneNode::Split {
-        orientation: PaneOrientation::Vertical,
-        weights: vec![0.5, 0.5],
-        children: vec![
-            leaf_of("/a.md"),
-            PaneNode::Split {
-                orientation: PaneOrientation::Horizontal,
-                weights: vec![0.5, 0.5],
-                children: vec![leaf_of("/b.md"), leaf_of("/c.md")],
-            },
-        ],
-    }
-}
-
-/// P2: `zoomed_leaf_index` is the depth-first index of the first marked leaf, which the
-/// restore zips onto its rebuilt leaf ids.
-#[test]
-fn zoomed_leaf_index_is_the_depth_first_index() {
-    assert_eq!(
-        zoomed_leaf_index(&nested(&["/b.md"])),
-        Some(1),
-        "b, the first leaf of the nested split, is depth-first leaf 1; Some(0) means the index \
-         counts within its split, None that the mark is not found"
-    );
-    assert_eq!(
-        zoomed_leaf_index(&nested(&["/c.md"])),
-        Some(2),
-        "c is depth-first leaf 2; Some(1) means the index is the top-level child's"
-    );
-    assert_eq!(
-        zoomed_leaf_index(&nested(&["/b.md", "/c.md"])),
-        Some(1),
-        "with two marks, from a hand edit, the first in depth-first order wins, as the leaf \
-         init.lua leaves current; Some(2) means the last mark wins"
-    );
-    assert_eq!(
-        zoomed_leaf_index(&nested(&[])),
+        leaf_index(&layout, DRAWER),
         None,
-        "an unmarked layout has no zoomed leaf; Some(_) zooms a tab nobody zoomed"
+        "the drawer is no leaf of the layout and has no index, so a zoomed drawer is saved as \
+         no pane's zoom; Some(_) would zoom a pane nobody zoomed on relaunch"
     );
 }
 
 /// The first id `decode` allocates in P3, apart from the saved tree's own ids.
 const FIRST_RESTORED: PaneId = 10;
 
-/// P3: a zoomed leaf saved by `encode` is found again after `decode`, at its depth-first
-/// position among the rebuilt ids, and the restore event re-zooms it.
+/// P3: a zoomed pane's index, saved beside the tree `encode` writes, finds the same pane again
+/// after `decode`, at its depth-first position among the rebuilt ids, and the restore event
+/// re-zooms it.
 #[test]
 fn the_zoomed_leaf_round_trips_through_encode_and_decode() {
     let mut tree = PaneTree::new(P1);
@@ -622,7 +547,9 @@ fn the_zoomed_leaf_round_trips_through_encode_and_decode() {
         (P2, editor("/notes/b.md")),
         (P3, editor("/notes/c.md")),
     ]);
-    let node = encode(&tree.layout(), &contents, Some(P3));
+    let layout = tree.layout();
+    let saved_zoom = leaf_index(&layout, P3);
+    let node = encode(&layout, &contents);
     let (rebuilt, ids) =
         decode(&node, FIRST_RESTORED).expect("a well-formed three-leaf tree must decode");
     assert_eq!(
@@ -631,13 +558,13 @@ fn the_zoomed_leaf_round_trips_through_encode_and_decode() {
         "premise: decode's ids must be the rebuilt tree's leaves in depth-first order"
     );
 
-    let zoomed = zoomed_leaf_index(&node).and_then(|i| ids.get(i).copied());
+    let zoomed = saved_zoom.and_then(|i| ids.get(i).copied());
     assert_eq!(
         zoomed,
         ids.get(2).copied(),
         "zoomed on 3 before the save, the restore must find the rebuilt leaf at 3's depth-first \
-         position, {:?}. None means the mark was not saved or not found; another id means the \
-         index and the rebuilt ids disagree on the order",
+         position, {:?}. None means no index was saved; another id means the saved index and \
+         the rebuilt ids disagree on the order",
         ids.get(2)
     );
     assert_eq!(

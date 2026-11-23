@@ -16,13 +16,12 @@ use super::*;
 /// sixteen lines rather than a bare heading.
 ///
 /// **The persisted-layout leg.** `layout_snapshot` iterates `tree.leaves()`,
-/// so the assertion is that the frozen `state.json` holds exactly one leaf and that
-/// the leaf is THIS file. The fixture is what makes the second half of that
-/// discriminating — and only the second half. Measured 10/10: with the
-/// `:e` removed the layout still persists as one leaf naming `Untitled.md`, because
-/// `persistable_layout` suppresses only an UNNAMED lone leaf and the app's default
-/// buffer is named. So "one leaf, no terminal leaf" is NOT vacuous without a
-/// fixture; "the leaf is the fixture's path" is.
+/// so the assertion is that the frozen window state holds exactly one pane and that
+/// the pane is THIS file. The fixture is what makes the second half of that
+/// discriminating — and only the second half. With the `:e` removed the tab still
+/// saves one pane naming `Untitled.md`, because a folder tab always writes its root
+/// and the app's default buffer is named. So "one pane, no terminal pane" is NOT
+/// vacuous without a fixture; "the pane is the fixture's path" is.
 ///
 /// **The band's placement (see [`drawer_band_rect`]).** Its body carries
 /// [`DRAWER_OCR_EDITOR_ABSENT`] on every line, which the sampled band asserts is
@@ -453,11 +452,12 @@ const DRAWER_WINS_WITH_DRAWER: i64 = 2;
 /// **The capture is taken right after the marker line runs**, before any readback is
 /// typed into the one-row drawer, which would scroll the marker off.
 ///
-/// **`state.json` is frozen while the drawer is still open.** Persistence runs on
-/// every render wake, so the live file is rewritten as the scenario goes on; the
-/// copy is what pins the one state the assertion is about. The write is a tmp-file
-/// rename, so a copy taken from a running app is never torn (the
-/// `PREVIEW_SCENARIO` precedent).
+/// **The state database is frozen while the drawer is still open.** Persistence runs
+/// on every render wake, so the live window state is rewritten as the scenario goes
+/// on; the copy is what pins the one state the assertion is about. SQLite's replay of
+/// the copied `-wal` drops a write still in flight, so a copy taken from a running
+/// app holds the last committed state rather than a torn one (the `PREVIEW_SCENARIO`
+/// precedent).
 ///
 /// **The hide/re-open pair (leg h) runs while exactly ONE editor pane exists**, above
 /// the `:vsplit` rather than below it, and that placement is the leg rather than
@@ -476,7 +476,7 @@ const DRAWER_WINS_WITH_DRAWER: i64 = 2;
 ///   to Neovim earlier. Stderr names the leg.
 /// * `15` — a shell readback never appeared: focus was in an editor pane, and
 ///   Neovim got the `echo` as Normal-mode keys. Stderr names the leg.
-/// * `16` — no `state.json` existed to freeze while the drawer was open. DISTINCT
+/// * `16` — no `wolf.sqlite` existed to freeze while the drawer was open. DISTINCT
 ///   from "the persisted layout is wrong", which exits 0 and fails an assertion.
 const DRAWER_SCENARIO: &str = r#"
 set -eu
@@ -567,14 +567,13 @@ sleep "$SETTLE"
 grim "$OUT_PNG"
 
 # --- Step 5: freeze the persisted layout while the drawer is open -----------
-if [ ! -s "$DRAWER_STATE_SRC" ]; then
-    echo "wolf-gnome terminal-drawer smoke: no state.json at $DRAWER_STATE_SRC." >&2
+if ! freeze_state "$DRAWER_STATE_SRC" "$DRAWER_STATE_COPY"; then
+    echo "wolf-gnome terminal-drawer smoke: no wolf.sqlite in $DRAWER_STATE_SRC." >&2
     echo "  Nothing was persisted at all, so this is not about the drawer: suspect" >&2
-    echo "  may_snapshot refusing every wake, open_state_store resolving no" >&2
-    echo "  directory, or WOLF_STATE_DIR not reaching the app." >&2
+    echo "  open_state_store resolving no directory, or WOLF_STATE_DIR not reaching" >&2
+    echo "  the app." >&2
     exit 16
 fi
-cp "$DRAWER_STATE_SRC" "$DRAWER_STATE_COPY"
 
 # --- Step 6: leg d -- <C-w>k OUT of the drawer, through core's router -------
 chord_w k
@@ -624,13 +623,13 @@ exit 0
 /// The GTK terminal drawer opens on `<Control>grave` on a core terminal session,
 /// paints its shell, keeps the focus bridge working in both directions, hides and
 /// re-opens on the same chord, keeps its binding through a pane-area rebuild, is
-/// never split by a split chord — and never reaches `state.json`.
+/// never split by a split chord — and never reaches the saved window state.
 ///
 /// ## What it is the only evidence for
 ///
 /// No other automated test falsifies the intent arm, the pane binding, the structural
 /// append, both halves of the focus bridge in a running window, the drawer's only
-/// UNBIND path or the `state.json` exclusion.
+/// UNBIND path or the drawer's exclusion from the saved window state.
 ///
 /// ## The legs, and what each one's falsifier is
 ///
@@ -638,7 +637,7 @@ exit 0
 /// | --- | --- | --- | --- |
 /// | b | the sampled band contains [`DRAWER_OCR_MARKER`] | (1) append the drawer host BEFORE the tree widget in `rebuild_pane_area`; (2) restore `LayoutIntent::DrawerOpen { .. } => {}` in `pane_view::apply_intent` | (1) no marker, and the band reads an editor row (`006zzeditorfill`); (2) exit 14 at leg d, before the band is read: no drawer pane is bound, so the drawer's keys go to Neovim |
 /// | b' | the band does NOT contain [`DRAWER_OCR_EDITOR_ABSENT`] | none in code: a band-placement guard on [`drawer_band_rect`]'s derivation; every edit that puts editor rows in the band fails leg b first | n/a |
-/// | c | the frozen `state.json` holds exactly one leaf, not a terminal leaf, and it is the fixture | (1) add the drawer to the persisted layout: chain `self.drawer.get().id()` onto `leaf_contents`' `tree.leaves()`, and make `layout_snapshot`'s layout a split of the tree's layout and a leaf for the drawer; (2) insert the drawer into the pane tree with `tree.split(..)` in `apply_drawer_open` | (1) the terminal-leaf check ("persists a TERMINAL leaf"); (2) exit 14 at leg h, before `state.json` is read |
+/// | c | the frozen window state holds exactly one pane, not a terminal pane, and it is the fixture | (1) add the drawer to the persisted layout: chain `self.drawer.get().id()` onto `leaf_contents`' `tree.leaves()`, and make `layout_snapshot`'s layout a split of the tree's layout and a leaf for the drawer; (2) insert the drawer into the pane tree with `tree.split(..)` in `apply_drawer_open` | (1) the terminal-pane check ("persists a TERMINAL pane"); (2) exit 14 at leg h, before the saved state is read |
 /// | d | after `<C-w>k`, Neovim answers from a window that is not the drawer | in `pane_view::apply_focus`, call `tree.neighbor(origin, dir, ..)` in place of `drawer::focus_target` | exit 14 at leg d: focus never left the drawer, so its shell got the readback |
 /// | e | after `<C-w>j`, the drawer's shell answers | delete the `dir == Down` bridge arm from `drawer::focus_target` | exit 15 at leg e: focus never left the editor |
 /// | f | after a `:vsplit` added a window, `<C-w>j` still reaches the drawer's shell, so the drawer's binding survived the split's rebuild | `self.clear_drawer()` in `apply_split`, before its `rebuild_pane_area()` | exit 15 at leg f |
@@ -662,7 +661,7 @@ exit 0
 /// wherever leg h did. The scenario stops at the first focus leg whose readback
 /// never appears, and its exit code and stderr name it.
 ///
-/// The exit status is asserted first, before the band, `state.json` or any readback
+/// The exit status is asserted first, before the band, the saved state or any readback
 /// value, so an edit can go red at an earlier or later leg than its row's; the red
 /// column records where each one was measured.
 #[test]
@@ -689,17 +688,10 @@ fn terminal_drawer_opens_and_is_not_persisted_under_cage() {
     write_relaunch_fixtures(SMOKE, &cwd, &[(DRAWER_FIXTURE_FILE, fixture_body.as_str())]);
 
     // The state dir `cage_command` hands the app, and the directory the scenario
-    // freezes a copy into — a DIRECTORY, because `wolf_core::load_state` takes one.
+    // freezes a copy of its database into.
     let smoke_state = smoke_state_dir(&cwd);
-    let smoke_state_file = smoke_state.join(STATE_FILE_NAME);
-    let frozen_state_dir = runtime_dir.join("wolf_gnome_drawer_state");
-    std::fs::create_dir_all(&frozen_state_dir).unwrap_or_else(|e| {
-        panic!(
-            "{SMOKE}: failed to create the frozen-state dir {}: {e}",
-            frozen_state_dir.display()
-        )
-    });
-    let frozen_state_file = frozen_state_dir.join(STATE_FILE_NAME);
+    let frozen = frozen_state_dir(&runtime_dir, "wolf_gnome_drawer_state", SMOKE);
+    let frozen_state_file = frozen.join(STATE_DB_NAME);
 
     let out_png = runtime_dir.join("wolf_gnome_drawer.png");
     let band_png = runtime_dir.join("wolf_gnome_drawer_band.png");
@@ -734,8 +726,8 @@ fn terminal_drawer_opens_and_is_not_persisted_under_cage() {
         .env("DRAWER_FIXTURE", DRAWER_FIXTURE_FILE)
         .env("DRAWER_MARKER_LINE", DRAWER_MARKER_LINE)
         .env("DRAWER_SHELL_READBACK", DRAWER_SHELL_READBACK)
-        .env("DRAWER_STATE_SRC", &smoke_state_file)
-        .env("DRAWER_STATE_COPY", &frozen_state_file)
+        .env("DRAWER_STATE_SRC", &smoke_state)
+        .env("DRAWER_STATE_COPY", &frozen)
         .env("PROBE_UP", &probe_up)
         .env("PROBE_DOWN", &probe_down)
         .env("PROBE_HIDDEN", &probe_hidden)
@@ -763,8 +755,8 @@ fn terminal_drawer_opens_and_is_not_persisted_under_cage() {
          15: a shell readback never appeared because focus was in an editor pane — at leg e the \
          bridge arm did not answer `<C-w>j`, at leg f the `:vsplit`'s split unbound the drawer, \
          at leg g-stay something moved focus out \
-         of the drawer. Exit 16: the app persisted no state.json at all while the drawer was \
-         open, which is `may_snapshot` refusing rather than anything about the drawer. Otherwise \
+         of the drawer. Exit 16: the app had created no wolf.sqlite while the drawer was open, \
+         so it opened no state store, which is upstream of anything about the drawer. Otherwise \
          wtype, grim or cp failed. Capture expected at {}.",
         out_png.display()
     );
@@ -805,35 +797,26 @@ fn terminal_drawer_opens_and_is_not_persisted_under_cage() {
 
     // Assertion 4 (leg c): from the frozen copy. `layout_snapshot` iterates `tree.leaves()` and the
     // drawer is outside the tree; the falsifier changes that construction.
-    let saved = load_state(&frozen_state_dir).unwrap_or_else(|| {
-        panic!(
-            "{SMOKE}: wolf_core::load_state could not parse the frozen state at {}. `load_state` \
-             is silently-ignore, so a None means the file is absent, unreadable, malformed or \
-             carries an unsupported version — the scenario already proved it was non-empty (it \
-             exits 16 otherwise), so suspect the shape.",
-            frozen_state_file.display()
-        )
-    });
+    let saved = frozen_window_state(&frozen, SMOKE, "the save frozen while the drawer was open");
     let window = saved.windows.first().unwrap_or_else(|| {
         panic!(
-            "{SMOKE}: the frozen state.json carries NO windows at all, so nothing was persisted. \
-             File: {}",
+            "{SMOKE}: the frozen window state carries NO windows at all, so nothing was \
+             persisted. File: {}",
             frozen_state_file.display()
         )
     });
     let tab = window.tabs.first().unwrap_or_else(|| {
         panic!(
-            "{SMOKE}: the persisted window carries NO tabs. `snapshot_state` writes exactly one. \
-             File: {}",
+            "{SMOKE}: the persisted window carries NO tabs. `state_seam::window_entry` \
+             contributes no window without a tab. File: {}",
             frozen_state_file.display()
         )
     });
-    let layout = tab.layout.as_ref().unwrap_or_else(|| {
+    let layout = tab.content.root.as_ref().unwrap_or_else(|| {
         panic!(
-            "{SMOKE}: the persisted tab carries NO layout at all. `persistable_layout` returns \
-             `None` only for an UNNAMED lone leaf, and this smoke `:e`d {DRAWER_FIXTURE_FILE} \
-             before the chord — so a `None` here means the fixture never opened, or the snapshot \
-             gate refused every wake. File: {}",
+            "{SMOKE}: the persisted tab carries NO root at all, which only an empty tab writes, \
+             and this smoke `:e`d {DRAWER_FIXTURE_FILE} in a folder tab before the chord. File: \
+             {}",
             frozen_state_file.display()
         )
     });
@@ -843,8 +826,8 @@ fn terminal_drawer_opens_and_is_not_persisted_under_cage() {
     // The terminal-leaf check first: it names the drawer-as-pane hazard alone; a count would mask it.
     assert!(
         leaves.iter().all(|(_, terminal)| !terminal),
-        "{SMOKE}: the frozen state.json persists a TERMINAL leaf: {leaves:?} (path, terminal). The \
-         drawer is never persisted (specs/terminal-panes.md, Session restore), so a terminal leaf \
+        "{SMOKE}: the frozen window state persists a TERMINAL pane: {leaves:?} (path, terminal). \
+         The drawer is never persisted (specs/terminal-panes.md, Session restore), so a terminal pane \
          here means the drawer became a `PaneTree` leaf and `layout_snapshot` wrote it, and the \
          next launch would restore it as a split terminal pane. File: {}",
         frozen_state_file.display()
@@ -852,10 +835,10 @@ fn terminal_drawer_opens_and_is_not_persisted_under_cage() {
     assert_eq!(
         leaves.len(),
         1,
-        "{SMOKE}: the frozen state.json persists {} leaves, want exactly 1. The window held one \
-         editor pane and the drawer at freeze time, so TWO leaves mean the drawer reached the \
+        "{SMOKE}: the frozen window state persists {} panes, want exactly 1. The window held one \
+         editor pane and the drawer at freeze time, so TWO panes mean the drawer reached the \
          persisted layout — check that `leaf_contents` and `layout_snapshot` walk \
-         `tree.leaves()` only. The leaves were {leaves:?}. File: {}",
+         `tree.leaves()` only. The panes were {leaves:?}. File: {}",
         leaves.len(),
         frozen_state_file.display()
     );
@@ -864,7 +847,7 @@ fn terminal_drawer_opens_and_is_not_persisted_under_cage() {
         .and_then(OsStr::to_str)
         .unwrap_or_else(|| {
             panic!(
-                "{SMOKE}: the persisted leaf path {:?} has no final component, so it names no \
+                "{SMOKE}: the persisted pane path {:?} has no final component, so it names no \
                  file and could not be reopened on the next launch. File: {}",
                 leaves[0].0,
                 frozen_state_file.display()
@@ -873,12 +856,11 @@ fn terminal_drawer_opens_and_is_not_persisted_under_cage() {
     assert_eq!(
         tail,
         DRAWER_FIXTURE_FILE,
-        "{SMOKE}: the frozen state.json's single leaf names {tail:?}, want \
+        "{SMOKE}: the frozen window state's single pane names {tail:?}, want \
          {DRAWER_FIXTURE_FILE:?}. An `Untitled.md` here means the `:e` never landed, at which \
-         point the leaf-count assertion above proves rather less than it appears to — measured \
-         10/10, a drawer-open session with NO `:e` still persists one leaf, because \
-         `persistable_layout` suppresses only an UNNAMED lone leaf and the default buffer is \
-         named. The comparison is on the file NAME rather than the whole path because /tmp may \
+         point the pane-count assertion above proves rather less than it appears to: a \
+         drawer-open session with NO `:e` still persists one pane, because a folder tab always \
+         writes its root and the default buffer is named. The comparison is on the file NAME rather than the whole path because /tmp may \
          resolve through a symlink. File: {}",
         frozen_state_file.display()
     );
@@ -981,20 +963,17 @@ fn terminal_drawer_opens_and_is_not_persisted_under_cage() {
     );
 }
 
-/// Every leaf in a persisted layout, as `(path, terminal)`, in tree order.
+/// Every pane in a persisted root, as `(path, terminal)`, in depth-first order.
 ///
-/// A walker rather than a match on the root, because the assertion it feeds is about
-/// the WHOLE tree: a drawer inside the pane tree would be a second child of a split,
-/// and a root-only read would report the editor leaf and miss it entirely.
-fn collect_leaves<'a>(node: &'a PaneNode, out: &mut Vec<(&'a str, bool)>) {
-    match node {
-        PaneNode::Split { children, .. } => {
-            for child in children {
-                collect_leaves(child, out);
-            }
-        }
-        leaf => out.extend(leaf_fields(leaf).map(|leaf| (leaf.path, leaf.terminal))),
-    }
+/// Every pane of the tree rather than a match on the root, because the assertion it
+/// feeds is about the WHOLE tree: a drawer inside the pane tree would be a second child
+/// of a layout, and a root-only read would report the editor pane and miss it entirely.
+fn collect_leaves<'a>(node: &'a Node, out: &mut Vec<(&'a str, bool)>) {
+    out.extend(
+        node.panes()
+            .into_iter()
+            .map(|pane| (pane.path(), matches!(pane, Pane::Terminal { .. }))),
+    );
 }
 
 /// Reads one `drawer=<n> wins=<n>` Neovim readback: `w:wolf_drawer` of Neovim's current
@@ -1791,7 +1770,7 @@ const TERMCLOSE_NVIM_CLOSED: &str = "1 0";
 /// * `44` — no shell answered after `:vsplit` and `:terminal`.
 /// * `45` — Neovim did not answer after Ctrl+Shift+W in the split terminal pane.
 /// * `46` — the split's shell was still alive after its pane closed: no hang-up.
-/// * `47` — no `state.json` existed to freeze.
+/// * `47` — no `wolf.sqlite` existed to freeze.
 /// * `48` — no shell answered after Ctrl+` re-opened the drawer.
 const TERMCLOSE_SCENARIO: &str = r#"
 set -eu
@@ -1888,11 +1867,10 @@ done
 
 # --- Step 5: freeze the persisted layout ------------------------------------
 sleep "$SETTLE"
-if [ ! -s "$STATE_SRC" ]; then
-    echo "wolf-gnome terminal close smoke: no state.json at $STATE_SRC." >&2
+if ! freeze_state "$STATE_SRC" "$STATE_COPY"; then
+    echo "wolf-gnome terminal close smoke: no wolf.sqlite in $STATE_SRC." >&2
     exit 47
 fi
-cp "$STATE_SRC" "$STATE_COPY"
 
 # --- Step 6: Ctrl+` re-opens the drawer --------------------------------------
 wtype -M ctrl -k grave -m ctrl
@@ -1930,15 +1908,9 @@ fn terminal_close_chord_closes_the_drawer_and_a_split_under_cage() {
     let cwd = make_temp_cwd();
     write_relaunch_fixtures(SMOKE, &cwd, &[]);
 
-    let smoke_state_file = smoke_state_dir(&cwd).join(STATE_FILE_NAME);
-    let frozen_state_dir = runtime_dir.join("wolf_gnome_termclose_state");
-    std::fs::create_dir_all(&frozen_state_dir).unwrap_or_else(|e| {
-        panic!(
-            "{SMOKE}: failed to create the frozen-state dir {}: {e}",
-            frozen_state_dir.display()
-        )
-    });
-    let frozen_state_file = frozen_state_dir.join(STATE_FILE_NAME);
+    let smoke_state = smoke_state_dir(&cwd);
+    let frozen = frozen_state_dir(&runtime_dir, "wolf_gnome_termclose_state", SMOKE);
+    let frozen_state_file = frozen.join(STATE_DB_NAME);
 
     let pid_drawer = runtime_dir.join(TERMCLOSE_PID_DRAWER_NAME);
     let nvim_drawer = runtime_dir.join(TERMCLOSE_NVIM_DRAWER_NAME);
@@ -1951,7 +1923,6 @@ fn terminal_close_chord_closes_the_drawer_and_a_split_under_cage() {
         &pid_split,
         &nvim_split,
         &pid_reopen,
-        &frozen_state_file,
     ] {
         clear_evidence(path, SMOKE);
     }
@@ -1968,8 +1939,8 @@ fn terminal_close_chord_closes_the_drawer_and_a_split_under_cage() {
         .env("PID_SPLIT", &pid_split)
         .env("NVIM_SPLIT", &nvim_split)
         .env("PID_REOPEN", &pid_reopen)
-        .env("STATE_SRC", &smoke_state_file)
-        .env("STATE_COPY", &frozen_state_file);
+        .env("STATE_SRC", &smoke_state)
+        .env("STATE_COPY", &frozen);
     let status = cmd
         .status()
         .expect("failed to spawn `cage` for the headless terminal close scenario");
@@ -1987,7 +1958,7 @@ fn terminal_close_chord_closes_the_drawer_and_a_split_under_cage() {
          after `:vsplit` and `:terminal`. Exit 45: Neovim did not answer after Ctrl+Shift+W in \
          the split terminal pane, so focus stayed in it. Exit 46: the split's shell outlived \
          its closed pane, so its placeholder was hidden rather than wiped and the session was \
-         never hung up. Exit 47: the app persisted no state.json at all. Exit 48: no shell \
+         never hung up. Exit 47: the app had created no wolf.sqlite. Exit 48: no shell \
          answered after Ctrl+` re-opened the drawer."
     );
 
@@ -2021,21 +1992,15 @@ fn terminal_close_chord_closes_the_drawer_and_a_split_under_cage() {
     );
 
     // --- Assertion 4: the pane tree holds one editor leaf ---------------------
-    let saved = load_state(&frozen_state_dir).unwrap_or_else(|| {
-        panic!(
-            "{SMOKE}: wolf_core::load_state could not parse the frozen state at {}; the scenario \
-             proved it non-empty, so suspect its shape.",
-            frozen_state_file.display()
-        )
-    });
+    let saved = frozen_window_state(&frozen, SMOKE, "the save frozen after both closes");
     let layout = saved
         .windows
         .first()
         .and_then(|window| window.tabs.first())
-        .and_then(|tab| tab.layout.as_ref())
+        .and_then(|tab| tab.content.root.as_ref())
         .unwrap_or_else(|| {
             panic!(
-                "{SMOKE}: the frozen state.json carries no window, tab or layout, so no pane \
+                "{SMOKE}: the frozen window state carries no window, tab or root, so no pane \
                  tree was persisted. File: {}",
                 frozen_state_file.display()
             )
@@ -2044,8 +2009,8 @@ fn terminal_close_chord_closes_the_drawer_and_a_split_under_cage() {
     collect_leaves(layout, &mut leaves);
     assert!(
         leaves.len() == 1 && !leaves[0].1,
-        "{SMOKE}: after both closes the persisted pane tree must hold one editor leaf; it holds \
-         {leaves:?} (path, terminal). A terminal leaf means the closed split stayed in the \
+        "{SMOKE}: after both closes the persisted pane tree must hold one editor pane; it holds \
+         {leaves:?} (path, terminal). A terminal pane means the closed split stayed in the \
          front-end's `PaneTree` after Neovim closed its window. File: {}",
         frozen_state_file.display()
     );

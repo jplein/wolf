@@ -1,41 +1,41 @@
 //! The pure, GTK-free APPLICATION-STATE seam: what to restore at launch, and
 //! what to persist on each wake.
 //!
-//! The launch plans and the write-side rules. GTK-free, IO-free, and it never
-//! reads `$HOME` or the process cwd — every input is injected, so the whole
-//! restore/persist rulebook is unit-testable headlessly with no temp dirs and no
-//! window, exactly like [`crate::layout`] and [`crate::workspace`].
+//! The launch plans and the write-side rules of `specs/application-state.md`, over
+//! [`wolf_core::app_state`]'s model. GTK-free, IO-free, and it never reads `$HOME`
+//! or the process cwd — every input is injected, so the whole restore/persist
+//! rulebook is unit-testable headlessly with no temp dirs and no window, exactly
+//! like [`crate::layout`] and [`crate::workspace`].
 //!
 //! ## What is deliberately NOT here
 //!
 //! - **Window POSITION.** Wayland gives a client neither its own position nor
 //!   screen geometry, so there is no "intersects some screen" check.
-//!   [`window_subtree`] writes `x`/`y` as `0.0` unconditionally and
+//!   [`window_entry`] writes `x`/`y` as `None` unconditionally and
 //!   [`restored_window_size`] returns SIZE only.
-//! - **Tabs.** Windows are the tree and tabs are its second level:
-//!   [`restore_plans`] walks every saved window and plans every saved tab of it
-//!   ([`RestorePlan::tabs`], capped at [`MAX_RESTORE_TABS`] and
-//!   [`MAX_RESTORE_NEOVIMS`]), while [`snapshot_state`] assembles every live window
-//!   and [`window_subtree`] every contributing tab, in tab order. What is NOT here
-//!   is a per-tab working directory on the RESTORE side: each tab persists its own
-//!   Neovim's cwd, while restore reads the window's from the first tab and starts
-//!   every tab of it there. The sidebar preference is per WINDOW, written into every
-//!   tab and read back from the first.
+//! - **A per-window directory or sidebar preference.** Each tab carries its own:
+//!   [`restore_plans`] plans every tab at its own saved directory with its own saved
+//!   preference, and [`tab_entry`] writes both per tab.
+//! - **The per-tab extras.** The cursor, `top_line`, preview `scroll`, `focused`, the
+//!   sidebar's mode, query and toggles, and the drawer are written as absent.
 
 use std::path::{Path, PathBuf};
 
-use wolf_core::{Liveness, PaneNode, TabState, WindowState, WolfState};
+use wolf_core::app_state::{Frame, Node, PaneRef, Sidebar, Tab, TabContent, Window, WindowState};
+use wolf_core::Liveness;
 
-use crate::pane_layout;
+use crate::coordinator::WindowId;
+use crate::stacking::{StackingOrder, TabRecency};
+use crate::tabs_ui::TabId;
 use crate::workspace::{self, LaunchDecision};
 
 /// The most tabs, and so Neovim processes, [`restore_plans`] will plan across
-/// every window of one saved tree.
+/// every window of one saved window state.
 ///
 /// A restore POLICY cap, not a tree limit — the
 /// [`crate::pane_layout::MAX_RESTORE_LEAVES`] precedent. What it bounds is not
 /// memory but PROCESSES: every restored tab costs a whole captive Neovim and a
-/// tokio runtime of its own, so a corrupt or hand-edited `state.json` must not be
+/// tokio runtime of its own, so a corrupt or hand-edited saved window state must not be
 /// able to fork dozens of them before the first frame. The number sits far above
 /// any session a user assembles by hand, so refusing is the pathological case
 /// rather than a limit anyone meets.
@@ -52,104 +52,114 @@ pub const MAX_RESTORE_NEOVIMS: usize = 16;
 pub const MAX_RESTORE_TABS: usize = 8;
 
 /// One restored TAB's plan.
-///
-/// A struct rather than a bare `Option<PaneNode>` so per-tab state can be added as a
-/// field here instead of changing every signature that carries one.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TabPlan {
-    /// This tab's saved pane tree, or `None`. Attached ONLY when the chosen cwd IS
-    /// the saved cwd — see [`restore_plans`].
-    pub layout: Option<PaneNode>,
+    /// The working directory this tab's Neovim starts in.
+    pub cwd: PathBuf,
+    /// Whether the tab opens in the empty state.
+    pub empty: bool,
+    /// The tab's saved sidebar PREFERENCE, `true` without one.
+    ///
+    /// Independent of [`TabPlan::empty`]: the empty state overrides the preference
+    /// at APPLY time, through [`sidebar_is_shown`], never at restore time. Folding
+    /// the override in here would lose the preference on the first launch into an
+    /// empty state, and the next save would then persist the fold.
+    pub sidebar_visible: bool,
+    /// The tab as saved, or `None` for a fresh tab: its seed ([`seeded_tab`]), and
+    /// its rebuild when the tab is not empty.
+    pub saved: Option<Tab>,
 }
 
-/// Everything the launch path needs to decide before any widget is built.
+/// Everything the launch path needs to decide about one window before any widget
+/// is built.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RestorePlan {
-    /// The working directory handed to `wolf_core::CoreConfig`.
-    pub core_cwd: PathBuf,
-    /// Whether to show the empty state (drives `tree_view::build`'s `start` flag
-    /// and `crate::shell::AppShell::set_empty_state`).
-    pub empty: bool,
     /// The tabs to open, in saved order, NEVER empty. `window::build` opens every
-    /// one, each with its own Neovim, and selects index 0.
+    /// one, each with its own Neovim.
     pub tabs: Vec<TabPlan>,
+    /// The index into `tabs` of the tab to select, always in range.
+    pub active_tab: usize,
     /// The restored window size in pixels, or `None` for the unset sentinel.
     pub window_size: Option<(i32, i32)>,
-    /// The user's saved sidebar PREFERENCE, defaulting to `true` when there is no
-    /// saved tab.
-    ///
-    /// **Window-level, while the layouts are per tab, and that asymmetry is real
-    /// rather than an oversight.** The sidebar is one widget per WINDOW
-    /// (`window.rs` builds it beside the tab view) and the shell fans the
-    /// preference to every tab, so every tab persists the same value and restore
-    /// reads it back off `tabs.first()`.
-    ///
-    /// Independent of [`RestorePlan::empty`]: the empty state overrides the
-    /// preference at APPLY time, through [`sidebar_is_shown`], never at restore
-    /// time. Folding the override in here would lose the preference on the first
-    /// launch into an empty state, and the next save would then persist the fold.
-    pub sidebar_visible: bool,
+    /// Whether the window restores minimized.
+    pub minimized: bool,
 }
 
-/// Builds ONE launch plan per saved window, in saved order — the whole session's
-/// launch, rather than one window's.
+/// Builds ONE launch plan per saved window, in saved order, which is stacking
+/// order, frontmost first — the whole session's launch, rather than one window's.
 ///
-/// Restore is POSITIONAL and never grouped: a saved tree holding two windows on
-/// one directory restores both, because the user opened both deliberately.
+/// Restore is POSITIONAL and never grouped: a saved state holding two windows on
+/// one directory restores both, because the user opened both deliberately. A saved
+/// window with no tabs has nothing to restore and is dropped.
+///
+/// Each tab is planned at its own saved directory through
+/// [`workspace::launch_decision`], so a missing directory, `""`, `$HOME` and `/`
+/// all plan an empty tab whose Neovim starts where that decision says. The tab
+/// keeps its saved [`Tab`] either way, for the seed.
+///
+/// # A terminal launch shows its directory
+///
+/// When `process_cwd` is a usable project that no saved tab's `directory` holds,
+/// one extra plan goes first, frontmost: one fresh folder tab there, at the
+/// default size. When some saved tab holds it, the session restores exactly as
+/// saved. Every saved window is recreated either way.
 ///
 /// # This never returns an empty vec
 ///
-/// No saved state at all and a `windows: []` tree both yield exactly ONE plan:
-/// the plan a launch with nothing to restore produces, unchanged. The application
-/// always opens a window, so "there is nothing to restore" means "restore the
-/// empty state" and never "start with no window at all" — which on GTK is a
-/// process that exits the moment `activate` returns.
-///
-/// # The process cwd is offered to the FIRST saved window only
-///
-/// Index 0 is handed `process_cwd`; every later index is handed `None`, which
-/// lands on [`workspace::launch_decision`]'s already-tested desktop-launcher
-/// shape (its `[process_cwd, restored]` scan simply skips the `None`).
-///
-/// This is a DATA-LOSS rule, not a preference. Offering the process cwd at every
-/// index would resolve every window to `Folder { cwd: process_cwd }`, so
-/// `same_project` is false for each one past the first: every window merged onto
-/// a single project and EVERY saved layout dropped. The failure is silent — the
-/// right number of windows open, all showing the same wrong thing — and the next
-/// snapshot writes the merge back over the saved tree, so the session is gone
-/// rather than merely mis-displayed.
+/// No saved state at all and a `windows: []` state both yield exactly ONE plan:
+/// the empty state, or the process cwd's folder. The application always opens a
+/// window, so "there is nothing to restore" means "restore the empty state" and
+/// never "start with no window at all" — which on GTK is a process that exits the
+/// moment `activate` returns.
 ///
 /// # The Neovim budget
 ///
-/// The plans hold at most [`MAX_RESTORE_NEOVIMS`] tabs between them. Windows are
-/// planned in saved order, each with at most `min(MAX_RESTORE_TABS, remaining)` of
-/// its tabs — its saved ones, or the one-tab floor — and the walk stops when the
-/// budget is spent. A window that only partly fits is truncated to its first tabs
-/// rather than dropped, so the windows saved earliest are the ones that come back.
+/// The plans hold at most [`MAX_RESTORE_NEOVIMS`] tabs between them. Plans are
+/// taken in order, each with at most `min(MAX_RESTORE_TABS, remaining)` of its
+/// tabs, and the walk stops when the budget is spent. A window that only partly
+/// fits is truncated to its first tabs rather than dropped, so the frontmost
+/// windows are the ones that come back.
 ///
 /// `is_dir` is injected so the whole plan is pure; production passes
 /// `Path::is_dir`.
 #[must_use]
 pub fn restore_plans(
-    saved: Option<&WolfState>,
+    saved: Option<&WindowState>,
     process_cwd: Option<&Path>,
     home: Option<&Path>,
     is_dir: impl Fn(&Path) -> bool,
 ) -> Vec<RestorePlan> {
     let saved_windows = saved.map_or(&[][..], |state| state.windows.as_slice());
 
+    let mut candidates: Vec<RestorePlan> = Vec::new();
+    let launch = workspace::launch_decision(process_cwd, None, home, &is_dir);
+    if let LaunchDecision::Folder { cwd } = &launch {
+        let held = saved_windows
+            .iter()
+            .flat_map(|window| &window.tabs)
+            .any(|tab| Path::new(&tab.directory) == cwd.as_path());
+        if !held {
+            candidates.push(fresh_plan(launch.clone()));
+        }
+    }
+    candidates.extend(
+        saved_windows
+            .iter()
+            .filter(|window| !window.tabs.is_empty())
+            .map(|window| plan_for_window(window, home, &is_dir)),
+    );
+
     let mut plans: Vec<RestorePlan> = Vec::new();
     let mut remaining = MAX_RESTORE_NEOVIMS;
-    for (index, window) in saved_windows.iter().enumerate() {
+    for mut plan in candidates {
         if remaining == 0 {
             break;
         }
-        // The rule above: only the first window is a candidate for the
-        // directory this process was launched from.
-        let offered_cwd = if index == 0 { process_cwd } else { None };
-        let mut plan = plan_for_window(Some(window), offered_cwd, home, &is_dir);
-        // Never empties the plan: it holds at least the one-tab floor, and `remaining` is positive.
-        plan.tabs.truncate(remaining);
+        // Never empties the plan: it holds at least one tab, and `remaining` is positive.
+        plan.tabs.truncate(MAX_RESTORE_TABS.min(remaining));
+        if plan.active_tab >= plan.tabs.len() {
+            plan.active_tab = 0;
+        }
         remaining -= plan.tabs.len();
         plans.push(plan);
     }
@@ -157,88 +167,76 @@ pub fn restore_plans(
     if plans.is_empty() {
         // The floor, not a fallback: an empty vec here would leave the
         // application with no window to build.
-        plans.push(plan_for_window(None, process_cwd, home, &is_dir));
+        plans.push(fresh_plan(launch));
     }
 
     plans
 }
 
-/// One window's launch plan: the restore rule applied to a single saved
-/// [`WindowState`], or to no saved window at all.
-///
-/// Takes the window's `tabs.first()`, treats a non-empty `tab.cwd` as the
-/// restored project, hands BOTH candidates to [`workspace::launch_decision`]
-/// (process cwd first — see that module for why), then plans one [`TabPlan`] per
-/// saved tab and attaches the saved window size.
-///
-/// **A saved tab list is restored only into the project it was saved from.** Every
-/// tab's leaf paths are absolute paths belonging to one project, so the list is
-/// planned only when the decision is [`LaunchDecision::Folder`] AND that cwd IS the
-/// restored cwd. Launching a window into a different directory therefore restores
-/// one fresh empty tab and nothing else.
-///
-/// The CWD decision reads `tabs.first()` alone, and so does the sidebar preference:
-/// both are per WINDOW (see [`RestorePlan::sidebar_visible`]).
-///
-/// [`RestorePlan::tabs`] is never empty. A window is built with the tabs its plan
-/// names, so an empty vec would be a toplevel holding a tab bar and no editor, with
-/// no way to reach one — the tab-level twin of [`restore_plans`]' never-empty
-/// window floor.
+/// One saved window's plan: each tab at its own directory, the saved active tab
+/// (the first when out of range), the saved size and the minimized flag.
 fn plan_for_window(
-    window: Option<&WindowState>,
-    process_cwd: Option<&Path>,
+    window: &Window,
     home: Option<&Path>,
     is_dir: &impl Fn(&Path) -> bool,
 ) -> RestorePlan {
-    let saved_tabs = window.map_or(&[][..], |window| window.tabs.as_slice());
-    let tab = saved_tabs.first();
-    // `""` is the documented "nvim never reported a cwd" sentinel, not a path.
-    let restored: Option<PathBuf> = tab
-        .map(|tab| tab.cwd.as_str())
-        .filter(|cwd| !cwd.is_empty())
-        .map(PathBuf::from);
-
-    let (core_cwd, empty, mut tabs) =
-        match workspace::launch_decision(process_cwd, restored.as_deref(), home, is_dir) {
-            LaunchDecision::Folder { cwd } => {
-                let same_project = restored.as_deref() == Some(cwd.as_path());
-                let tabs = if same_project {
-                    saved_tabs
-                        .iter()
-                        .take(MAX_RESTORE_TABS)
-                        .map(|tab| TabPlan {
-                            layout: tab.layout.clone(),
-                        })
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-                (cwd, false, tabs)
+    let tabs: Vec<TabPlan> = window
+        .tabs
+        .iter()
+        .map(|tab| {
+            // `""` is an empty tab's directory, not a path.
+            let directory = Some(Path::new(&tab.directory)).filter(|d| !d.as_os_str().is_empty());
+            let (cwd, empty) = match workspace::launch_decision(None, directory, home, is_dir) {
+                LaunchDecision::Folder { cwd } => (cwd, false),
+                LaunchDecision::EmptyState { nvim_cwd } => (nvim_cwd, true),
+            };
+            TabPlan {
+                cwd,
+                empty,
+                sidebar_visible: tab.content.sidebar.visible,
+                saved: Some(tab.clone()),
             }
-            LaunchDecision::EmptyState { nvim_cwd } => (nvim_cwd, true, Vec::new()),
-        };
-
-    if tabs.is_empty() {
-        // The floor, not a fallback: an empty vec here would leave the window
-        // with no page at all.
-        tabs.push(TabPlan { layout: None });
-    }
-
+        })
+        .collect();
+    let active_tab = if window.active_tab < tabs.len() {
+        window.active_tab
+    } else {
+        0
+    };
     RestorePlan {
-        core_cwd,
-        empty,
         tabs,
-        window_size: window.and_then(|window| restored_window_size(window.width, window.height)),
-        sidebar_visible: tab.is_none_or(|tab| tab.sidebar_visible),
+        active_tab,
+        window_size: restored_window_size(window.frame.width, window.frame.height),
+        minimized: window.minimized,
+    }
+}
+
+/// A plan for one fresh tab, which `decision` places: a folder tab at its `cwd`,
+/// or an empty tab whose Neovim starts at its `nvim_cwd`.
+fn fresh_plan(decision: LaunchDecision) -> RestorePlan {
+    let (cwd, empty) = match decision {
+        LaunchDecision::Folder { cwd } => (cwd, false),
+        LaunchDecision::EmptyState { nvim_cwd } => (nvim_cwd, true),
+    };
+    RestorePlan {
+        tabs: vec![TabPlan {
+            cwd,
+            empty,
+            sidebar_visible: true,
+            saved: None,
+        }],
+        active_tab: 0,
+        window_size: None,
+        minimized: false,
     }
 }
 
 /// Whether the file-tree sidebar is SHOWN: the user wants it AND a project is open.
 ///
-/// The ONE place that rule lives. `crate::shell::AppShell::set_empty_state` and
-/// `AppShell::set_sidebar_preference` both apply it through the same private applier, so a
-/// user toggle cannot be silently undone by the next `set_empty_state(false)` and
-/// the empty state cannot draw a file tree for a project that is not open.
+/// The ONE place that rule lives. `crate::shell::AppShell::apply_selected_tab` applies it
+/// to the selected tab's preference and empty flag, so a user toggle cannot be silently
+/// undone by leaving the empty state and the empty state cannot draw a file tree for a
+/// project that is not open.
 ///
 /// The empty state always WINS: a window with no project root has nothing to list,
 /// so the tree would render whatever directory nvim happened to be handed
@@ -265,27 +263,6 @@ pub fn restored_window_size(width: f64, height: f64) -> Option<(i32, i32)> {
     Some((w, h))
 }
 
-/// The tab's persistable layout: `Some(node)` unless `node` is an unnamed,
-/// non-preview LONE leaf.
-///
-/// **THIS IS THE SINGLE-PANE FIX.** The predicate is
-/// [`pane_layout::is_empty_leaf`] — a CONTENT test — and never
-/// `pane_layout::leaf_count(..) > 1`. An arity guard here is the bug this rule
-/// prevents: a lone pane showing a file would persist no layout, and since a tab's
-/// open buffer paths ride only inside the layout, that file would not be
-/// reopened on relaunch. See [`crate::pane_layout`]'s module docs.
-///
-/// The suppressed case is the pre-existing invariant that must be PRESERVED: the
-/// empty-state "no folder" lone pane persists `layout: None`.
-#[must_use]
-pub fn persistable_layout(node: PaneNode) -> Option<PaneNode> {
-    if pane_layout::is_empty_leaf(&node) {
-        None
-    } else {
-        Some(node)
-    }
-}
-
 /// The working directory to persist for the tab.
 ///
 /// The EMPTY state persists `""` ALWAYS — never the nvim fallback cwd. A
@@ -306,7 +283,7 @@ pub fn snapshot_cwd(empty: bool, launch_cwd: &Path, live_cwd: Option<&Path>) -> 
         .into_owned()
 }
 
-/// Whether a live snapshot may be committed at all.
+/// Whether a live gather may replace a tab's cache at all.
 ///
 /// `true` **iff** the captive nvim is [`Liveness::Alive`], at least one pane has a
 /// RESOLVED grid, and nvim has reported its per-window buffer map at least once
@@ -315,12 +292,12 @@ pub fn snapshot_cwd(empty: bool, launch_cwd: &Path, live_cwd: Option<&Path>) -> 
 ///
 /// This gate is not tidiness — it prevents DATA LOSS. A snapshot taken while nvim
 /// is dead, before the first pane binds, or before the first buffer report would
-/// persist `layout: None` (or a topology whose leaf paths are all empty) and
+/// persist a lone empty pane (or a topology whose leaf paths are all empty) and
 /// DESTROY the user's saved layout. Gated, a crash instead preserves the last
 /// good save.
 ///
 /// **The gate is read ONCE PER TAB, against that tab's own core**, and a refusal
-/// means "contribute the cached subtree", not "vanish from the tree" — a tab whose
+/// means "contribute the cached tab", not "vanish from the tree" — a tab whose
 /// panes have not bound yet keeps whatever it last persisted.
 ///
 /// `reported_windows` is `Snapshot::win_buffers.len() + Snapshot::previews.len()`,
@@ -328,7 +305,7 @@ pub fn snapshot_cwd(empty: bool, launch_cwd: &Path, live_cwd: Option<&Path>) -> 
 /// refusal route is [`crate::pane_layout::resolve_leaves`], one layer down: a leaf
 /// whose window is in neither map refuses that tab's gather, and its cache is
 /// contributed instead. The two refusals compose — either one leaves the last good
-/// subtree standing.
+/// tab standing.
 ///
 /// The match over [`Liveness`] is TOTAL with no `_` arm, so a new variant is an
 /// `E0004` here rather than a silent "not alive" — matching
@@ -343,91 +320,56 @@ pub fn may_snapshot(liveness: Liveness, bound_panes: usize, reported_windows: us
     }
 }
 
-/// Assembles ONE tab's persisted state.
+/// Assembles ONE tab's persisted entry.
 ///
-/// The one place a [`TabState`] is built on the write side, so the gathered tab and
-/// the seeded one ([`seeded_tab_state`]) cannot drift into two shapes.
+/// The one place a [`Tab`] is built on the write side. An empty tab, whose
+/// `directory` is `""`, writes no root and no zoom, since §2 allows a null root only
+/// there; every other tab writes its root, a lone empty edit pane included.
+/// `zoomed` is the zoomed pane's depth-first index. Everything but the sidebar's
+/// `visible` is written as absent.
 #[must_use]
-pub fn tab_subtree(cwd: String, sidebar_visible: bool, layout: Option<PaneNode>) -> TabState {
-    TabState {
-        cwd,
-        sidebar_visible,
-        layout,
-    }
-}
-
-/// Assembles ONE window's persisted subtree from its geometry and its contributing
-/// tabs, in tab order — or `None` when no tab contributed.
-///
-/// This is the ONE place that shape lives. `x`/`y` are `0.0` unconditionally:
-/// window POSITION is never persisted on Wayland (see the module docs), and a
-/// deliberate zero is far better than a plausible-looking garbage coordinate a
-/// later reader might trust.
-///
-/// Tab ORDER is the user's own and is what the next launch replays, because
-/// [`restore_plans`] walks a window's tabs positionally.
-///
-/// # `None` means "commit nothing", exactly as it does for [`snapshot_state`]
-///
-/// An empty `tabs` vec is not a window with no tabs: every tab's gate can be shut
-/// at once while its panes are still binding. Answering `Some(WindowState { tabs:
-/// [], .. })` would commit a window that [`restore_plans`] reads back as having no
-/// project, no layout and no sidebar preference — the empty state — so the next
-/// launch opens a folderless window and the gather after that writes that emptiness
-/// back. The window drops out of the contribution set instead, and if no window
-/// contributes, `snapshot_state` commits nothing at all.
-///
-/// It consumes its `Vec<TabState>` deliberately: the caller has just built these
-/// values from its tabs' caches and has no further use for them.
-#[must_use]
-pub fn window_subtree(width: i32, height: i32, tabs: Vec<TabState>) -> Option<WindowState> {
-    if tabs.is_empty() {
-        return None;
-    }
-    Some(WindowState {
-        x: 0.0,
-        y: 0.0,
-        width: f64::from(width),
-        height: f64::from(height),
-        tabs,
-    })
-}
-
-/// What a restored tab with NO BOUND PANE contributes, or `None` when it must
-/// contribute nothing at all.
-///
-/// `Some` **iff** `restored_layout` is `Some`, carrying that layout verbatim at
-/// [`snapshot_cwd`]'s answer for this window and the LIVE sidebar preference.
-///
-/// Only a restored tab whose layout bound no pane reaches it, and that tab has no
-/// cache to fall back on: until its own first gather succeeds, which for such a tab
-/// is never, this seed is all it contributes. A restored tab whose panes DID bind
-/// is gathered live from its own Neovim and never consults this at all.
-///
-/// Both halves are load-bearing, in opposite directions:
-///
-/// - **Seeding a tab that carries a layout** is what stops a commit made before that
-///   tab has a pane erasing it. It has no cache, so with no seed it would contribute
-///   nothing, and the window would be written back without it. The round trip is
-///   idempotent because the seeded cwd is `snapshot_cwd`'s own answer and a tab is
-///   seeded only when the launch resolved to the project it was saved from.
-/// - **Not seeding a tab that carries none** is what stops a launch whose project
-///   has gone committing an empty-state tab over the saved one before any pane has
-///   bound — the loss [`may_snapshot`] exists to prevent, arriving through the one
-///   path that bypasses it.
-#[must_use]
-pub fn seeded_tab_state(
-    restored_layout: Option<&PaneNode>,
-    empty: bool,
-    launch_cwd: &Path,
+pub fn tab_entry(
+    directory: String,
     sidebar_visible: bool,
-) -> Option<TabState> {
-    let layout = restored_layout?;
-    Some(tab_subtree(
-        snapshot_cwd(empty, launch_cwd, None),
-        sidebar_visible,
-        Some(layout.clone()),
-    ))
+    root: Node,
+    zoomed: Option<usize>,
+) -> Tab {
+    let (root, zoomed) = if directory.is_empty() {
+        (None, None)
+    } else {
+        (Some(root), zoomed.map(PaneRef::Pane))
+    };
+    Tab {
+        directory,
+        content: TabContent {
+            root,
+            focused: None,
+            zoomed,
+            sidebar: Sidebar {
+                visible: sidebar_visible,
+                ..Sidebar::default()
+            },
+            drawer: None,
+        },
+    }
+}
+
+/// What a restored tab contributes until its own first gather succeeds, or `None`
+/// for a tab with no saved tab: `saved` as it was saved, with the LIVE sidebar
+/// preference.
+///
+/// A restored tab whose layout never binds a pane has no cache, so this is all it
+/// ever contributes. Seeding it is what stops a commit made before the tab has a
+/// pane erasing it, and a tab restored empty because its directory vanished keeps
+/// contributing its saved tab, so that directory's project state is never touched
+/// by absence. It is the tab as SAVED, never as `wolf_core::app_state::restored_tab`
+/// rewrote it, so a launch that finds a file missing does not write the loss back.
+/// A fresh tab has no seed and contributes nothing until its gate opens.
+#[must_use]
+pub fn seeded_tab(saved: Option<&Tab>, sidebar_visible: bool) -> Option<Tab> {
+    let mut tab = saved?.clone();
+    tab.content.sidebar.visible = sidebar_visible;
+    Some(tab)
 }
 
 /// A window's live tabs in PAGE order — the order they sit in the tab bar — from
@@ -460,31 +402,93 @@ pub fn seeded_tab_state(
 /// case a stated answer — the pairs' given relative order — instead of one that
 /// depends on how they happened to be collected.
 #[must_use]
-pub fn ordered_tab_states(positioned: Vec<(i32, TabState)>) -> Vec<TabState> {
+pub fn ordered_tab_states<T>(positioned: Vec<(i32, T)>) -> Vec<T> {
     let mut positioned = positioned;
     positioned.sort_by_key(|(position, _)| *position);
     positioned.into_iter().map(|(_, tab)| tab).collect()
 }
 
-/// Assembles the whole persisted tree from the live windows' subtrees, in window
-/// order — or `None` when there are none.
+/// Assembles ONE window's entry from its size and its contributing tabs, in page
+/// order with their ids, plus its recency as indices into those tabs — or `None`
+/// when no tab contributed.
+///
+/// `x`/`y` are `None` unconditionally: window POSITION is never known on Wayland
+/// (see the module docs). `active_tab` is the `selected` tab's index among the
+/// contributing tabs, or, when it contributed nothing, the most recently selected
+/// contributing tab's. `minimized` is left `false`; [`window_state`] sets it.
+///
+/// # `None` means "commit nothing", exactly as it does for [`window_state`]
+///
+/// An empty `tabs` vec is not a window with no tabs: every tab's gate can be shut
+/// at once while its panes are still binding. A window with no tabs is not one §2
+/// allows, and committing it would replace the window's last known tabs with none.
+/// The window drops out of the contribution set instead.
+#[must_use]
+pub fn window_entry(
+    width: i32,
+    height: i32,
+    tabs: Vec<(TabId, Tab)>,
+    selected: Option<TabId>,
+    recency: &TabRecency,
+) -> Option<(Window, Vec<usize>)> {
+    if tabs.is_empty() {
+        return None;
+    }
+    let ids: Vec<TabId> = tabs.iter().map(|(id, _)| *id).collect();
+    let recent = recency.indices(&ids);
+    let active_tab = selected
+        .and_then(|selected| ids.iter().position(|&id| id == selected))
+        .or_else(|| recent.first().copied())
+        .unwrap_or(0);
+    let window = Window {
+        frame: Frame {
+            x: None,
+            y: None,
+            width: f64::from(width),
+            height: f64::from(height),
+        },
+        active_tab,
+        tabs: tabs.into_iter().map(|(_, tab)| tab).collect(),
+        minimized: false,
+    };
+    Some((window, recent))
+}
+
+/// Assembles the whole window state from the contributing windows, in stacking
+/// order, each marked minimized as `stacking` says, with each window's recency in
+/// the same order — or `None` when there are none.
 ///
 /// # `None` means "commit nothing", never "commit nothing useful"
 ///
 /// An empty contribution set is not an empty session: it is a launch whose only
 /// core died before its first pane bound, or a moment when every window's
-/// [`may_snapshot`] gate is shut. Answering `Some(WolfState { windows: vec![] })`
-/// would hand the store a well-formed tree holding nothing, which overwrites the
-/// user's whole saved session with an empty file and loses it silently. `None` is
-/// the mechanical equivalent of the refused gate the single-window path already
-/// relies on: no call to `set_snapshot`, so the store keeps the tree it loaded
-/// from disk.
+/// [`may_snapshot`] gate is shut. Answering `Some` of an empty state would replace
+/// the user's whole saved session with no window at all. `None` means no submit,
+/// so the store keeps what it holds.
 #[must_use]
-pub fn snapshot_state(windows: Vec<WindowState>) -> Option<WolfState> {
+pub fn window_state(
+    windows: Vec<(WindowId, Window, Vec<usize>)>,
+    stacking: &StackingOrder,
+) -> Option<(WindowState, Vec<Vec<usize>>)> {
     if windows.is_empty() {
         return None;
     }
-    Some(WolfState { windows })
+    let ids: Vec<WindowId> = windows.iter().map(|(id, ..)| *id).collect();
+    let mut slots: Vec<Option<(WindowId, Window, Vec<usize>)>> =
+        windows.into_iter().map(Some).collect();
+    let mut state = WindowState::default();
+    let mut recency = Vec::new();
+    for id in stacking.order(&ids) {
+        let slot = slots
+            .iter_mut()
+            .find(|slot| slot.as_ref().is_some_and(|(w, ..)| *w == id));
+        if let Some((_, mut window, recent)) = slot.and_then(Option::take) {
+            window.minimized = stacking.is_minimized(id);
+            state.windows.push(window);
+            recency.push(recent);
+        }
+    }
+    Some((state, recency))
 }
 
 /// What closing one window does to the persisted tree.
@@ -495,9 +499,9 @@ pub fn snapshot_state(windows: Vec<WindowState>) -> Option<WolfState> {
 pub enum CloseCommit {
     /// Commit nothing at all: the tree has already been written by the quit path.
     Skip,
-    /// Commit a tree that still CONTAINS the closing window's subtree.
+    /// Commit a tree that still CONTAINS the closing window.
     KeepSubtree,
-    /// Commit a tree with the closing window's subtree REMOVED.
+    /// Commit a tree with the closing window REMOVED.
     DropSubtree,
 }
 
@@ -546,66 +550,22 @@ fn usable_dimension(value: f64) -> Option<i32> {
 mod tests {
     use super::*;
 
-    use wolf_core::PaneOrientation;
+    use wolf_core::app_state::Pane;
 
     // --- Paths (absolute and distinct, so every `==` is unambiguous) ------------
     /// The process working directory in the terminal-launch rows.
     const PROJECT: &str = "/projects/wolf";
-    /// The working directory recovered from `state.json`.
+    /// A saved tab's working directory.
     const SAVED: &str = "/projects/saved";
     /// The user's home directory (the desktop-launcher shape).
     const HOME: &str = "/home/tester";
-    /// A saved cwd whose directory no longer exists.
-    const GONE: &str = "/projects/deleted";
-    /// A leaf's buffer path inside the saved layout.
-    const SAVED_FILE: &str = "/projects/saved/only.md";
-    /// The SECOND saved window's working directory, distinct from [`SAVED`] so a
-    /// two-window expectation can tell the windows apart by value alone.
-    const SAVED_B: &str = "/projects/second";
-    /// A leaf's buffer path inside the SECOND saved window's layout. Distinct from
-    /// [`SAVED_FILE`] so a rule that read window 0's tab for every plan is visible
-    /// in the LAYOUT as well as in the cwd.
-    const SAVED_B_FILE: &str = "/projects/second/beta.md";
-    /// The directory the PROCESS was launched from in the two-window rows: a real
-    /// project, and neither saved directory, so "this plan was offered the process
-    /// cwd" is decidable from the value alone.
-    const LAUNCHED: &str = "/projects/launched";
-    /// The three files a THREE-TAB save carries, one per tab, in saved order.
-    ///
-    /// All three live under [`SAVED`], because a tab list is only restored when the
-    /// window's chosen project IS the saved one — a fixture whose files sat in three
-    /// different projects would be testing something no launch can produce.
-    ///
-    /// The three are DISTINCT so "the tabs came back in saved order" is decidable
-    /// from the values alone: a reversed walk, or a rule that copied tab 0's layout
-    /// into every plan, is visible rather than plausible.
+    /// The three files [`positioned_tab`] names, one per tab, distinct so an
+    /// ordering mistake is visible in the values alone.
     const SAVED_TAB_FILES: [&str; 3] = [
         "/projects/saved/first.md",
         "/projects/saved/second.md",
         "/projects/saved/third.md",
     ];
-    /// The common prefix of [`many_tab_state`]'s per-tab leaf paths.
-    const MANY_TAB_FILE: &str = "/projects/saved/tab";
-    /// The common prefix of [`many_window_tree`]'s per-window directories.
-    const MANY: &str = "/projects/many/w";
-
-    // --- Injected `is_dir` sets --------------------------------------------------
-    /// Home only: the launch that has nothing at all to restore.
-    const HOME_ONLY_DIRS: &[&str] = &[HOME];
-    /// A terminal launch with nothing saved.
-    const PROJECT_AND_HOME_DIRS: &[&str] = &[PROJECT, HOME];
-    /// Home plus BOTH saved projects — the two-window rows launched with no process
-    /// cwd of their own.
-    const TWO_SAVED_DIRS: &[&str] = &[HOME, SAVED, SAVED_B];
-    /// Home, the process cwd, and BOTH saved projects.
-    ///
-    /// Accepting the saved directories is load-bearing rather than incidental: an
-    /// `is_dir` that omitted them would drop every window past the first onto
-    /// [`LaunchDecision::EmptyState`], and
-    /// [`the_process_cwd_is_offered_to_the_first_saved_window_only`] would then pass
-    /// because those directories do not exist rather than because the process cwd
-    /// was withheld from them.
-    const LAUNCH_AND_TWO_SAVED_DIRS: &[&str] = &[HOME, LAUNCHED, SAVED, SAVED_B];
 
     // --- Saved window geometry ---------------------------------------------------
     /// The saved window width in the fixtures.
@@ -632,1155 +592,14 @@ mod tests {
     /// the boundary the whole rule turns on), exactly one, and several.
     const OTHER_LIVE_WINDOW_COUNTS: [usize; 3] = [0, 1, 2];
 
-    /// A non-preview leaf bound to `path`.
-    fn leaf(path: &str) -> PaneNode {
-        PaneNode::Leaf {
-            path: path.to_string(),
-            preview: false,
-            terminal: false,
-            zoomed: false,
-        }
-    }
-
-    /// A PREVIEW leaf bound to `path`.
-    fn preview_leaf(path: &str) -> PaneNode {
-        PaneNode::Leaf {
-            path: path.to_string(),
-            preview: true,
-            terminal: false,
-            zoomed: false,
-        }
-    }
-
-    /// A two-child vertical split of `children`, equally weighted.
-    fn split(children: Vec<PaneNode>) -> PaneNode {
-        PaneNode::Split {
-            orientation: PaneOrientation::Vertical,
-            weights: vec![0.5, 0.5],
-            children,
-        }
-    }
-
-    /// The layout one saved tab carries: a lone leaf naming [`SAVED_TAB_FILES`]`[index]`.
-    fn tab_layout(index: usize) -> Option<PaneNode> {
-        Some(leaf(SAVED_TAB_FILES[index]))
-    }
-
-    /// The cache ONE live tab contributes, identified by its layout's leaf path alone.
-    ///
-    /// Every field except the layout is per WINDOW and therefore identical across a
-    /// window's tabs, exactly as a real save produces — so an ordering assertion built
-    /// on these can only be satisfied by the right tab in the right place, never by a
-    /// sibling that happens to look like it.
-    fn positioned_tab(index: usize) -> TabState {
-        tab_subtree(SAVED.to_string(), true, tab_layout(index))
-    }
-
-    /// One saved WINDOW carrying one tab at `cwd` with `layout`, and the sidebar
-    /// preference the tab persisted.
-    fn saved_window_with_sidebar(
-        cwd: &str,
-        layout: Option<PaneNode>,
-        sidebar_visible: bool,
-    ) -> WindowState {
-        WindowState {
-            x: 0.0,
-            y: 0.0,
-            width: SAVED_W,
-            height: SAVED_H,
-            tabs: vec![TabState {
-                cwd: cwd.to_string(),
-                sidebar_visible,
-                layout,
-            }],
-        }
-    }
-
-    /// One saved WINDOW at `cwd` with `layout`, saved with the sidebar SHOWN.
-    fn saved_window(cwd: &str, layout: Option<PaneNode>) -> WindowState {
-        saved_window_with_sidebar(cwd, layout, true)
-    }
-
-    /// A `state.json` tree with one window carrying one tab at `cwd` with `layout`,
-    /// and the sidebar preference the tab persisted.
-    fn saved_state_with_sidebar(
-        cwd: &str,
-        layout: Option<PaneNode>,
-        sidebar_visible: bool,
-    ) -> WolfState {
-        WolfState {
-            windows: vec![saved_window_with_sidebar(cwd, layout, sidebar_visible)],
-        }
-    }
-
-    /// A `state.json` tree with one window carrying one tab at `cwd` with `layout`,
-    /// saved with the sidebar SHOWN — the shape every pre-existing row uses.
-    fn saved_state(cwd: &str, layout: Option<PaneNode>) -> WolfState {
-        saved_state_with_sidebar(cwd, layout, true)
-    }
-
-    /// A `state.json` tree with one window and NO tabs at all.
-    fn saved_state_without_tabs() -> WolfState {
-        WolfState {
-            windows: vec![WindowState {
-                x: 0.0,
-                y: 0.0,
-                width: SAVED_W,
-                height: SAVED_H,
-                tabs: Vec::new(),
-            }],
-        }
-    }
-
-    /// One saved WINDOW at `cwd` carrying one tab per entry of `layouts`, in that
-    /// order, each saved with the sidebar SHOWN.
-    ///
-    /// Every tab carries the SAME `cwd`, which is what a real save produces: the
-    /// sidebar preference and the working directory are per WINDOW and written into
-    /// every tab (see [`RestorePlan::sidebar_visible`]).
-    fn saved_window_with_tabs(cwd: &str, layouts: &[Option<PaneNode>]) -> WindowState {
-        WindowState {
-            x: 0.0,
-            y: 0.0,
-            width: SAVED_W,
-            height: SAVED_H,
-            tabs: layouts
-                .iter()
-                .map(|layout| TabState {
-                    cwd: cwd.to_string(),
-                    sidebar_visible: true,
-                    layout: layout.clone(),
-                })
-                .collect(),
-        }
-    }
-
-    /// A `state.json` tree with ONE window at `cwd` carrying one tab per entry of
-    /// `layouts`.
-    fn saved_state_with_tabs(cwd: &str, layouts: &[Option<PaneNode>]) -> WolfState {
-        WolfState {
-            windows: vec![saved_window_with_tabs(cwd, layouts)],
-        }
-    }
-
-    /// A `state.json` tree with one window at [`SAVED`] carrying `count` tabs, each
-    /// with a layout naming a file of its own.
-    ///
-    /// Every tab here is a USABLE restore candidate, so nothing except the cap can
-    /// reduce the plan's tab count: a rule that dropped layout-less tabs, or
-    /// deduplicated tabs sharing a project, would still return one `TabPlan` per tab
-    /// for this tree.
-    fn many_tab_state(count: usize) -> WolfState {
-        let layouts: Vec<Option<PaneNode>> = (0..count)
-            .map(|index| Some(leaf(&format!("{MANY_TAB_FILE}{index}.md"))))
-            .collect();
-        saved_state_with_tabs(SAVED, &layouts)
-    }
-
-    /// The layouts a plan's `tabs` carry, in order — the value every tab-order
-    /// assertion below compares against.
-    fn planned_layouts(plan: &RestorePlan) -> Vec<Option<PaneNode>> {
-        plan.tabs.iter().map(|tab| tab.layout.clone()).collect()
-    }
-
-    /// A `state.json` tree with TWO windows, saved in this order: [`SAVED`] with a
-    /// layout naming [`SAVED_FILE`], then [`SAVED_B`] with a layout naming
-    /// [`SAVED_B_FILE`].
-    ///
-    /// EVERY value that could identify a window differs between the two — the cwd
-    /// and the leaf path inside the layout — so no expectation below can be
-    /// satisfied by the wrong window, and a rule that copied window 0's tab into
-    /// every plan is visible rather than plausible.
-    fn two_window_tree() -> WolfState {
-        WolfState {
-            windows: vec![
-                saved_window(SAVED, Some(leaf(SAVED_FILE))),
-                saved_window(SAVED_B, Some(leaf(SAVED_B_FILE))),
-            ],
-        }
-    }
-
-    /// A `state.json` tree of `count` windows, each a project of its own under
-    /// [`MANY`], each with a layout of its own.
-    ///
-    /// Every window here is USABLE under [`many_window_dirs`], so nothing except the
-    /// cap can reduce the plan count: a rule that dropped windows whose directory
-    /// had gone, or that deduplicated windows sharing a project, would still return
-    /// one plan per window for this tree.
-    fn many_window_tree(count: usize) -> WolfState {
-        WolfState {
-            windows: (0..count)
-                .map(|index| {
-                    let cwd = format!("{MANY}{index}");
-                    let file = format!("{cwd}/only.md");
-                    saved_window(&cwd, Some(leaf(&file)))
-                })
-                .collect(),
-        }
-    }
-
-    /// The injected `is_dir` for [`many_window_tree`]: every per-window directory
-    /// under [`MANY`], plus home. A prefix test rather than a list, because the
-    /// window count is read from [`MAX_RESTORE_NEOVIMS`] and must stay free to move.
-    fn many_window_dirs(path: &Path) -> bool {
-        path == Path::new(HOME) || path.to_string_lossy().starts_with(MANY)
-    }
-
-    /// Builds the injected `is_dir` predicate from a list of directories.
-    fn dirs_predicate(dirs: &'static [&'static str]) -> impl Fn(&Path) -> bool {
-        move |path: &Path| dirs.iter().any(|dir| Path::new(dir) == path)
-    }
-
-    /// One launch-plan table row, for [`restore_plan`] and [`restore_plans`] alike.
-    struct PlanCase {
-        desc: &'static str,
-        saved: Option<WolfState>,
-        process_cwd: Option<&'static str>,
-        home: Option<&'static str>,
-        dirs: &'static [&'static str],
-        want: RestorePlan,
-    }
-
-    /// The ten single-window launch rows [`restore_plans_table`] walks.
-    ///
-    /// Held as data rather than inlined on purpose: the table's whole claim is
-    /// that the session-wide rule answers a single-window save with the SAME plan
-    /// the single-window rule produced, and the `[PlanCase; 10]` return type turns
-    /// a row that quietly went missing into a compile error rather than a smaller
-    /// table.
-    fn plan_cases() -> [PlanCase; 10] {
-        [
-            PlanCase {
-                // The compatibility row: nothing saved gives today's `launch_decision`, one layout-less tab, no
-                // size, and the sidebar default `true` (a first launch shows the tree).
-                desc: "no saved state at all => today's launch decision, one layout-less tab, no \
-                       size, and the sidebar default of SHOWN",
-                saved: None,
-                process_cwd: Some(PROJECT),
-                home: Some(HOME),
-                dirs: &[PROJECT, HOME],
-                want: RestorePlan {
-                    core_cwd: PathBuf::from(PROJECT),
-                    empty: false,
-                    tabs: vec![TabPlan { layout: None }],
-                    window_size: None,
-                    sidebar_visible: true,
-                },
-            },
-            PlanCase {
-                // The desktop-launcher shape: the process cwd is $HOME, so the
-                // RESTORED cwd gets its turn and its layout comes with it.
-                desc: "saved dir exists and the process cwd is home => Folder{saved} + one tab \
-                       carrying its layout",
-                saved: Some(saved_state(SAVED, Some(leaf(SAVED_FILE)))),
-                process_cwd: Some(HOME),
-                home: Some(HOME),
-                dirs: &[HOME, SAVED],
-                want: RestorePlan {
-                    core_cwd: PathBuf::from(SAVED),
-                    empty: false,
-                    tabs: vec![TabPlan {
-                        layout: Some(PaneNode::Leaf {
-                            path: SAVED_FILE.to_string(),
-                            preview: false,
-                            terminal: false,
-                            zoomed: false,
-                        }),
-                    }],
-                    window_size: Some(SAVED_SIZE),
-                    sidebar_visible: true,
-                },
-            },
-            PlanCase {
-                // The saved project was deleted: its layout's leaves point into a missing directory, so
-                // rebuilding it would `:edit` files that are gone.
-                desc: "saved dir is GONE => EmptyState at home, layout DROPPED, size kept",
-                saved: Some(saved_state(GONE, Some(leaf("/projects/deleted/x.md")))),
-                process_cwd: Some(HOME),
-                home: Some(HOME),
-                dirs: &[HOME],
-                want: RestorePlan {
-                    core_cwd: PathBuf::from(HOME),
-                    empty: true,
-                    tabs: vec![TabPlan { layout: None }],
-                    window_size: Some(SAVED_SIZE),
-                    sidebar_visible: true,
-                },
-            },
-            PlanCase {
-                desc: "saved `windows: []` => nothing to restore at all",
-                saved: Some(WolfState {
-                    windows: Vec::new(),
-                }),
-                process_cwd: Some(HOME),
-                home: Some(HOME),
-                dirs: &[HOME, SAVED],
-                want: RestorePlan {
-                    core_cwd: PathBuf::from(HOME),
-                    empty: true,
-                    tabs: vec![TabPlan { layout: None }],
-                    window_size: None,
-                    sidebar_visible: true,
-                },
-            },
-            PlanCase {
-                // A tab-less window keeps its geometry (`window_size_is_independent_of_the_cwd_decision`), and
-                // the tabs floor keeps it one window (`a_window_always_plans_at_least_one_tab`).
-                desc: "saved `tabs: []` => no cwd and no layout, but the window SIZE survives",
-                saved: Some(saved_state_without_tabs()),
-                process_cwd: Some(HOME),
-                home: Some(HOME),
-                dirs: &[HOME, SAVED],
-                want: RestorePlan {
-                    core_cwd: PathBuf::from(HOME),
-                    empty: true,
-                    tabs: vec![TabPlan { layout: None }],
-                    window_size: Some(SAVED_SIZE),
-                    sidebar_visible: true,
-                },
-            },
-            PlanCase {
-                // The empty-state save: `cwd: ""` is the documented "nvim never
-                // reported a cwd" sentinel and must never be treated as a path.
-                desc: "saved cwd is the \"\" sentinel => not a candidate project",
-                saved: Some(saved_state("", None)),
-                process_cwd: Some(HOME),
-                home: Some(HOME),
-                dirs: &[HOME],
-                want: RestorePlan {
-                    core_cwd: PathBuf::from(HOME),
-                    empty: true,
-                    tabs: vec![TabPlan { layout: None }],
-                    window_size: Some(SAVED_SIZE),
-                    sidebar_visible: true,
-                },
-            },
-            PlanCase {
-                desc: "saved cwd exists but `layout: None` => Folder{saved}, one layout-less tab",
-                saved: Some(saved_state(SAVED, None)),
-                process_cwd: Some(HOME),
-                home: Some(HOME),
-                dirs: &[HOME, SAVED],
-                want: RestorePlan {
-                    core_cwd: PathBuf::from(SAVED),
-                    empty: false,
-                    tabs: vec![TabPlan { layout: None }],
-                    window_size: Some(SAVED_SIZE),
-                    sidebar_visible: true,
-                },
-            },
-            PlanCase {
-                // The shared predicate on the restored candidate: a hand-edited `/` must not point FileSearch at
-                // the whole filesystem.
-                desc: "a saved cwd of `/` is refused by the SAME predicate the process cwd faces",
-                saved: Some(saved_state("/", Some(leaf("/x.md")))),
-                process_cwd: Some(HOME),
-                home: Some(HOME),
-                dirs: &["/", HOME],
-                want: RestorePlan {
-                    core_cwd: PathBuf::from(HOME),
-                    empty: true,
-                    tabs: vec![TabPlan { layout: None }],
-                    window_size: Some(SAVED_SIZE),
-                    sidebar_visible: true,
-                },
-            },
-            PlanCase {
-                // The read-back row: every row above saved the sidebar shown, so a hardcoded `true` would pass
-                // them all; this one makes the field a reading.
-                desc: "a tab saved with the sidebar HIDDEN restores hidden",
-                saved: Some(saved_state_with_sidebar(
-                    SAVED,
-                    Some(leaf(SAVED_FILE)),
-                    false,
-                )),
-                process_cwd: Some(SAVED),
-                home: Some(HOME),
-                dirs: &[HOME, SAVED],
-                want: RestorePlan {
-                    core_cwd: PathBuf::from(SAVED),
-                    empty: false,
-                    tabs: vec![TabPlan {
-                        layout: Some(PaneNode::Leaf {
-                            path: SAVED_FILE.to_string(),
-                            preview: false,
-                            terminal: false,
-                            zoomed: false,
-                        }),
-                    }],
-                    window_size: Some(SAVED_SIZE),
-                    sidebar_visible: false,
-                },
-            },
-            PlanCase {
-                // The preference is independent of the launch decision: the empty state overrides it at apply
-                // time (`sidebar_is_shown`); folding it in here would lose it, then persist the loss.
-                desc: "a HIDDEN sidebar survives an empty-state launch decision unchanged",
-                saved: Some(saved_state_with_sidebar(GONE, None, false)),
-                process_cwd: Some(HOME),
-                home: Some(HOME),
-                dirs: &[HOME],
-                want: RestorePlan {
-                    core_cwd: PathBuf::from(HOME),
-                    empty: true,
-                    tabs: vec![TabPlan { layout: None }],
-                    window_size: Some(SAVED_SIZE),
-                    sidebar_visible: false,
-                },
-            },
-        ]
-    }
-
-    // --- one window's launch plan ---
-
-    #[test]
-    fn a_layout_is_never_restored_into_a_different_project() {
-        // A saved layout's absolute leaf paths belong to one project: rebuilt elsewhere they open that
-        // project's files in this window, then persist back over the saved tree.
-        let saved = saved_state(SAVED, Some(split(vec![leaf(SAVED_FILE), leaf("")])));
-        let got = restore_plans(
-            Some(&saved),
-            Some(Path::new(PROJECT)),
-            Some(Path::new(HOME)),
-            dirs_predicate(&[PROJECT, SAVED, HOME]),
-        )
-        .remove(0);
-
-        assert_eq!(
-            got.core_cwd,
-            PathBuf::from(PROJECT),
-            "the process cwd wins over the restored one — launching Wolf from a directory is the \
-             Linux idiom, and silently reopening yesterday's project instead would be surprising"
-        );
-        assert!(
-            !got.empty,
-            "a real project directory is not the empty state"
-        );
-        assert_eq!(
-            got.tabs,
-            vec![TabPlan { layout: None }],
-            "the saved layout must NOT be attached when the chosen project ({PROJECT}) is not the \
-             project it was saved from ({SAVED}). Its leaves are absolute paths under {SAVED}, so \
-             restoring them here would open another project's files — and the next snapshot would \
-             then overwrite the saved tree with them. The single layout-less `TabPlan` is the \
-             never-empty FLOOR: a window is always built with one tab, so an empty vec here would \
-             leave the window with no page at all."
-        );
-        assert_eq!(
-            got.window_size,
-            Some(SAVED_SIZE),
-            "the WINDOW SIZE is not project-scoped and is restored regardless"
-        );
-    }
-
-    #[test]
-    fn a_layout_is_restored_when_the_process_cwd_is_the_saved_project() {
-        // The positive twin, and the only path the S1 / S2 relaunch smokes take (same cwd, layout
-        // attached). A guard dropping every layout passes the negative test alone.
-        let layout = split(vec![leaf(SAVED_FILE), leaf("")]);
-        let saved = saved_state(SAVED, Some(layout.clone()));
-        let got = restore_plans(
-            Some(&saved),
-            Some(Path::new(SAVED)),
-            Some(Path::new(HOME)),
-            dirs_predicate(&[SAVED, HOME]),
-        )
-        .remove(0);
-
-        assert_eq!(
-            got,
-            RestorePlan {
-                core_cwd: PathBuf::from(SAVED),
-                empty: false,
-                tabs: vec![TabPlan {
-                    layout: Some(layout)
-                }],
-                window_size: Some(SAVED_SIZE),
-                sidebar_visible: true,
-            },
-            "relaunching IN the saved project must restore its layout verbatim, on one tab. This \
-             is the exact shape the relaunch smokes run: same cwd, same state dir, layout expected \
-             back."
-        );
-    }
-
-    #[test]
-    fn window_size_is_independent_of_the_cwd_decision() {
-        // Deliberate: a window whose project is gone keeps its size, a property of the window, not the
-        // project. Do not generalize the layout guard to it.
-        let saved = saved_state(GONE, Some(leaf("/projects/deleted/x.md")));
-        let got = restore_plans(
-            Some(&saved),
-            Some(Path::new(HOME)),
-            Some(Path::new(HOME)),
-            dirs_predicate(&[HOME]),
-        )
-        .remove(0);
-
-        assert!(
-            got.empty,
-            "precondition: with the saved directory gone and the process cwd at home, this really \
-             is the empty state"
-        );
-        assert_eq!(
-            planned_layouts(&got),
-            vec![None],
-            "precondition: the layout really was dropped, so the size below is being asserted \
-             against the WORST case for it"
-        );
-        assert_eq!(
-            got.window_size,
-            Some(SAVED_SIZE),
-            "the restored window SIZE must survive a dropped cwd and a dropped layout. It is a \
-             property of the window, not of the project."
-        );
-    }
-
-    // --- restore_plans: the whole session's launch, rather than one window's ---
-
-    /// The behaviour-neutrality proof for the restore half: every single-window save
-    /// in [`plan_cases`] comes back through [`restore_plans`] as exactly ONE plan,
-    /// carrying the expectation the single-window rule already produced for it.
-    ///
-    /// ## What these ten rows cannot see
-    ///
-    /// Every row carries at most one saved window, and every row's process cwd is
-    /// either the home directory (which is never a usable project) or the saved
-    /// directory itself. No row can therefore tell "the process cwd is offered to
-    /// the FIRST saved window" apart from "the process cwd is offered to NO saved
-    /// window": the only row that moves when the offer is withdrawn is "no saved
-    /// state at all", and that row reaches its plan through the never-empty FLOOR
-    /// rather than through the per-window walk.
-    /// [`the_process_cwd_is_offered_to_the_first_saved_window_only`] is where that
-    /// rule is actually measured.
-    ///
-    /// ## Not isolated
-    ///
-    /// Deleting the never-empty floor reddens the "no saved state at all" and
-    /// "saved `windows: []`" rows here beside
-    /// [`a_launch_with_no_saved_windows_opens_exactly_one`], which is the test that
-    /// names the consequence. Recorded rather than avoided: the two rows are what
-    /// make the floor part of the compatibility claim as well as a rule of its own.
-    #[test]
-    fn restore_plans_table() {
-        let cases = plan_cases();
-
-        for case in &cases {
-            let plans = restore_plans(
-                case.saved.as_ref(),
-                case.process_cwd.map(Path::new),
-                case.home.map(Path::new),
-                dirs_predicate(case.dirs),
-            );
-
-            assert_eq!(
-                plans.len(),
-                1,
-                "case: {} — a save holding at most ONE window must launch exactly one window, and \
-                 the two failures are different bugs. Zero plans leaves the application with no \
-                 window at all: on GTK `activate` returns having built nothing, so the process \
-                 exits without ever drawing. More than one opens windows the saved session never \
-                 held. Plans were {plans:?}",
-                case.desc
-            );
-            assert_eq!(
-                plans[0], case.want,
-                "case: {} — the single plan must be EXACTLY the plan the single-window rule \
-                 already produces for this input. A difference here is a behaviour change to \
-                 every existing launch — including every cage smoke, all of which launch with one \
-                 window — rather than a multi-window feature.",
-                case.desc
-            );
-        }
-    }
-
-    /// The read side of the measured silent session loss: a saved tree of two
-    /// windows launches TWO windows, in saved order, each carrying its own project
-    /// and its own layout.
-    ///
-    /// This is the headless keystone of the multi-window claim. The revert it exists
-    /// to catch is the single-window shape — building the plan from
-    /// `saved.windows.first()` alone — under which the second window's whole session
-    /// is dropped at launch and then written back over by the next snapshot, so the
-    /// loss is silent and permanent rather than merely a missing window.
-    ///
-    /// Isolated: [`restore_plans_table`]'s rows all hold at most one saved window, so
-    /// a first-only rule satisfies every one of them.
-    #[test]
-    fn restore_plans_covers_every_saved_window_in_order() {
-        let saved = two_window_tree();
-        let plans = restore_plans(
-            Some(&saved),
-            // No process cwd: the desktop-launcher shape, and the one where each
-            // window's own saved directory is the only candidate it has.
-            None,
-            Some(Path::new(HOME)),
-            dirs_predicate(TWO_SAVED_DIRS),
-        );
-
-        assert_eq!(
-            plans.len(),
-            2,
-            "a saved tree of two windows must produce two launch plans. One plan is the \
-             single-window rule surviving: the second window's project, layout and geometry are \
-             all dropped at launch, and the next snapshot writes the one-window tree back over \
-             the save, so the session is GONE rather than merely unopened. Zero plans would leave \
-             the application with no window at all. Plans were {plans:?}"
-        );
-        assert_eq!(
-            plans[0].core_cwd,
-            PathBuf::from(SAVED),
-            "plan 0 must open the FIRST saved window's project. Asserting both positions is what \
-             catches a reversed walk, which a set-wise check would accept — and the user's window \
-             order is the order the next snapshot writes back."
-        );
-        assert_eq!(
-            plans[1].core_cwd,
-            PathBuf::from(SAVED_B),
-            "plan 1 must open the SECOND saved window's project. Seeing {SAVED} here instead means \
-             either the walk is reversed or every plan was built from window 0's tab; seeing \
-             {HOME} means window 1 fell to the empty state, which for a directory the injected \
-             is_dir accepts can only be a lost cwd."
-        );
-        assert_eq!(
-            planned_layouts(&plans[0]),
-            vec![Some(leaf(SAVED_FILE))],
-            "plan 0 must carry the first window's own layout on its one tab: it relaunches into \
-             the project the layout was saved from, so the files that window had open come back \
-             with it"
-        );
-        assert_eq!(
-            planned_layouts(&plans[1]),
-            vec![Some(leaf(SAVED_B_FILE))],
-            "plan 1 must carry the SECOND window's own layout, and the leaf path is what says so — \
-             {SAVED_FILE} here would mean window 0's tab was read for both plans, and `None` would \
-             mean layouts past the first are dropped (which \
-             `every_window_past_the_first_keeps_its_own_project` names on its own)"
-        );
-        assert!(
-            !plans[0].empty && !plans[1].empty,
-            "premise: with both saved directories accepted by the injected is_dir, NEITHER plan is \
-             the empty state. If either were, the cwd assertions above would be comparing against \
-             a launch decision that never consulted the saved tree at all."
-        );
-    }
-
-    /// The process cwd is a candidate for the FIRST saved window and for no other.
-    ///
-    /// Offering it at every index is not a preference but silent destruction: every
-    /// window resolves to `Folder { cwd: process_cwd }`, so `same_project` is false
-    /// for each one past the first, and all N windows open on one project with EVERY
-    /// saved layout dropped. The right NUMBER of windows appear, all showing the same
-    /// wrong thing, and the next snapshot writes the merge back over the saved tree.
-    ///
-    /// Isolated: yes. [`restore_plans_covers_every_saved_window_in_order`] and
-    /// [`every_window_past_the_first_keeps_its_own_project`] pass `None` as the
-    /// process cwd, so neither can see this rule at all.
-    #[test]
-    fn the_process_cwd_is_offered_to_the_first_saved_window_only() {
-        let saved = two_window_tree();
-        let is_dir = dirs_predicate(LAUNCH_AND_TWO_SAVED_DIRS);
-
-        // Premise, measured: if `is_dir` refused a saved directory the window would fall to EmptyState
-        // and the assertions below would pass for the wrong reason.
-        for dir in [LAUNCHED, SAVED, SAVED_B] {
-            assert!(
-                is_dir(Path::new(dir)),
-                "fixture premise: the injected is_dir must accept {dir}. Both saved projects have \
-                 to be real directories here, or index 1 lands on the empty state and this test \
-                 proves nothing about where the process cwd was offered."
-            );
-        }
-
-        let plans = restore_plans(
-            Some(&saved),
-            Some(Path::new(LAUNCHED)),
-            Some(Path::new(HOME)),
-            is_dir,
-        );
-
-        assert_eq!(
-            plans.len(),
-            2,
-            "precondition: both saved windows are still planned. Plans were {plans:?}"
-        );
-        assert_eq!(
-            plans[0].core_cwd,
-            PathBuf::from(LAUNCHED),
-            "plan 0 must take the PROCESS cwd: launching Wolf from a directory is the Linux idiom \
-             and it wins over what the first saved window remembers. Seeing {SAVED} here means the \
-             process cwd was offered to no window at all."
-        );
-        assert_eq!(
-            planned_layouts(&plans[0]),
-            vec![None],
-            "plan 0 opens {LAUNCHED} while its saved layout belongs to {SAVED}, so the layout must \
-             NOT be attached — its leaves are absolute paths in another project, and restoring \
-             them would open that project's files here and then persist them back"
-        );
-        assert_eq!(
-            plans[1].core_cwd,
-            PathBuf::from(SAVED_B),
-            "plan 1 must keep its OWN saved project. {LAUNCHED} here is the merge this rule exists \
-             to prevent: every window opened on the directory the process happened to start in, \
-             which looks like a working launch and is a destroyed session."
-        );
-        assert!(
-            !plans[1].empty,
-            "plan 1 must be a real project, not the empty state. The empty state here would mean \
-             the assertion above was satisfied by a directory that does not exist rather than by \
-             the rule."
-        );
-        assert_eq!(
-            planned_layouts(&plans[1]),
-            vec![Some(leaf(SAVED_B_FILE))],
-            "plan 1 relaunches into the project its layout was saved from, so the layout must come \
-             with it. `None` here is the second half of the merge: the windows would open on one \
-             project AND lose every saved pane tree."
-        );
-    }
-
-    /// A window past the first keeps its own project AND its own layout, with no
-    /// process cwd anywhere in the picture.
-    ///
-    /// The companion [`the_process_cwd_is_offered_to_the_first_saved_window_only`]
-    /// needs. That test's failure symptom — `plans[1].layout == None` — has two
-    /// possible causes: the process cwd was offered to window 1 (so `same_project`
-    /// is false), or layouts past index 0 are dropped outright. Here there is no
-    /// process cwd to offer, so a missing layout at index 1 can only be the second,
-    /// and the two bugs are distinguishable rather than sharing one symptom.
-    ///
-    /// Not isolated: [`restore_plans_covers_every_saved_window_in_order`] asserts the
-    /// same two values on the same fixture and reddens beside it. What this adds is
-    /// that the rule has a name a failure can print.
-    #[test]
-    fn every_window_past_the_first_keeps_its_own_project() {
-        let saved = two_window_tree();
-        let plans = restore_plans(
-            Some(&saved),
-            None,
-            Some(Path::new(HOME)),
-            dirs_predicate(TWO_SAVED_DIRS),
-        );
-
-        assert_eq!(
-            plans.len(),
-            2,
-            "precondition: both saved windows are still planned. Plans were {plans:?}"
-        );
-        assert_eq!(
-            plans[1].core_cwd,
-            PathBuf::from(SAVED_B),
-            "with no process cwd offered anywhere, window 1 has exactly one candidate — its own \
-             saved directory — and must open it"
-        );
-        assert_eq!(
-            planned_layouts(&plans[1]),
-            vec![Some(leaf(SAVED_B_FILE))],
-            "window 1 opens the project its layout was saved from, so the layout must be attached. \
-             `None` here, with no process cwd in play, means layouts past index 0 are dropped \
-             outright: every window past the first would come back as a bare empty pane and the \
-             next snapshot would persist that."
-        );
-    }
-
-    /// The never-empty floor: a launch with nothing to restore opens exactly one
-    /// window, whether the save is absent or holds `windows: []`.
-    ///
-    /// "There is nothing to restore" means "restore the empty state", never "start
-    /// with no window at all" — which on GTK is a process that exits the moment
-    /// `activate` returns, with no window, no error and no way to reach the
-    /// application again.
-    ///
-    /// Not isolated: dropping the floor also reddens two rows of
-    /// [`restore_plans_table`], which assert the same length for the same two
-    /// inputs. This test is where the consequence is named.
-    #[test]
-    fn a_launch_with_no_saved_windows_opens_exactly_one() {
-        let nothing_saved = restore_plans(
-            None,
-            Some(Path::new(PROJECT)),
-            Some(Path::new(HOME)),
-            dirs_predicate(PROJECT_AND_HOME_DIRS),
-        );
-        let empty_tree = WolfState {
-            windows: Vec::new(),
-        };
-        let empty_saved = restore_plans(
-            Some(&empty_tree),
-            Some(Path::new(PROJECT)),
-            Some(Path::new(HOME)),
-            dirs_predicate(PROJECT_AND_HOME_DIRS),
-        );
-
-        assert_eq!(
-            nothing_saved.len(),
-            1,
-            "a launch with NO saved state must plan exactly one window. Zero plans is not an empty \
-             session but no application: GTK sees no toplevel and the process exits. Plans were \
-             {nothing_saved:?}"
-        );
-        assert_eq!(
-            empty_saved.len(),
-            1,
-            "a saved tree with `windows: []` must plan exactly one window, for the same reason. \
-             This is the shape a save written while every window's snapshot gate was shut would \
-             have, so it is reachable from a real state.json rather than only from a hand edit. \
-             Plans were {empty_saved:?}"
-        );
-        assert_eq!(
-            nothing_saved, empty_saved,
-            "the two must produce the SAME plan: `windows: []` carries no more information than no \
-             saved state at all, and a launch that treated them differently would make the empty \
-             tree a third launch mode nothing else in the crate knows about"
-        );
-    }
-
-    /// The shape a window with nothing to restore takes: the empty state at home,
-    /// no layout, no saved size, and the sidebar preference's default.
-    ///
-    /// This is the plan a New Window is built from — no saved state and no process
-    /// cwd — so it is named here rather than left implicit in a table row.
-    ///
-    /// ## It is not an independent discriminator, and must not be dressed as one
-    ///
-    /// It shares `workspace::launch_decision`'s empty-state arm with several
-    /// [`restore_plans_table`] rows, so no edit reddens it alone. In particular it
-    /// CANNOT see the rule it exists to describe:
-    /// that a new window inherits nothing from the window that opened it. That rule
-    /// lives in the CHOICE of arguments at the call site — `None` for the saved
-    /// state and `None` for the process cwd — and passing the invoking window's cwd
-    /// instead would leave this test perfectly green. Only the smoke that reads the
-    /// new window's `getcwd()` back from its own Neovim can falsify that. The
-    /// precedent for a shape guard with a name and no falsifier of its own is
-    /// `palette::tests::open_recent_activation_targets_the_single_window`.
-    #[test]
-    fn a_new_windows_plan_is_a_fresh_empty_window() {
-        let plans = restore_plans(
-            None,
-            None,
-            Some(Path::new(HOME)),
-            dirs_predicate(HOME_ONLY_DIRS),
-        );
-
-        assert_eq!(
-            plans.len(),
-            1,
-            "precondition: one plan, which is the never-empty floor. Plans were {plans:?}"
-        );
-        assert_eq!(
-            plans[0],
-            RestorePlan {
-                core_cwd: PathBuf::from(HOME),
-                empty: true,
-                tabs: vec![TabPlan { layout: None }],
-                window_size: None,
-                sidebar_visible: true,
-            },
-            "a plan built from no saved state and no process cwd must be the empty state at home \
-             with nothing restored: `empty` drives the status page and keeps the sidebar hidden, \
-             ONE `TabPlan` carrying `layout: None` means a single tab holding a fresh single pane, \
-             `window_size: None` means GTK's default geometry rather than another window's, and \
-             `sidebar_visible: true` is the PREFERENCE default — the empty state overrides it at \
-             apply time through `sidebar_is_shown`, never here"
-        );
-    }
-
-    /// A hand-edited or corrupted tree of one-tab windows is truncated to
-    /// [`MAX_RESTORE_NEOVIMS`] plans.
-    ///
-    /// A restore POLICY cap, not a tree limit: what it bounds is PROCESSES, since
-    /// every restored tab costs a captive Neovim and a tokio runtime of its own, and
-    /// each window here holds one tab. The symbol is read rather than a literal
-    /// written, so the value can move without retuning anything here.
-    ///
-    /// Isolated: yes. No other test builds a tree anywhere near the cap.
-    #[test]
-    fn restore_plans_caps_a_hand_edited_tree() {
-        let hand_edited = many_window_tree(MAX_RESTORE_NEOVIMS + 3);
-        let plans = restore_plans(
-            Some(&hand_edited),
-            None,
-            Some(Path::new(HOME)),
-            many_window_dirs,
-        );
-
-        assert_eq!(
-            plans.len(),
-            MAX_RESTORE_NEOVIMS,
-            "a saved tree of {} windows must yield {MAX_RESTORE_NEOVIMS} plans. Every window in \
-             this fixture is a usable project of its own, so the cap is the only thing that can \
-             reduce the count — and without it a corrupt state.json forks one Neovim process and \
-             one tokio runtime per entry before the first frame is drawn. Got {} plans.",
-            MAX_RESTORE_NEOVIMS + 3,
-            plans.len()
-        );
-        assert_eq!(
-            plans[0].core_cwd,
-            PathBuf::from(format!("{MANY}0")),
-            "truncation must keep the FIRST windows: taking the last {MAX_RESTORE_NEOVIMS} would \
-             satisfy the count above while silently dropping the windows saved earliest"
-        );
-
-        // Non-vacuous cap: exactly at the limit nothing truncates, catching a `take` off by one or a
-        // cap of zero.
-        let exactly_at_cap = many_window_tree(MAX_RESTORE_NEOVIMS);
-        let capped_plans = restore_plans(
-            Some(&exactly_at_cap),
-            None,
-            Some(Path::new(HOME)),
-            many_window_dirs,
-        );
-        assert_eq!(
-            capped_plans.len(),
-            MAX_RESTORE_NEOVIMS,
-            "a tree of exactly {MAX_RESTORE_NEOVIMS} windows must restore ALL of them; without \
-             this the truncation assertion above would also pass with the cap mistakenly one too \
-             tight, which would lose a window from a session the user really did assemble"
-        );
-    }
-
-    // --- restore_plans: every saved tab, not just the selected one ---
-
-    /// **THE RESTORE KEYSTONE.** A window saved with three tabs plans three tabs, in
-    /// saved order, each carrying its own layout.
-    ///
-    /// The revert it exists to catch is the one-tab shape — building the plan from
-    /// `saved_tabs.first()` alone. Under it the launch opens one tab, the other two
-    /// contribute nothing, and the next gather writes the one-tab window back over
-    /// the save: the user's other tabs are GONE rather than merely unopened, and no
-    /// message anywhere says so.
-    ///
-    /// Isolated: every row of [`restore_plans_table`] holds at most one saved tab, so
-    /// a first-only rule satisfies all ten of them.
-    #[test]
-    fn restore_plans_covers_every_saved_tab_in_order() {
-        let layouts: Vec<Option<PaneNode>> = SAVED_TAB_FILES
-            .into_iter()
-            .map(|file| Some(leaf(file)))
-            .collect();
-        let saved = saved_state_with_tabs(SAVED, &layouts);
-
-        // The relaunch shape exactly: same project, same directory the tabs were
-        // saved from — which is the only shape in which a tab list is restored at all.
-        let plans = restore_plans(
-            Some(&saved),
-            Some(Path::new(SAVED)),
-            Some(Path::new(HOME)),
-            dirs_predicate(&[HOME, SAVED]),
-        );
-
-        assert_eq!(
-            plans.len(),
-            1,
-            "precondition: one saved window is still one launch plan. Tabs live INSIDE a window's \
-             plan; a tab list that turned into extra windows would be a different bug entirely. \
-             Plans were {plans:?}"
-        );
-        assert_eq!(
-            plans[0].core_cwd,
-            PathBuf::from(SAVED),
-            "premise: the window must open the project its tabs were saved from. Anything else \
-             means `same_project` is false, so the tab assertions below would be measuring the \
-             DIFFERENT-project arm, which correctly plans one layout-less tab — and this test \
-             would report a lost tab list where the rule was working. That arm has a test of its \
-             own; see the tabs-restored-only-into-their-own-project rule."
-        );
-        assert_eq!(
-            plans[0].tabs.len(),
-            SAVED_TAB_FILES.len(),
-            "a window saved with {} tabs must plan {} of them, got {}. ONE is the one-tab shape \
-             surviving — the plan built from `saved_tabs.first()` alone — and it is not a missing \
-             feature but a DATA LOSS: the extra tabs never open, so no page ever gathers them, and \
-             the first snapshot after the launch writes a one-tab window back over the saved tree. \
-             The user's other tabs are gone by the time they notice one is missing. ZERO would \
-             leave the window with no page at all. Plan was {:?}",
-            SAVED_TAB_FILES.len(),
-            SAVED_TAB_FILES.len(),
-            plans[0].tabs.len(),
-            plans[0]
-        );
-        assert_eq!(
-            planned_layouts(&plans[0]),
-            layouts,
-            "the tabs must carry their OWN layouts in SAVED ORDER. The three leaf paths are \
-             distinct precisely so this is decidable from the value: a REVERSED walk restores the \
-             right three tabs with the user's tab bar mirrored (and the next save writes that \
-             mirror back, so it compounds), and three copies of one layout means every tab was \
-             built from `saved_tabs.first()`. A `None` in the middle means a tab's layout was \
-             dropped on the way into the plan — a tab's open buffer paths ride ONLY inside \
-             `TabState::layout`, so that tab comes back empty."
-        );
-    }
-
-    /// A hand-edited or corrupted tab list is truncated to [`MAX_RESTORE_TABS`].
-    ///
-    /// The [`MAX_RESTORE_NEOVIMS`] precedent, bounding a different resource: one
-    /// window's launch cost, a `WolfCore::start` per restored tab on the GTK main
-    /// thread before the window is presented. The symbol is read rather than a
-    /// literal written, so the value can move without retuning anything here.
-    ///
-    /// Isolated: yes. No other test builds a tab list anywhere near the cap.
-    #[test]
-    fn restore_plans_caps_a_hand_edited_tab_list() {
-        let hand_edited = many_tab_state(MAX_RESTORE_TABS + 3);
-        let plans = restore_plans(
-            Some(&hand_edited),
-            Some(Path::new(SAVED)),
-            Some(Path::new(HOME)),
-            dirs_predicate(&[HOME, SAVED]),
-        );
-
-        assert_eq!(
-            plans.len(),
-            1,
-            "precondition: one saved window, one plan. Plans were {plans:?}"
-        );
-        assert_eq!(
-            plans[0].tabs.len(),
-            MAX_RESTORE_TABS,
-            "a saved window carrying {} tabs must plan {MAX_RESTORE_TABS}, got {}. Every tab in \
-             this fixture is a usable restore candidate, so the cap is the only thing that can \
-             reduce the count — and without it a corrupt state.json starts one Neovim per \
-             entry on the main thread before the window is presented, so the launch stalls for \
-             as long as the file is long.",
-            MAX_RESTORE_TABS + 3,
-            plans[0].tabs.len()
-        );
-        assert_eq!(
-            plans[0].tabs[0].layout,
-            Some(leaf(&format!("{MANY_TAB_FILE}0.md"))),
-            "truncation must keep the FIRST tabs: taking the last {MAX_RESTORE_TABS} would satisfy \
-             the count above while silently dropping the tabs saved earliest, and tab order is the \
-             user's own"
-        );
-
-        // Non-vacuous cap: exactly at the limit nothing truncates, catching a `take` off by one or a
-        // cap of zero.
-        let exactly_at_cap = many_tab_state(MAX_RESTORE_TABS);
-        let capped = restore_plans(
-            Some(&exactly_at_cap),
-            Some(Path::new(SAVED)),
-            Some(Path::new(HOME)),
-            dirs_predicate(&[HOME, SAVED]),
-        );
-        assert_eq!(
-            capped[0].tabs.len(),
-            MAX_RESTORE_TABS,
-            "a window with exactly {MAX_RESTORE_TABS} saved tabs must restore ALL of them; without \
-             this the truncation assertion above would also pass with the cap mistakenly one too \
-             tight, which would lose a tab from a session the user really did assemble"
-        );
-    }
-
-    /// Every plan carries at least ONE tab, whatever the save held.
-    ///
-    /// The tab-level twin of the never-empty window floor, and the same class of
-    /// failure one level down: a window is built with the tabs its plan names, so an
-    /// empty vec is a window with no page — a toplevel holding a tab bar and no
-    /// editor, with no way to reach one, since New Tab needs a live core the window
-    /// never wired.
-    ///
-    /// The three inputs are the three routes to "nothing to restore": a saved window
-    /// whose `tabs` array is empty (reachable from a real save — it is what a window
-    /// whose every tab's gate was shut would write), a saved project that has since
-    /// been deleted, and no saved state at all.
-    ///
-    /// Not isolated: deleting the floor also reddens two rows of
-    /// [`restore_plans_table`]. This is where the consequence is named.
-    #[test]
-    fn a_window_always_plans_at_least_one_tab() {
-        let no_tabs = saved_state_without_tabs();
-        let project_gone = saved_state(GONE, Some(leaf("/projects/deleted/x.md")));
-
-        let probes: [(&str, Option<&WolfState>); 3] = [
-            ("a saved window whose `tabs` array is empty", Some(&no_tabs)),
-            (
-                "a saved window whose project directory has been deleted",
-                Some(&project_gone),
-            ),
-            ("no saved state at all", None),
-        ];
-
-        for (desc, saved) in probes {
-            let plans = restore_plans(
-                saved,
-                Some(Path::new(HOME)),
-                Some(Path::new(HOME)),
-                dirs_predicate(HOME_ONLY_DIRS),
-            );
-            assert_eq!(
-                plans.len(),
-                1,
-                "precondition: {desc} must still plan exactly one window. Plans were {plans:?}"
-            );
-            assert_eq!(
-                plans[0].tabs,
-                vec![TabPlan { layout: None }],
-                "{desc} must plan exactly ONE layout-less tab, got {:?}. An EMPTY vec is not an \
-                 empty session but a window with no page: the tab view is built from this list, so \
-                 the toplevel would map with a bar and no editor and nothing the user could press \
-                 to get one. MORE than one tab, or a tab carrying a layout, would mean a launch \
-                 with nothing to restore invented pages the save never held — and the next \
-                 snapshot would write them back as though the user had opened them.",
-                plans[0].tabs
-            );
-        }
-    }
-
-    /// A saved tab list is restored only into the project it was saved from.
-    ///
-    /// The tab-level statement of the rule
-    /// [`a_layout_is_never_restored_into_a_different_project`] makes for one layout,
-    /// and the cost of getting it wrong scales with the tab count: every tab's leaf
-    /// paths are absolute paths belonging to ONE project, so restoring the list into
-    /// a window launched somewhere else opens N tabs full of another project's files
-    /// — and the next snapshot writes that mistake over the saved tree, so the
-    /// session the tabs came from is destroyed rather than merely mis-displayed.
-    ///
-    /// Isolated from [`restore_plans_covers_every_saved_tab_in_order`]: that test
-    /// relaunches IN the saved project, so it cannot see this rule at all.
-    #[test]
-    fn tabs_are_restored_only_into_the_project_they_were_saved_from() {
-        let layouts: Vec<Option<PaneNode>> = SAVED_TAB_FILES
-            .into_iter()
-            .map(|file| Some(leaf(file)))
-            .collect();
-        let saved = saved_state_with_tabs(SAVED, &layouts);
-
-        // The process cwd is a REAL project of its own, and it wins — launching Wolf
-        // from a directory is the Linux idiom.
-        let plans = restore_plans(
-            Some(&saved),
-            Some(Path::new(PROJECT)),
-            Some(Path::new(HOME)),
-            dirs_predicate(&[PROJECT, SAVED, HOME]),
-        );
-
-        assert_eq!(
-            plans[0].core_cwd,
-            PathBuf::from(PROJECT),
-            "premise: the process cwd must win, or the assertion below is about the same-project \
-             arm and proves nothing"
-        );
-        assert!(
-            !plans[0].empty,
-            "premise: {PROJECT} is a real directory the injected is_dir accepts, so this is a \
-             project launch rather than the empty state. Were it the empty state, the tab \
-             assertion below would hold because no project resolved at all rather than because the \
-             tabs were withheld from a DIFFERENT one."
-        );
-        assert_eq!(
-            plans[0].tabs,
-            vec![TabPlan { layout: None }],
-            "a window launched into {PROJECT} must plan ONE layout-less tab, not the three saved \
-             under {SAVED}, got {:?}. Three tabs here means the whole saved tab list was rebuilt \
-             inside another project: nvim would be asked to `:edit` absolute paths belonging to \
-             {SAVED} in a window rooted at {PROJECT}, the user would find another project's files \
-             spread across three tabs, and the next snapshot would write that arrangement back \
-             over the save. An EMPTY vec would leave the window with no page at all.",
-            plans[0].tabs
-        );
+    /// The tab ONE live window contributes, identified by its lone pane's path alone.
+    fn positioned_tab(index: usize) -> Tab {
+        let root = Node::Pane(Pane::Edit {
+            path: SAVED_TAB_FILES[index].to_owned(),
+            cursor: None,
+            top_line: None,
+        });
+        tab_entry(SAVED.to_string(), true, root, None)
     }
 
     // --- sidebar_is_shown: the user preference versus the empty state ---
@@ -1850,9 +669,9 @@ mod tests {
                 sidebar_is_shown(case.user_wants, case.empty),
                 case.want,
                 "sidebar_is_shown(user_wants = {}, empty = {}) must be {} — {}. This is the ONE \
-                 place the rule lives: `AppShell::set_empty_state` and `AppShell::toggle_sidebar` \
-                 both apply it through the same private applier, so a wrong answer here means the \
-                 next `set_empty_state(false)` silently undoes whatever the user just toggled.",
+                 place the rule lives: `AppShell::apply_selected_tab` applies it on every \
+                 toggle and every selection change, so a wrong answer here means the next \
+                 selection silently undoes whatever the user just toggled.",
                 case.user_wants,
                 case.empty,
                 case.want,
@@ -1979,55 +798,6 @@ mod tests {
                 case.desc,
                 case.width,
                 case.height
-            );
-        }
-    }
-
-    // --- persistable_layout: the single-pane fix, from the save side ---
-
-    /// One [`persistable_layout`] table row.
-    struct PersistCase {
-        desc: &'static str,
-        node: PaneNode,
-        want: Option<PaneNode>,
-    }
-
-    #[test]
-    fn persistable_layout_table() {
-        let cases = [
-            PersistCase {
-                // The pre-existing invariant that must be PRESERVED: the empty-state
-                // "no folder" lone pane persists no layout.
-                desc: "an unnamed, non-preview LONE leaf is the one suppressed shape",
-                node: leaf(""),
-                want: None,
-            },
-            PersistCase {
-                // The regression row: an arity guard (`leaf_count(..) > 1`) answers `None` here, so
-                // a lone pane's file is not reopened on relaunch.
-                desc: "a NAMED lone leaf IS persisted (the single-pane fix)",
-                node: leaf(SAVED_FILE),
-                want: Some(leaf(SAVED_FILE)),
-            },
-            PersistCase {
-                desc: "a PREVIEW lone leaf is persisted (preview is content, not emptiness)",
-                node: preview_leaf(SAVED_FILE),
-                want: Some(preview_leaf(SAVED_FILE)),
-            },
-            PersistCase {
-                desc: "a split of two EMPTY leaves is persisted — the topology is state",
-                node: split(vec![leaf(""), leaf("")]),
-                want: Some(split(vec![leaf(""), leaf("")])),
-            },
-        ];
-
-        for case in &cases {
-            assert_eq!(
-                persistable_layout(case.node.clone()),
-                case.want,
-                "case: {} (node = {:?})",
-                case.desc,
-                case.node
             );
         }
     }
@@ -2325,425 +1095,6 @@ mod tests {
         );
     }
 
-    // --- snapshot_state ---
-
-    #[test]
-    #[allow(
-        clippy::float_cmp,
-        reason = "x/y are asserted to be the literal 0.0 this function writes unconditionally, \
-                  and the dimensions are exact `f64::from(i32)` widenings — an epsilon would let \
-                  a garbage coordinate through, which is the whole point of the assertion \
-                  (the `mouse::scroll_threshold_table` precedent)"
-    )]
-    fn snapshot_state_is_one_window_one_tab() {
-        const WIDTH: i32 = 1200;
-        const HEIGHT: i32 = 640;
-
-        let subtree = window_subtree(
-            WIDTH,
-            HEIGHT,
-            vec![tab_subtree(SAVED.to_string(), true, Some(leaf(SAVED_FILE)))],
-        )
-        .expect(
-            "a window contributing ONE tab must assemble into a subtree; `None` is reserved for \
-             the empty contribution set",
-        );
-        let state =
-            snapshot_state(vec![subtree]).expect("one window's subtree must assemble into a tree");
-
-        assert_eq!(
-            state.windows.len(),
-            1,
-            "one contributing window must assemble into exactly one persisted window — the \
-             assembler adds none and drops none. `snapshot_state_carries_every_window_in_order` is \
-             where the N-window claim lives."
-        );
-        let window = &state.windows[0];
-        assert_eq!(
-            window.tabs.len(),
-            1,
-            "…and one contributed tab into exactly one persisted tab; \
-             `window_subtree_writes_every_tab_in_order` is where the N-tab claim lives"
-        );
-
-        // Window position is never persisted on Wayland (a client gets no position or screen geometry),
-        // so these are a deliberate zero, not a coordinate to trust.
-        assert_eq!(
-            window.x, 0.0,
-            "window.x must be a deliberate 0.0: Wayland gives the client no position, so anything \
-             else here is a fabricated coordinate that a future restore might act on"
-        );
-        assert_eq!(
-            window.y, 0.0,
-            "window.y must be a deliberate 0.0, for the same reason"
-        );
-        assert_eq!(window.width, f64::from(WIDTH), "the width round-trips");
-        assert_eq!(window.height, f64::from(HEIGHT), "the height round-trips");
-
-        let tab = &window.tabs[0];
-        assert_eq!(tab.cwd, SAVED, "the cwd round-trips verbatim");
-        assert!(
-            tab.sidebar_visible,
-            "`sidebar_visible` must round-trip the argument it was given. `restore_plan` READS this \
-             field back, so a write side that ignored its argument would hand the next launch a \
-             preference the user never expressed"
-        );
-        assert_eq!(
-            tab.layout,
-            Some(leaf(SAVED_FILE)),
-            "the layout round-trips verbatim"
-        );
-
-        // The other side of `sidebar_visible`, so the field is proven to follow its
-        // argument rather than being hardcoded true.
-        let hidden_subtree =
-            window_subtree(WIDTH, HEIGHT, vec![tab_subtree(String::new(), false, None)])
-                .expect("a window contributing one tab must assemble into a subtree");
-        let hidden = snapshot_state(vec![hidden_subtree])
-            .expect("one window's subtree must assemble into a tree");
-        assert!(
-            !hidden.windows[0].tabs[0].sidebar_visible,
-            "`sidebar_visible` must follow its argument; a hardcoded `true` would make a session \
-             the user spent with the tree hidden come back with it shown"
-        );
-        assert_eq!(
-            hidden.windows[0].tabs[0].layout, None,
-            "a suppressed layout is written as `None`, which is what `load_state` reads back as \
-             the empty-state lone pane"
-        );
-    }
-
-    // --- window_subtree: one window's persisted subtree, N tabs ---
-
-    /// One window's subtree carries EVERY tab it was handed, in tab order, plus a
-    /// deliberate `0.0` position and the size it was given.
-    ///
-    /// The write-side twin of [`restore_plans_covers_every_saved_tab_in_order`]:
-    /// restore walks a window's tabs positionally, so the order this assembles in is
-    /// the order the next launch opens them.
-    ///
-    /// FALSIFYING EDIT: `tabs.truncate(1)`. The window persists whichever tab happens
-    /// to be first and the user's other tabs are gone at the next launch — silently,
-    /// because a one-tab window is exactly what a correct save of a one-tab session
-    /// looks like.
-    ///
-    /// Reverts inherited from [`snapshot_state_is_one_window_one_tab`]: writing a
-    /// non-zero `x` or `y` fails the position assertions there as well as here.
-    #[test]
-    #[allow(
-        clippy::float_cmp,
-        reason = "x/y are asserted to be the literal 0.0 this function writes unconditionally, \
-                  and the dimensions are exact `f64::from(i32)` widenings — an epsilon would let \
-                  a garbage coordinate through, which is the whole point of the assertion \
-                  (the `mouse::scroll_threshold_table` precedent)"
-    )]
-    fn window_subtree_writes_every_tab_in_order() {
-        const WIDTH: i32 = 1200;
-        const HEIGHT: i32 = 640;
-
-        // Three tabs with differing layouts, so order is decidable from the value; cwd and sidebar
-        // preference match because both are per window, fanned to each tab.
-        let tabs: Vec<TabState> = SAVED_TAB_FILES
-            .into_iter()
-            .map(|file| tab_subtree(SAVED.to_string(), true, Some(leaf(file))))
-            .collect();
-
-        let window = window_subtree(WIDTH, HEIGHT, tabs.clone()).unwrap_or_else(|| {
-            panic!(
-                "window_subtree refused a window contributing {} tabs. `None` means \"commit \
-                 nothing\" and is reserved for the EMPTY contribution set; answering it here drops \
-                 a live window out of the committed tree, and the next launch reopens one fewer \
-                 window than the user had.",
-                SAVED_TAB_FILES.len()
-            )
-        });
-
-        assert_eq!(
-            window.tabs, tabs,
-            "the subtree must carry every contributed tab, in order. THREE failures are \
-             distinguishable and each loses something different: a SHORTER vec drops whole tabs — \
-             their files ride only inside `TabState::layout`, so those tabs do not come back and \
-             the save that dropped them is what the next launch reads; a REVERSED vec restores the \
-             user's tabs mirrored, and since the next gather writes the mirror back the swap \
-             compounds every run; and a tab whose `layout` is `None` where a layout was \
-             contributed comes back as an empty pane."
-        );
-        assert_eq!(
-            window.tabs.len(),
-            SAVED_TAB_FILES.len(),
-            "…and exactly that many, so a duplicated tab cannot hide inside an equality that \
-             happens to line up"
-        );
-
-        // Window position is never persisted on Wayland (a client gets no position or screen geometry),
-        // so these are a deliberate zero, not a coordinate to trust.
-        assert_eq!(
-            window.x, 0.0,
-            "window.x must be a deliberate 0.0: Wayland gives the client no position, so anything \
-             else here is a fabricated coordinate that a future restore might act on"
-        );
-        assert_eq!(
-            window.y, 0.0,
-            "window.y must be a deliberate 0.0, for the same reason"
-        );
-        assert_eq!(window.width, f64::from(WIDTH), "the width round-trips");
-        assert_eq!(window.height, f64::from(HEIGHT), "the height round-trips");
-
-        // `tab_subtree` is the only way into this vec, so its round trip is stated here: cwd, preference
-        // and layout are the values passed.
-        let tab = &window.tabs[0];
-        assert_eq!(tab.cwd, SAVED, "the cwd round-trips verbatim");
-        assert!(
-            tab.sidebar_visible,
-            "`sidebar_visible` must round-trip the argument it was given. `restore_plans` READS \
-             this field back off `tabs.first()`, so a write side that ignored its argument would \
-             hand the next launch a preference the user never expressed"
-        );
-        assert_eq!(
-            tab.layout,
-            Some(leaf(SAVED_TAB_FILES[0])),
-            "the layout round-trips verbatim"
-        );
-
-        // The other side of `sidebar_visible`, proving it follows its argument, beside the
-        // suppressed-layout shape.
-        let hidden = window_subtree(WIDTH, HEIGHT, vec![tab_subtree(String::new(), false, None)])
-            .expect("a window contributing one tab must assemble into a subtree");
-        assert!(
-            !hidden.tabs[0].sidebar_visible,
-            "`sidebar_visible` must follow its argument; a hardcoded `true` would make a session \
-             the user spent with the tree hidden come back with it shown"
-        );
-        assert_eq!(
-            hidden.tabs[0].layout, None,
-            "a suppressed layout is written as `None`, which is what `load_state` reads back as \
-             the empty-state lone pane"
-        );
-    }
-
-    /// A window whose tabs contributed NOTHING commits nothing, rather than
-    /// committing a window with an empty `tabs` array.
-    ///
-    /// The tab-level twin of [`an_empty_contribution_set_commits_nothing`], and the
-    /// reason it must hold at this level too is already written down in
-    /// [`restore_plans_table`]'s "saved `tabs: []`" row: restore reads a window whose
-    /// `tabs` array is empty as having NO project, no layout and no sidebar
-    /// preference — the empty state. So committing one is not "a window with no tabs
-    /// yet", it is the destruction of that window's whole session, written by a
-    /// process that is running perfectly and reported as a successful save.
-    ///
-    /// An empty contribution set is reachable without any bug at all: every one of a
-    /// window's tabs refuses while its panes are still binding.
-    ///
-    /// Isolated: yes. No other test hands `window_subtree` an empty vec.
-    #[test]
-    fn a_window_with_no_tab_contribution_commits_nothing() {
-        const WIDTH: i32 = 1200;
-        const HEIGHT: i32 = 640;
-
-        assert_eq!(
-            window_subtree(WIDTH, HEIGHT, Vec::new()),
-            None,
-            "a window contributing NO tabs must commit nothing. \
-             `Some(WindowState {{ tabs: [], .. }})` here is the value that destroys a project: \
-             `restore_plans` reads a window's project, its layout and its sidebar preference off \
-             `tabs.first()`, so a `tabs: []` window restores as the EMPTY STATE — the next launch \
-             opens a window with no folder, and the gather after that writes that emptiness back. \
-             `None` is the mechanical equivalent of the refused gate: the window drops out of the \
-             contribution set, `snapshot_state` assembles the windows that did contribute, and if \
-             none did it commits nothing at all."
-        );
-
-        // Non-vacuity: the rule above is satisfied by an assembler that answers `None`
-        // for everything, which would persist no window ever.
-        assert!(
-            window_subtree(
-                WIDTH,
-                HEIGHT,
-                vec![tab_subtree(SAVED.to_string(), true, Some(leaf(SAVED_FILE)))]
-            )
-            .is_some(),
-            "one contributing tab MUST assemble into a committable subtree — otherwise the rule \
-             above holds vacuously and nothing is ever persisted at all"
-        );
-    }
-
-    // --- seeded_tab_state: what a restored tab contributes before it is ever selected ---
-
-    /// One [`seeded_tab_state`] table row. The expectation is DATA — the cwd is a
-    /// literal rather than a second call to `snapshot_cwd`, because a mirror
-    /// implementation would agree with any bug it also contained (the
-    /// [`may_snapshot_table`] precedent).
-    struct SeedCase {
-        desc: &'static str,
-        restored_layout: Option<PaneNode>,
-        empty: bool,
-        launch_cwd: &'static str,
-        sidebar_visible: bool,
-        want: Option<TabState>,
-    }
-
-    /// What a restored tab contributes while its own gate has never opened.
-    ///
-    /// Only a restored tab whose layout bound no pane reaches it, so `may_snapshot`
-    /// refuses it and its cache stays `None`. A restored tab whose panes DID bind is
-    /// gathered live from its own Neovim and never consults the seed at all. Both
-    /// halves of the rule are load-bearing, in opposite directions:
-    ///
-    /// FALSIFYING EDIT 1 — return `None` unconditionally. That tab contributes
-    /// nothing, so the commit writes a window holding only the tabs with bound panes:
-    /// the tab is dropped from the saved session while the launch is still coming up.
-    ///
-    /// FALSIFYING EDIT 2 — return `Some` unconditionally (a seed even where no layout
-    /// was restored). A launch whose project has gone plans `layout: None`, so the
-    /// seed would be an empty-state tab at `cwd: ""`, and committing it writes that
-    /// over the saved project before any pane has bound — which is exactly the loss
-    /// `may_snapshot` exists to prevent, arriving through the one path that bypasses
-    /// it.
-    #[test]
-    fn seeded_tab_state_table() {
-        let cases = [
-            SeedCase {
-                // THE ROW THE SEED EXISTS FOR: a tab restored with a layout carries
-                // that layout back out, unchanged, before any pane of its own exists.
-                desc: "a restored layout is seeded verbatim, at the launch cwd",
-                restored_layout: Some(leaf(SAVED_FILE)),
-                empty: false,
-                launch_cwd: SAVED,
-                sidebar_visible: true,
-                want: Some(TabState {
-                    cwd: SAVED.to_string(),
-                    sidebar_visible: true,
-                    layout: Some(leaf(SAVED_FILE)),
-                }),
-            },
-            SeedCase {
-                // The preference is read at the same instant, so hiding the sidebar and quitting without touching
-                // the extra tabs does not bring it back next launch.
-                desc: "the live sidebar preference is carried, not assumed",
-                restored_layout: Some(leaf(SAVED_FILE)),
-                empty: false,
-                launch_cwd: SAVED,
-                sidebar_visible: false,
-                want: Some(TabState {
-                    cwd: SAVED.to_string(),
-                    sidebar_visible: false,
-                    layout: Some(leaf(SAVED_FILE)),
-                }),
-            },
-            SeedCase {
-                // A SPLIT seeds as readily as a leaf: the seed is the restore plan's
-                // own tree and nothing is re-derived from it.
-                desc: "a multi-pane restored layout is seeded whole",
-                restored_layout: Some(split(vec![leaf(SAVED_FILE), leaf("")])),
-                empty: false,
-                launch_cwd: SAVED,
-                sidebar_visible: true,
-                want: Some(TabState {
-                    cwd: SAVED.to_string(),
-                    sidebar_visible: true,
-                    layout: Some(split(vec![leaf(SAVED_FILE), leaf("")])),
-                }),
-            },
-            SeedCase {
-                // The empty-state cwd rule from `snapshot_cwd`: always `""`, never the fallback handed Neovim,
-                // or the next launch declares `$HOME` a project.
-                desc: "an empty-state launch seeds the \"\" cwd sentinel, never $HOME",
-                restored_layout: Some(leaf(SAVED_FILE)),
-                empty: true,
-                launch_cwd: HOME,
-                sidebar_visible: true,
-                want: Some(TabState {
-                    cwd: String::new(),
-                    sidebar_visible: true,
-                    layout: Some(leaf(SAVED_FILE)),
-                }),
-            },
-            SeedCase {
-                // The refusal row: no restored layout, no seed. The tab whose project has gone contributes
-                // nothing until its own gather succeeds.
-                desc: "a tab restored with NO layout takes no seed",
-                restored_layout: None,
-                empty: false,
-                launch_cwd: SAVED,
-                sidebar_visible: true,
-                want: None,
-            },
-            SeedCase {
-                desc: "…and an empty-state launch with no restored layout takes none either",
-                restored_layout: None,
-                empty: true,
-                launch_cwd: HOME,
-                sidebar_visible: true,
-                want: None,
-            },
-        ];
-
-        for case in &cases {
-            let got = seeded_tab_state(
-                case.restored_layout.as_ref(),
-                case.empty,
-                Path::new(case.launch_cwd),
-                case.sidebar_visible,
-            );
-            assert_eq!(
-                got,
-                case.want,
-                "seeded_tab_state(restored_layout = {:?}, empty = {}, launch_cwd = {:?}, \
-                 sidebar_visible = {}) must be {:?}, got {got:?} — {}. A `None` where a seed is \
-                 due ERASES a tab that has no cache to fall back on — one whose restored layout \
-                 bound no pane — so it contributes nothing and the next commit writes the window back without it. A `Some` where \
-                 `None` is due commits an empty-state tab over a saved project before any pane has \
-                 bound. A wrong cwd re-roots the tab somewhere the window is not; a wrong layout \
-                 is the tab's files, which ride only inside `TabState::layout`.",
-                case.restored_layout,
-                case.empty,
-                case.launch_cwd,
-                case.sidebar_visible,
-                case.want,
-                case.desc
-            );
-        }
-
-        // --- Non-vacuity, in both directions ----------------------------------
-        assert!(
-            cases.iter().any(|case| case.want.is_some()),
-            "no seeded_tab_state row expects a seed, so a function returning None for everything \
-             would satisfy every row above — and every restored tab bound to no pane would be \
-             erased by the next commit."
-        );
-        assert!(
-            cases.iter().any(|case| case.want.is_none()),
-            "no seeded_tab_state row expects a refusal, so a function returning Some for \
-             everything would pass — and a launch whose project has gone would commit an \
-             empty-state tab over the saved one before a single pane had bound."
-        );
-
-        // The join the round trip rests on: the seeded cwd is `snapshot_cwd`'s answer. If they diverge,
-        // launch, early quit and relaunch stop being idempotent and each run persists the drift.
-        for (empty, launch_cwd) in [(false, SAVED), (true, HOME), (false, PROJECT)] {
-            let seeded =
-                seeded_tab_state(Some(&leaf(SAVED_FILE)), empty, Path::new(launch_cwd), true)
-                    .unwrap_or_else(|| {
-                        panic!(
-                    "precondition: a seed carrying a layout must exist for (empty = {empty}, \
-                     launch_cwd = {launch_cwd:?}), or the cwd comparison below is vacuous"
-                )
-                    });
-            assert_eq!(
-                seeded.cwd,
-                snapshot_cwd(empty, Path::new(launch_cwd), None),
-                "the SEEDED cwd and the GATHERED cwd must be the same string for (empty = \
-                 {empty}, launch_cwd = {launch_cwd:?}). A tab with no gather of its own \
-                 contributes the seed and every other tab contributes `snapshot_cwd`'s answer, so \
-                 a divergence makes one saved window's tabs disagree about where the project is \
-                 depending on which of them had bound when the commit happened — and the round \
-                 trip stops being idempotent, since the seeded value is what the next launch reads \
-                 back."
-            );
-        }
-    }
-
     // --- ordered_tab_states: the persisted order is page order, the user's arrangement ---
 
     /// One [`ordered_tab_states`] row: the `(page position, tab)` pairs as they were
@@ -2754,8 +1105,8 @@ mod tests {
     /// to catch.
     struct OrderCase {
         desc: &'static str,
-        positioned: Vec<(i32, TabState)>,
-        want: Vec<TabState>,
+        positioned: Vec<(i32, Tab)>,
+        want: Vec<Tab>,
     }
 
     /// A window's tabs are persisted in PAGE order — the order they sit in the tab bar
@@ -2766,9 +1117,9 @@ mod tests {
     /// `adw::TabView`'s page positions. Dragging a tab along the bar reorders the
     /// pages — `AdwTabBar` does that with no property that turns it off, and nothing
     /// in this tree disables it — so the two orders diverge the first time a user
-    /// rearranges their tabs. `window::WindowHandle::cached_subtree` therefore pairs
+    /// rearranges their tabs. `window::WindowHandle::cached_window` therefore pairs
     /// each cached tab with `view.page_position(page)` and runs the pairs through here
-    /// before handing the result to [`window_subtree`]. This is the ONE place that
+    /// before handing the result to [`window_entry`]. This is the ONE place that
     /// reconciliation happens.
     ///
     /// libadwaita's other reorder route — the `Ctrl+Shift+Page_Up` /
@@ -2780,7 +1131,7 @@ mod tests {
     /// `AdwTabView`'s own controller. Nothing has measured which one wins. The drag
     /// route alone is what makes this reconciliation load-bearing.
     ///
-    /// FALSIFYING EDIT — strip the positions and return the pairs' `TabState`s in the
+    /// FALSIFYING EDIT — strip the positions and return the pairs' tabs in the
     /// order they were given. That is insertion order restored, which is the bug this
     /// seam exists to close rather than a hypothetical one; only the rows whose given
     /// order DIFFERS from their expected order can see it, which is what the first
@@ -2823,7 +1174,7 @@ mod tests {
             },
             OrderCase {
                 // Every live gate shut (launch, before any pane binds): the answer stays empty, which
-                // `window_subtree` reads as commit-nothing.
+                // `window_entry` reads as commit-nothing.
                 desc: "no pairs at all => no tabs at all",
                 positioned: Vec::new(),
                 want: Vec::new(),
@@ -2853,7 +1204,7 @@ mod tests {
             assert_eq!(
                 got, case.want,
                 "ordered_tab_states({:?}) must be {:?}, got {got:?} — {}. This vec is what \
-                 `window_subtree` writes into `state.json` as the window's tabs, and \
+                 `window_entry` writes into the saved window state as the window's tabs, and \
                  `restore_plans` walks a saved window's tabs POSITIONALLY, so the order here is \
                  literally the order the next launch replays. THREE failures are \
                  distinguishable. The tabs in the order the pairs ARRIVED is insertion order — \
@@ -2861,7 +1212,7 @@ mod tests {
                  their arrangement silently discarded at the next launch, and because the gather \
                  after that writes the collected order back the discard is permanent rather than \
                  one run's. Persistence follows what the user SEES. A SHORT vec \
-                 drops tabs outright, and a tab's files ride only inside `TabState::layout`. A \
+                 drops tabs outright, and a tab's files ride only inside its root. A \
                  LONGER one duplicates a tab, which the next launch opens twice and then saves \
                  twice, so the count doubles every run.",
                 case.positioned, case.want, case.desc
@@ -2871,8 +1222,8 @@ mod tests {
         // --- Non-vacuity, in two directions -----------------------------------
         assert!(
             cases.iter().any(|case| {
-                let given: Vec<&TabState> = case.positioned.iter().map(|(_, tab)| tab).collect();
-                let want: Vec<&TabState> = case.want.iter().collect();
+                let given: Vec<&Tab> = case.positioned.iter().map(|(_, tab)| tab).collect();
+                let want: Vec<&Tab> = case.want.iter().collect();
                 given != want
             }),
             "no ordered_tab_states row's GIVEN order differs from its expected order, so a \
@@ -2885,98 +1236,8 @@ mod tests {
             cases.iter().any(|case| !case.want.is_empty()),
             "no ordered_tab_states row expects a tab to SURVIVE, so a function answering `vec![]` \
              for everything would satisfy every row above — and a window whose live tabs all \
-             vanished here hands `window_subtree` an empty vec, so the whole window drops out of \
+             vanished here hands `window_entry` an empty vec, so the whole window drops out of \
              the committed tree and the next launch opens one fewer window than the user had."
-        );
-    }
-
-    // --- snapshot_state: assembling the whole tree from the live windows ---
-
-    /// The committed tree holds EVERY contributing window, in window order.
-    ///
-    /// The write-side twin of
-    /// [`restore_plans_covers_every_saved_window_in_order`]: restore walks the tree
-    /// positionally, so the order this assembles in is the order the next launch
-    /// opens.
-    ///
-    /// The comparison is against a whole [`WolfState`] built from the same two
-    /// subtrees, which uses the DERIVED `PartialEq` — no float comparison happens in
-    /// this test's own source, so it needs no `clippy::float_cmp` allow (unlike
-    /// [`window_subtree_writes_every_tab_in_order`], which asserts on `x` directly).
-    ///
-    /// Isolated: yes at the unit level.
-    #[test]
-    fn snapshot_state_carries_every_window_in_order() {
-        const WIDTH_A: i32 = 1200;
-        const HEIGHT_A: i32 = 640;
-        const WIDTH_B: i32 = 900;
-        const HEIGHT_B: i32 = 500;
-
-        // Every identifying field differs (geometry, cwd, sidebar, layout), so window order is
-        // decidable from the value.
-        let first = window_subtree(
-            WIDTH_A,
-            HEIGHT_A,
-            vec![tab_subtree(SAVED.to_string(), true, Some(leaf(SAVED_FILE)))],
-        )
-        .expect("a window contributing one tab must assemble into a subtree");
-        let second = window_subtree(
-            WIDTH_B,
-            HEIGHT_B,
-            vec![tab_subtree(
-                SAVED_B.to_string(),
-                false,
-                Some(leaf(SAVED_B_FILE)),
-            )],
-        )
-        .expect("a window contributing one tab must assemble into a subtree");
-
-        let state = snapshot_state(vec![first.clone(), second.clone()]);
-
-        assert_eq!(
-            state,
-            Some(WolfState {
-                windows: vec![first, second],
-            }),
-            "the assembled tree must carry both windows in contribution order. Three failures are \
-             distinguishable here and each loses something different: `None` commits nothing at \
-             all, so the store keeps yesterday's tree; a one-element `windows` drops a whole \
-             window's session and the next launch reopens only one; and a REVERSED order restores \
-             the same two projects into swapped windows, because restore is positional."
-        );
-    }
-
-    /// An empty contribution set commits NOTHING, rather than committing an empty
-    /// tree.
-    ///
-    /// An empty set is not an empty session: it is a launch whose only core died
-    /// before its first pane bound, or a moment when every window's
-    /// [`may_snapshot`] gate is shut. `Some(WolfState { windows: vec![] })` is a
-    /// well-formed tree holding nothing, and committing it overwrites the user's
-    /// whole saved session with an empty file — the launch that failed to start
-    /// would destroy the save it was about to restore. `None` is the mechanical
-    /// equivalent of the refused gate the single-window path already relies on: no
-    /// call to `set_snapshot`, so the store keeps the tree it loaded from disk.
-    ///
-    /// Isolated: yes.
-    #[test]
-    fn an_empty_contribution_set_commits_nothing() {
-        assert_eq!(
-            snapshot_state(Vec::new()),
-            None,
-            "an empty contribution set must commit NOTHING. `Some(WolfState {{ windows: [] }})` \
-             here is the value that overwrites a good save with an empty file: the store would \
-             flush a tree holding no windows, and the next launch would open the empty state with \
-             every project, layout and geometry gone — silently, since a successful write looks \
-             exactly like a successful write."
-        );
-
-        // Non-vacuity: the rule above is satisfied by an assembler that answers
-        // `None` for everything, which would persist nothing at all, ever.
-        assert!(
-            snapshot_state(vec![saved_window(SAVED, Some(leaf(SAVED_FILE)))]).is_some(),
-            "one contributing window MUST assemble into a committable tree — otherwise nothing is \
-             ever persisted and the assertion above holds vacuously"
         );
     }
 
@@ -3017,7 +1278,7 @@ mod tests {
     /// Once the window-close path routes through this rule, reverting the
     /// `(false, 0)` arm reddens every relaunch smoke as well as this table: each of
     /// them quits run 1 with `:qa`, which closes the only window, so the frozen
-    /// `state.json` would come back holding nothing and the readback would answer
+    /// saved window state would come back holding nothing and the readback would answer
     /// the empty state. That ties this pure rule to shipped, already-green
     /// behaviour. While `close_commit` still has no caller the reds are confined
     /// here, which is a fact about the wiring rather than about the rule.

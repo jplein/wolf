@@ -3,7 +3,8 @@
 //! real SQLite files in real temporary directories. No mocks, no Neovim, no `WOLF_STATE_DIR`:
 //! each test passes a tempdir to the stores' `open` as the state directory.
 //!
-//! They pin the storage rules of `specs/application-state.md` §1 for the cache class:
+//! They pin the storage rules of `specs/application-state.md` §1 for the cache class, and its
+//! "Files Wolf removes":
 //!
 //! - All three stores are tables (`file_mru`, `folder_mru`, `command_mru`) of one `wolf.sqlite`,
 //!   and a `schema` table holds one row per table with its version.
@@ -13,6 +14,8 @@
 //!   the test observes the `-shm` half.
 //! - The legacy `file-mru.sqlite`, `folder-mru.sqlite` and `command-mru.sqlite` and their
 //!   sidecars are deleted at open, and none of their rows is imported.
+//! - The legacy `state.json` and `state.json.tmp` are deleted when the application-state store
+//!   opens, and nothing of them reaches the saved window state.
 //! - Concurrent opens of every store from several handles lose no row.
 //!
 //! The busy-database rule is pinned in `tests/mru.rs`
@@ -31,7 +34,7 @@ use std::sync::{Arc, Barrier};
 use std::thread;
 
 use rusqlite::{Connection, OptionalExtension};
-use wolf_core::{CommandMru, MruStore, RecentDirs};
+use wolf_core::{AppStateStore, CommandMru, MruStore, RecentDirs};
 
 /// The shared database's file name, from `specs/application-state.md` §1.
 const DB_NAME: &str = "wolf.sqlite";
@@ -41,6 +44,9 @@ const CACHE_TABLES: [&str; 3] = ["command_mru", "file_mru", "folder_mru"];
 
 /// The legacy per-store databases that §1 "Files Wolf removes" deletes at launch.
 const LEGACY_DB_NAMES: [&str; 3] = ["file-mru.sqlite", "folder-mru.sqlite", "command-mru.sqlite"];
+
+/// The legacy state files that §1 "Files Wolf removes" deletes at launch.
+const LEGACY_STATE_NAMES: [&str; 2] = ["state.json", "state.json.tmp"];
 
 /// The sidecars SQLite keeps beside a database, which every deletion must take along.
 const SIDECARS: [&str; 2] = ["-wal", "-shm"];
@@ -590,6 +596,65 @@ fn legacy_mru_files_are_removed_at_open_and_nothing_is_imported() {
         );
         drop(first);
     }
+}
+
+/// Writes a well-formed file of the old `state.json` format to each of [`LEGACY_STATE_NAMES`]:
+/// version 1, one window whose one tab is at `project` and shows its file, so an import would
+/// have a window to restore.
+fn seed_legacy_state_files(state: &Path, project: &Project) {
+    let old = serde_json::json!({
+        "version": 1,
+        "windows": [{
+            "x": 10.0,
+            "y": 20.0,
+            "width": 800.0,
+            "height": 600.0,
+            "tabs": [{
+                "cwd": project.dir.to_string_lossy(),
+                "sidebar_visible": true,
+                "layout": {
+                    "type": "leaf",
+                    "path": project.file.to_string_lossy(),
+                    "preview": false,
+                },
+            }],
+        }],
+    });
+    let text = serde_json::to_string_pretty(&old).expect("failed to render the old state file");
+    for name in LEGACY_STATE_NAMES {
+        fs::write(state.join(name), &text).expect("failed to write a legacy state file");
+        assert!(
+            state.join(name).is_file(),
+            "precondition: the planted {name} must exist before the store opens"
+        );
+    }
+}
+
+/// Opening the application-state store deletes a stale `state.json` and `state.json.tmp`, and
+/// the window state reads back as nothing saved rather than as the window they describe.
+#[test]
+fn stale_state_json_files_are_removed_at_launch() {
+    let state = tempfile::tempdir().expect("failed to create the state tempdir");
+    let project = project();
+    seed_legacy_state_files(state.path(), &project);
+
+    let store = AppStateStore::open(state.path());
+
+    for name in LEGACY_STATE_NAMES {
+        assert!(
+            !state.path().join(name).exists(),
+            "opening the application-state store must delete the legacy {name}; it is still              there, so the open's removal list does not name it, or the store's open skips the              removal"
+        );
+    }
+    assert!(
+        state.path().join(DB_NAME).exists(),
+        "opening the application-state store must create wolf.sqlite"
+    );
+    let saved = store.window_state();
+    assert!(
+        saved.is_none(),
+        "a fresh wolf.sqlite must hold no window state; it holds {saved:?}, which can only have          been imported from the legacy state file"
+    );
 }
 
 /// Handles of all three stores opened at once on a state dir with no database yet lose no row:

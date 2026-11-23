@@ -1,4 +1,5 @@
-//! The GTK GLUE that commits `wolf-gnome`'s application state to `state.json`.
+//! The GTK GLUE that gathers one tab of `wolf-gnome`'s application state for the
+//! store, `wolf_core::AppStateStore`.
 //!
 //! Thin by construction: every decision already lives in the pure
 //! [`crate::state_seam`] / [`crate::pane_layout`] seams, so this module only
@@ -7,41 +8,42 @@
 //! mutability via `Cell`, and short borrows that are never held across a
 //! [`WolfCore`] call.
 //!
-//! One instance per TAB. A window's subtree is assembled from its tabs' caches by
-//! `window::WindowHandle::cached_subtree`, so what lives here is one tab's
-//! [`TabState`] and the rules that decide when it may be replaced.
+//! One instance per TAB. A window's entry is assembled from its tabs' caches by
+//! `window::WindowHandle::cached_window`, so what lives here is one tab's [`Tab`]
+//! and the rules that decide when it may be replaced.
 //!
 //! ## When a tab is gathered
 //!
 //! On **every render wake**, for every tab, with no timer and no debounce. That is
 //! affordable because two coalescers already exist beneath us:
-//! `StateStore::set_snapshot` is a no-op when the submitted tree is identical to
-//! the current one, and the `wolf-state-writer` thread coalesces at 100 ms.
+//! `AppStateStore::submit` is a no-op when the submitted tree is identical to the
+//! current one, and the `wolf-app-state-writer` thread coalesces before it writes.
 //! Rebuilding one tab costs a `leaves()` walk and one snapshot read — no RPC and no
 //! `pane_status` — so a resize drag produces at most ~10 disk writes per second.
 //! This preserves the crate's documented zero-polling property (no `glib::timeout`
 //! is added). A file opened in an already-open tab is captured within one frame,
 //! and a SIGKILL loses at most the writer's 100 ms coalesce window.
 //!
-//! Every gather is gated by [`crate::state_seam::may_snapshot`], because a
-//! subtree built while nvim is dead or before the first pane binds would persist
-//! an empty layout and destroy the user's saved one.
+//! Every gather is gated by [`crate::state_seam::may_snapshot`], because a tab
+//! built while nvim is dead or before the first pane binds would persist an empty
+//! layout and destroy the user's saved one.
 //!
 //! **A refused gather contributes the CACHE, and never nothing.** There are two
 //! refusal routes and they compose: the gate above, and
 //! [`crate::pane_layout::LayoutGather::Refuse`] — a leaf whose Neovim window is in
 //! neither snapshot map, which the pane view answers rather than writing an empty
-//! path. Either one leaves this tab's last good [`TabState`] standing, so a tab
+//! path. Either one leaves this tab's last good [`Tab`] standing, so a tab
 //! whose panes have not bound yet, or whose Neovim has just died, keeps whatever it
 //! last persisted instead of vanishing from the tree the coordinator commits.
 //!
-//! **A tab restored with a layout it has never gathered contributes the SEED.**
-//! [`StateHandle::cached_tab`] derives it at read time through
-//! [`crate::state_seam::seeded_tab_state`], so a tab whose restored layout bound no
-//! pane, and whose gate therefore never opens, is not erased by the next commit.
-//! The seed stops being consulted the instant a real gather succeeds, which for a
-//! restored tab is the wake after its layout is realized on its own Neovim,
-//! selected or not.
+//! **A restored tab that has never gathered contributes the SEED**, its saved
+//! [`Tab`]. [`StateHandle::cached_tab`] derives it at read time through
+//! [`crate::state_seam::seeded_tab`], so a tab whose restored layout bound no pane,
+//! and whose gate therefore never opens, is not erased by the next commit, and a
+//! tab restored empty because its directory vanished keeps its saved tab until its
+//! own gather replaces it. The seed stops being consulted the instant a real gather
+//! succeeds, which for a restored tab is the wake after its layout is realized on
+//! its own Neovim, selected or not. A tab the user opened has no seed.
 //!
 //! This module submits nothing itself: [`crate::coordinator::Coordinator`] walks
 //! every window, which walks every tab, and commits the assembled tree.
@@ -56,10 +58,11 @@
 //! `borrow()` there is a `RefCell` panic, not a warning.
 
 use std::cell::{Cell, RefCell};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use wolf_core::{PaneNode, TabState, WolfCore};
+use wolf_core::app_state::Tab;
+use wolf_core::WolfCore;
 
 use crate::pane_layout::LayoutGather;
 use crate::pane_view::PaneHandle;
@@ -75,17 +78,16 @@ pub struct StateParts<'a> {
     /// The cwd the core was launched with, persisted until nvim reports a live
     /// one.
     pub launch_cwd: PathBuf,
-    /// Whether the app launched into the empty state.
+    /// Whether the tab opened in the empty state.
     pub empty: bool,
-    /// The user's restored sidebar PREFERENCE
-    /// ([`crate::state_seam::RestorePlan::sidebar_visible`]), which is what is
-    /// persisted — never what is on screen.
+    /// The tab's sidebar PREFERENCE ([`crate::state_seam::TabPlan::sidebar_visible`]),
+    /// which is what is persisted — never what is on screen.
     pub sidebar_shown: bool,
-    /// The layout this tab was RESTORED with, or `None` for a tab the user opened.
+    /// The tab as it was SAVED, or `None` for a tab the user opened.
     ///
-    /// Held for [`crate::state_seam::seeded_tab_state`], not for the rebuild — the
+    /// Held for [`crate::state_seam::seeded_tab`], not for the rebuild — the
     /// rebuild is the pane view's, and it has already been asked for it.
-    pub restored_layout: Option<PaneNode>,
+    pub saved: Option<Tab>,
 }
 
 /// The persistence glue's shared state. Single GTK main thread, so `Cell` /
@@ -95,14 +97,14 @@ struct PersistInner {
     core: Rc<RefCell<Option<WolfCore>>>,
     /// The pane view (layout snapshot + readiness counts).
     panes: PaneHandle,
-    /// The last [`TabState`] a successful gather produced, and this tab's
+    /// The last [`Tab`] a successful gather produced, and this tab's
     /// contribution whenever a later one refuses. `None` until the first gather
     /// succeeds, which for a restored tab whose layout bound no pane is forever — see [`StateHandle::cached_tab`].
-    tab: RefCell<Option<TabState>>,
+    tab: RefCell<Option<Tab>>,
     /// The launch cwd, persisted until nvim reports a live one.
     launch_cwd: PathBuf,
-    /// The layout this tab was restored with, for the seed.
-    restored_layout: Option<PaneNode>,
+    /// The tab as it was saved, for the seed.
+    saved: Option<Tab>,
     /// The LIVE empty-state flag, kept in step by [`StateHandle::set_empty`].
     empty: Cell<bool>,
     /// The user's LIVE sidebar preference, kept in step by
@@ -126,7 +128,7 @@ pub fn build(parts: StateParts<'_>) -> StateHandle {
             panes: parts.panes.clone(),
             tab: RefCell::new(None),
             launch_cwd: parts.launch_cwd,
-            restored_layout: parts.restored_layout,
+            saved: parts.saved,
             empty: Cell::new(parts.empty),
             sidebar_shown: Cell::new(parts.sidebar_shown),
         }),
@@ -136,17 +138,17 @@ pub fn build(parts: StateParts<'_>) -> StateHandle {
 impl StateHandle {
     /// Records the live empty-state flag.
     ///
-    /// Called from [`crate::shell::AppShell::set_empty_state`], so the persisted
-    /// `cwd` follows the empty state rather than being frozen at whatever launch
-    /// decided — opening a folder into an empty-state window must start persisting
-    /// that folder.
+    /// Called when the shell moves this tab out of the empty state, so the persisted
+    /// directory follows the empty state rather than being frozen at whatever launch
+    /// decided — opening a folder into an empty tab must start persisting that folder.
     pub fn set_empty(&self, empty: bool) {
         self.inner.empty.set(empty);
     }
 
     /// Records the user's sidebar PREFERENCE, mirroring [`StateHandle::set_empty`].
     ///
-    /// Called from [`crate::shell::AppShell::set_sidebar_preference`]. The preference is
+    /// Called from [`crate::shell::AppShell::set_sidebar_preference`] for the selected
+    /// tab. The preference is
     /// what is persisted, deliberately not what is on screen: an empty-state
     /// session shows no sidebar, and persisting that would hand the next launch
     /// into a real project a hidden tree the user never asked for.
@@ -154,9 +156,27 @@ impl StateHandle {
         self.inner.sidebar_shown.set(shown);
     }
 
-    /// This tab's contribution to its window's subtree: the last [`TabState`] a
-    /// gather produced, or — for a tab restored with a layout it has never gathered
-    /// — [`state_seam::seeded_tab_state`]'s answer.
+    /// Whether this tab is in the empty state.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.inner.empty.get()
+    }
+
+    /// The user's sidebar preference for this tab.
+    #[must_use]
+    pub fn sidebar_shown(&self) -> bool {
+        self.inner.sidebar_shown.get()
+    }
+
+    /// The cwd this tab's core was launched with.
+    #[must_use]
+    pub fn launch_cwd(&self) -> &Path {
+        &self.inner.launch_cwd
+    }
+
+    /// This tab's contribution to its window's entry: the last [`Tab`] a gather
+    /// produced, or — for a restored tab that has never gathered —
+    /// [`state_seam::seeded_tab`]'s answer.
     ///
     /// The seed is derived HERE, at read time, rather than written into the cache
     /// at build time, for two reasons. It follows live preference changes, so a
@@ -165,21 +185,16 @@ impl StateHandle {
     /// value can never outlive the fact it was standing in for.
     ///
     /// `None` from EVERY tab of a window is what makes
-    /// [`crate::state_seam::window_subtree`] answer `None`, and a `None` from every
-    /// window is what makes [`crate::state_seam::snapshot_state`] answer `None` and
+    /// [`crate::state_seam::window_entry`] answer `None`, and a `None` from every
+    /// window is what makes [`crate::state_seam::window_state`] answer `None` and
     /// the coordinator commit nothing at all.
     #[must_use]
-    pub fn cached_tab(&self) -> Option<TabState> {
+    pub fn cached_tab(&self) -> Option<Tab> {
         // Bound in its own statement so the seed below is not derived under a live
         // borrow of the cache it may replace.
         let cached = self.inner.tab.borrow().clone();
         cached.or_else(|| {
-            state_seam::seeded_tab_state(
-                self.inner.restored_layout.as_ref(),
-                self.inner.empty.get(),
-                &self.inner.launch_cwd,
-                self.inner.sidebar_shown.get(),
-            )
+            state_seam::seeded_tab(self.inner.saved.as_ref(), self.inner.sidebar_shown.get())
         })
     }
 
@@ -214,7 +229,7 @@ impl StateHandle {
 
         // The second refusal route: a leaf whose window is in neither snapshot map contributes the cache,
         // as a shut gate does.
-        let LayoutGather::Ready(layout) = self.inner.panes.layout_snapshot() else {
+        let LayoutGather::Ready { root, zoomed } = self.inner.panes.layout_snapshot() else {
             return;
         };
 
@@ -226,8 +241,8 @@ impl StateHandle {
         let empty = self.inner.empty.get();
         let cwd = state_seam::snapshot_cwd(empty, &self.inner.launch_cwd, live.as_deref());
         // The user's preference, never the live empty-state flag: `restore_plans` reads it back, and
-        // `!empty` would make a session ending empty hide the sidebar in the next real project.
-        let tab = state_seam::tab_subtree(cwd, self.inner.sidebar_shown.get(), layout);
+        // `!empty` would make a tab ending empty hide the sidebar in the next real project.
+        let tab = state_seam::tab_entry(cwd, self.inner.sidebar_shown.get(), root, zoomed);
         *self.inner.tab.borrow_mut() = Some(tab);
     }
 }

@@ -22,22 +22,20 @@
 //!   [`crate::tab_view::TabsHandle::core_source`] or
 //!   [`crate::tab_view::TabsHandle::selected_core`], so a switch retargets every
 //!   one of them without a setter.
-//! - **Application state (`state.json`):** the [`RestorePlan`] arrives already
-//!   built — the working directory, the window size, and one
-//!   [`crate::state_seam::TabPlan`] per saved tab — because a launch restores a
-//!   SESSION and the plans are made once, above. [`build`] opens every planned tab
-//!   with its own Neovim before it builds any other widget; each tab's layout is
-//!   realized on that tab's own first wake with a window grid. The blocking calls
-//!   that costs, and the caps that bound it, are in
-//!   `notes/wolf-gnome/crash-and-stall-recovery.md`.
+//! - **Application state:** the [`RestorePlan`] arrives already built — the window
+//!   size, the active tab, whether it is minimized, and one
+//!   [`crate::state_seam::TabPlan`] per saved tab with its own directory, empty
+//!   state and sidebar preference — because a launch restores a SESSION and the
+//!   plans are made once, above. [`build`] opens every planned tab with its own
+//!   Neovim before it builds any other widget; each tab's layout is realized on that
+//!   tab's own first wake with a window grid. The blocking calls that costs, and the
+//!   caps that bound it, are in `notes/wolf-gnome/crash-and-stall-recovery.md`.
 //!
 //!   Writing back is [`crate::persistence`], one instance per TAB, each gathering
 //!   from its own tab's Neovim: every tab is re-gathered on every commit and as the
-//!   FIRST thing [`wire_close`] does, and [`WindowHandle::cached_subtree`] assembles
-//!   them into this window's subtree in tab order. The `sidebar_visible` field is
-//!   written into every tab from the user's PREFERENCE — it is per WINDOW — and read
-//!   back at launch off the first tab through
-//!   [`crate::state_seam::RestorePlan::sidebar_visible`].
+//!   FIRST thing [`wire_close`] does, and [`WindowHandle::cached_window`] assembles
+//!   them into this window's entry in page order, with the tab recency. A window
+//!   gaining focus tells the coordinator, which keeps the stacking order.
 //! - **Paint:** per-pane painting and the mode-aware cursor live in
 //!   [`crate::pane_view`] (which uses the pure [`crate::paint`]/[`crate::cursor`]
 //!   seams); this module installs no draw handler of its own.
@@ -74,13 +72,14 @@
 //! chrome's colour scheme — by [`crate::appearance::apply_at_launch`], called once
 //! per tab as soon as its core exists.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::io::Write;
 use std::rc::{Rc, Weak};
 
 use adw::prelude::*;
 use gtk::{gdk, glib};
-use wolf_core::{InputEvent, TabState, TerminalId, WindowState, WolfConfig};
+use wolf_core::app_state::{Tab, Window};
+use wolf_core::{InputEvent, TerminalId, WolfConfig};
 
 use crate::buffer_picker::{self, BufferPickerHandle};
 use crate::coordinator::{self, Coordinator, CoordinatorInner, WindowId};
@@ -94,7 +93,8 @@ use crate::search_panel::{self, SearchPanelHandle};
 use crate::shell::{self, AppShell, ShellParts, HISTORY_BACK_ACTION, HISTORY_FORWARD_ACTION};
 use crate::sidebar;
 use crate::state_seam::{self, RestorePlan};
-use crate::tab_view::{self, CoreCell, TabParts, TabsHandle, TabsParts};
+use crate::tab_view::{self, CoreCell, TabHandle, TabParts, TabsHandle, TabsParts};
+use crate::tabs_ui::TabId;
 use crate::terminal::input as terminal_input;
 use crate::title::WINDOW_TITLE_FALLBACK;
 use crate::titlebar_background::TitlebarStyle;
@@ -111,7 +111,7 @@ const WINDOW_HEIGHT: i32 = 640;
 
 /// Default width (px) of the file-tree sidebar pane (the `gtk::Paned` divider
 /// position). Collapsed to `0` in the empty state by
-/// [`crate::shell::AppShell::set_empty_state`].
+/// [`crate::shell::AppShell::apply_selected_tab`].
 pub(crate) const TREE_PANE_WIDTH: i32 = 250;
 
 /// Icon of the header bar's Back button. From `adwaita-icon-theme`, which the flake
@@ -136,16 +136,22 @@ pub struct WindowParts<'a> {
     pub coordinator: &'a Coordinator,
     /// This window's identity, minted by the coordinator.
     pub id: WindowId,
-    /// The launch plan: working directory, empty state, one
-    /// [`crate::state_seam::TabPlan`] per tab to restore with that tab's saved
-    /// layout, the saved window size and the sidebar preference.
+    /// The launch plan: one [`crate::state_seam::TabPlan`] per tab to restore, the
+    /// active tab, the saved window size and whether the window is minimized.
     pub plan: &'a RestorePlan,
     /// The user configuration, read once for the process.
     pub config: &'a WolfConfig,
     /// The cell metrics, measured once for the process and shared by `Rc` with
     /// this window's draw and resize closures.
     pub metrics: &'a Rc<CellMetrics>,
+    /// Whether [`build`] presents the window. `false` leaves it built and registered
+    /// but unmapped until [`WindowHandle::show_after`].
+    pub present: bool,
 }
+
+/// What runs once a window has painted its first frame; see
+/// [`WindowHandle::show_after`].
+type PaintedCallback = Box<dyn FnOnce()>;
 
 /// One window's shared state: everything the coordinator needs to ask a window
 /// for — its state contribution and its readiness for input — and the shell.
@@ -155,8 +161,8 @@ struct WindowInner {
     /// The toplevel.
     window: adw::ApplicationWindow,
     /// This window's tabs. The persistence glue is per TAB and lives inside them;
-    /// what this window contributes to `state.json` is EVERY tab's state in tab
-    /// order — see [`WindowHandle::cached_subtree`].
+    /// what this window contributes to the saved window state is EVERY tab's state in
+    /// page order — see [`WindowHandle::cached_window`].
     tabs: TabsHandle,
     /// The shell, owned here for exactly the window's lifetime: every closure and
     /// tab drain that reaches it holds a `Weak`, and the coordinator drops this
@@ -165,6 +171,11 @@ struct WindowInner {
     /// The ordinal of this window's first frame-clock `after-paint`, set only while
     /// the readiness probe is pending; see [`crate::ready_seam`].
     first_paint: Cell<Option<u32>>,
+    /// Presents the window, held while [`WindowParts::present`] deferred it.
+    show: RefCell<Option<PaintedCallback>>,
+    /// What waits for this window's first painted frame, or `None` once it has
+    /// painted or been unrealized.
+    painted: RefCell<Option<Vec<PaintedCallback>>>,
 }
 
 /// A cloneable handle to one live window, held STRONGLY by the coordinator.
@@ -186,6 +197,89 @@ impl WindowHandle {
         self.inner.window.present();
     }
 
+    /// Presents this window, which [`WindowParts::present`] deferred, once each of
+    /// `others` has painted its first frame or been unrealized, so this window maps
+    /// after them. A compositor focuses the toplevel mapped last, and a Wayland
+    /// client cannot raise itself, so this is how a restore puts its frontmost window
+    /// in front. Windows built in one burst map in no order GTK promises.
+    pub fn show_after(&self, others: &[WindowHandle]) {
+        let remaining = Rc::new(Cell::new(others.len()));
+        if others.is_empty() {
+            self.run_show();
+            return;
+        }
+        for other in others {
+            let weak = Rc::downgrade(&self.inner);
+            let remaining = Rc::clone(&remaining);
+            other.when_painted(Box::new(move || {
+                remaining.set(remaining.get().saturating_sub(1));
+                if remaining.get() == 0 {
+                    if let Some(inner) = weak.upgrade() {
+                        WindowHandle { inner }.run_show();
+                    }
+                }
+            }));
+        }
+    }
+
+    /// Runs the deferred present, once.
+    fn run_show(&self) {
+        let show = self.inner.show.borrow_mut().take();
+        if let Some(show) = show {
+            show();
+        }
+    }
+
+    /// Runs `f` once this window has painted its first frame or been unrealized, or
+    /// now when that has already happened.
+    fn when_painted(&self, f: PaintedCallback) {
+        let mut pending = self.inner.painted.borrow_mut();
+        match pending.as_mut() {
+            Some(pending) => pending.push(f),
+            None => {
+                drop(pending);
+                f();
+            }
+        }
+    }
+
+    /// Runs everything [`WindowHandle::when_painted`] queued, once.
+    fn painted(&self) {
+        let pending = self.inner.painted.borrow_mut().take();
+        for f in pending.into_iter().flatten() {
+            f();
+        }
+    }
+
+    /// Calls [`WindowHandle::painted`] on this window's first `after-paint`, or on its
+    /// unrealize when it never paints. Called right after `present()`.
+    fn watch_first_paint(&self) {
+        let weak = Rc::downgrade(&self.inner);
+        self.inner.window.connect_unrealize(move |_window| {
+            if let Some(inner) = weak.upgrade() {
+                WindowHandle { inner }.painted();
+            }
+        });
+        let Some(clock) = self.inner.window.frame_clock() else {
+            self.painted();
+            return;
+        };
+        let weak = Rc::downgrade(&self.inner);
+        let handler: Rc<RefCell<Option<glib::SignalHandlerId>>> = Rc::new(RefCell::new(None));
+        let id = {
+            let handler = Rc::clone(&handler);
+            clock.connect_after_paint(move |clock| {
+                if let Some(id) = handler.borrow_mut().take() {
+                    clock.disconnect(id);
+                }
+                if let Some(inner) = weak.upgrade() {
+                    WindowHandle { inner }.painted();
+                }
+            })
+        };
+        *handler.borrow_mut() = Some(id);
+    }
+
     /// Re-gathers EVERY tab's persisted state; see
     /// [`crate::persistence::StateHandle::refresh_tab`].
     ///
@@ -197,9 +291,10 @@ impl WindowHandle {
         }
     }
 
-    /// This window's contribution to the persisted tree: every tab that has
-    /// something to contribute, in PAGE order, under this window's size — or `None`
-    /// when no tab contributed at all ([`crate::state_seam::window_subtree`]).
+    /// This window's contribution to the saved window state: every tab that has
+    /// something to contribute, in PAGE order, under this window's size, with its
+    /// tab recency as indices into those tabs — or `None` when no tab contributed at
+    /// all ([`crate::state_seam::window_entry`]).
     ///
     /// **PAGE order, not the order the tabs were opened in.**
     /// [`crate::tab_view::TabsHandle::entries`] is insertion order and libadwaita
@@ -207,23 +302,30 @@ impl WindowHandle {
     /// [`crate::tab_view::TabHandle::page_position`] and sorted by
     /// [`crate::state_seam::ordered_tab_states`]. That seam carries the reason.
     #[must_use]
-    pub fn cached_subtree(&self) -> Option<WindowState> {
-        let positioned: Vec<(i32, TabState)> = self
+    pub fn cached_window(&self) -> Option<(Window, Vec<usize>)> {
+        let positioned: Vec<(i32, (TabId, Tab))> = self
             .inner
             .tabs
             .entries()
             .iter()
-            .filter_map(|tab| Some((tab.page_position(), tab.cached_tab()?)))
+            .filter_map(|tab| Some((tab.page_position(), (tab.id(), tab.cached_tab()?))))
             .collect();
         // Position is never persisted on Wayland, so this is the whole geometry.
         let (width, height) = self.inner.window.default_size();
-        state_seam::window_subtree(width, height, state_seam::ordered_tab_states(positioned))
+        let selected = self.inner.tabs.selected().map(|tab| tab.id());
+        state_seam::window_entry(
+            width,
+            height,
+            state_seam::ordered_tab_states(positioned),
+            selected,
+            &self.inner.tabs.recency(),
+        )
     }
 
-    /// Where this window IS, for another window's palette: the very string this one
-    /// contributes to `state.json`.
+    /// Where this window IS, for another window's palette: the directory its active
+    /// tab contributes to the saved window state.
     ///
-    /// Read out of the cached subtree rather than recomputed, so the palette and
+    /// Read out of the cached entry rather than recomputed, so the palette and
     /// the persisted tree cannot disagree about a window's directory — the rule is
     /// [`crate::state_seam::snapshot_cwd`]'s, applied once, in
     /// [`crate::persistence::StateHandle::refresh_tab`]. An empty-state window
@@ -232,8 +334,13 @@ impl WindowHandle {
     /// nothing to be offered under.
     #[must_use]
     pub fn display_cwd(&self) -> String {
-        self.cached_subtree()
-            .and_then(|window| window.tabs.first().map(|tab| tab.cwd.clone()))
+        self.cached_window()
+            .and_then(|(window, _)| {
+                window
+                    .tabs
+                    .get(window.active_tab)
+                    .map(|tab| tab.directory.clone())
+            })
             .unwrap_or_default()
     }
 
@@ -281,6 +388,7 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         plan,
         config,
         metrics,
+        present,
     } = parts;
 
     // Read once: only a window built while the readiness probe is pending wires its triggers; others
@@ -288,27 +396,38 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     let ready_armed = coordinator.ready_pending();
     let coordinator_weak = coordinator.weak();
 
-    let empty = plan.empty;
-
-    // Every planned tab first, before any other widget: each starts its own Neovim, and the window
-    // exists only if one of them did. Every restored tab starts at the window's planned cwd.
+    // Every planned tab first, before any other widget: each starts its own Neovim at its own
+    // planned directory, and the window exists only if one of them did.
     let tabs = tab_view::build(TabsParts { metrics, config });
-    for tab in &plan.tabs {
-        let _ = tabs.open_tab(TabParts {
-            cwd: plan.core_cwd.clone(),
-            empty,
-            sidebar_shown: plan.sidebar_visible,
-            layout: tab.layout.clone(),
-        });
-    }
+    let opened: Vec<Option<TabHandle>> = plan
+        .tabs
+        .iter()
+        .map(|tab| {
+            tabs.open_tab(TabParts {
+                cwd: tab.cwd.clone(),
+                empty: tab.empty,
+                sidebar_shown: tab.sidebar_visible,
+                saved: tab.saved.clone(),
+            })
+        })
+        .collect();
     let Some(first) = tabs.entries().first().cloned() else {
         eprintln!(
             "wolf-gnome: no tab of the window could start its core; the window is not opened"
         );
         return None;
     };
-    // Each `open_tab` selects the page it appends; the launch ends on the first.
-    tabs.select(&first);
+    // Each `open_tab` selects the page it appends; the launch ends on the planned active tab, or
+    // the first opened when that one failed to start.
+    let selected = opened
+        .get(plan.active_tab)
+        .cloned()
+        .flatten()
+        .unwrap_or_else(|| first.clone());
+    tabs.select(&selected);
+    tabs.seed_recency();
+    let empty = selected.is_empty();
+    let launch_cwd = selected.launch_cwd();
     // Test-only (WOLF_SMOKE_TERMINAL): a terminal pane in tab 0's first pane before the app
     // reports ready.
     if let Some(command) = crate::app::smoke_terminal_command() {
@@ -354,7 +473,7 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         tabs.core_source(),
         focus_target.clone(),
         !empty,
-        &workspace::root_label(&plan.core_cwd),
+        &workspace::root_label(&launch_cwd),
     );
     let search = search_panel::build(tabs.core_source(), focus_target.clone());
     let sidebar = sidebar::build(&tree, &search);
@@ -427,8 +546,7 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         paned: &paned,
         nav_back_button: &nav_back_button,
         nav_forward_button: &nav_forward_button,
-        sidebar_shown: plan.sidebar_visible,
-        launch_cwd: plan.core_cwd.clone(),
+        launch_cwd,
         crash_overlay: &crash,
         tabs: &tabs,
         titlebar: &titlebar,
@@ -437,7 +555,7 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         ready_armed,
     });
     shell.install_actions(app);
-    shell.set_empty_state(empty);
+    shell.apply_selected_tab();
 
     // Explicit activation, not `action-name`, which renders insensitive while its action is absent.
     // No smoke clicks these: crates/wolf-gnome/tests/README.md#deliberate-test-gaps
@@ -468,9 +586,15 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     // selected tab's `:checktime`; mode 1004 programs see the first.
     {
         let tabs = tabs.clone();
+        let coordinator = coordinator.weak();
         window.connect_is_active_notify(move |window| {
             tabs.sync_terminal_focus(window.is_active());
             tabs.sync_ui_focus(window.is_active());
+            if window.is_active() {
+                if let Some(coordinator) = coordinator::upgrade(&coordinator) {
+                    coordinator.on_window_focused(id);
+                }
+            }
         });
     }
 
@@ -497,6 +621,8 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
             tabs: tabs.clone(),
             _shell: shell,
             first_paint: Cell::new(None),
+            show: RefCell::new(None),
+            painted: RefCell::new(Some(Vec::new())),
         }),
     };
     coordinator.register(&handle);
@@ -507,14 +633,34 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         tab.wake();
     }
 
-    window.present();
-    // Focus the SELECTED tab's cmdline strip so key events have a focused target in
-    // the editor region to bubble from to the window-level key controller.
-    if let Some(area) = (focus_target)() {
-        area.grab_focus();
-    }
-    if ready_armed {
-        wire_ready_triggers(&handle, coordinator_weak);
+    let show: PaintedCallback = {
+        let weak = Rc::downgrade(&handle.inner);
+        let minimized = plan.minimized;
+        Box::new(move || {
+            let Some(inner) = weak.upgrade() else {
+                return;
+            };
+            let handle = WindowHandle { inner };
+            // GTK minimizes a window asked before it maps right after it maps.
+            if minimized {
+                handle.inner.window.minimize();
+            }
+            handle.inner.window.present();
+            handle.watch_first_paint();
+            // Focus the SELECTED tab's cmdline strip so key events have a focused target in
+            // the editor region to bubble from to the window-level key controller.
+            if let Some(area) = (focus_target)() {
+                area.grab_focus();
+            }
+            if ready_armed {
+                wire_ready_triggers(&handle, coordinator_weak);
+            }
+        })
+    };
+    if present {
+        show();
+    } else {
+        *handle.inner.show.borrow_mut() = Some(show);
     }
 
     Some(handle)
@@ -843,7 +989,7 @@ struct CloseParts<'a> {
 /// saved. Moving it below any of the three statements that follow
 /// would leave the relaunch smokes
 /// (`pane_layout_survives_relaunch_under_cage`,
-/// `single_pane_file_survives_relaunch_under_cage`) with an empty `state.json`.
+/// `single_pane_file_survives_relaunch_under_cage`) with an empty saved window state.
 ///
 /// What that call DOES with the subtree is [`crate::state_seam::close_commit`]'s
 /// three-arm rule, not this handler's: closing the last window keeps the session,

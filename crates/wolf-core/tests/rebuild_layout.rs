@@ -22,7 +22,7 @@
 //! `runtime/nvim/init.lua` `wolf_rebuild_layout` helper. The
 //! `//crates/wolf-core:rebuild_layout` `rust_test` target runs this file.
 //!
-//! The spec JSON shape is the one `wolf_core::state::rebuild_layout_spec` renders,
+//! The spec JSON shape is the one `wolf_core::app_state::tab_rebuild_spec` renders,
 //! the document's only renderer:
 //!   * leaf:  `{ "leaf": true, "path": "<abs path or empty>", "preview": <bool>,
 //!     "terminal": <bool>, "zoomed": <bool> }`
@@ -59,7 +59,9 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use common::{poll_until, run_line, win_terminal, FlushWaiter, FLUSH_TIMEOUT, POLL_INTERVAL};
-use wolf_core::state::{rebuild_layout_spec, PaneNode, PaneOrientation};
+use wolf_core::app_state::{
+    tab_rebuild_spec, Layout, Node, Pane, PaneOrientation, PaneRef, TabContent,
+};
 use wolf_core::{TerminalId, WolfCore};
 
 /// Placeholder content for the temp markdown files these tests open.
@@ -77,6 +79,42 @@ const BARRIER_ROUNDS: usize = 50;
 
 /// The files of the three-leaf barrier rebuild, in DFS leaf order.
 const BARRIER_FILES: [&str; 3] = ["a.md", "b.md", "c.md"];
+
+/// The rebuild document of a tab whose root is `root`, with the pane at depth-first index
+/// `zoomed` (if any) zoomed.
+fn rebuild_spec(root: Node, zoomed: Option<usize>) -> String {
+    let content = TabContent {
+        root: Some(root),
+        zoomed: zoomed.map(PaneRef::Pane),
+        ..TabContent::default()
+    };
+    tab_rebuild_spec(&content).expect("a tab with a root must render a rebuild document")
+}
+
+/// A layout of `children` along `orientation`, with weights `weights`.
+fn split(orientation: PaneOrientation, weights: Vec<f64>, children: Vec<Node>) -> Node {
+    Node::Layout(Layout {
+        orientation,
+        weights,
+        children,
+    })
+}
+
+/// An edit pane on `path`.
+fn edit_pane(path: &str) -> Node {
+    Node::Pane(Pane::Edit {
+        path: path.to_owned(),
+        cursor: None,
+        top_line: None,
+    })
+}
+
+/// A terminal pane whose shell starts in `path`.
+fn terminal_pane(path: &str) -> Node {
+    Node::Pane(Pane::Terminal {
+        path: path.to_owned(),
+    })
+}
 
 /// Resolves a window handle to the base `filename` its pane reports, polling until
 /// the handle is bound to a grid and `pane_status` reports the expected name.
@@ -439,19 +477,17 @@ fn rebuild_reports_every_leaf_window_on_return() {
                     .expect("a barrier fixture should canonicalize")
             })
             .collect();
-        let spec = rebuild_layout_spec(&PaneNode::Split {
-            orientation: PaneOrientation::Vertical,
-            weights: vec![1.0 / 3.0; files.len()],
-            children: files
-                .iter()
-                .map(|path| PaneNode::Leaf {
-                    path: path.to_str().expect("fixture path is UTF-8").to_string(),
-                    preview: false,
-                    terminal: false,
-                    zoomed: false,
-                })
-                .collect(),
-        });
+        let spec = rebuild_spec(
+            split(
+                PaneOrientation::Vertical,
+                vec![1.0 / 3.0; files.len()],
+                files
+                    .iter()
+                    .map(|path| edit_pane(path.to_str().expect("fixture path is UTF-8")))
+                    .collect(),
+            ),
+            None,
+        );
 
         let handles = core.rebuild_layout(&spec);
         // One read, straight after the return: what a commit at this instant would see.
@@ -587,24 +623,17 @@ fn a_terminal_leaf_starts_a_session_in_its_directory() {
         "precondition: the leaf's directory must not be the core's cwd"
     );
 
-    let spec = rebuild_layout_spec(&PaneNode::Split {
-        orientation: PaneOrientation::Vertical,
-        weights: vec![0.5, 0.5],
-        children: vec![
-            PaneNode::Leaf {
-                path: file_a.to_str().expect("a.md path is UTF-8").to_string(),
-                preview: false,
-                terminal: false,
-                zoomed: false,
-            },
-            PaneNode::Leaf {
-                path: leaf.to_str().expect("leaf dir is UTF-8").to_string(),
-                preview: false,
-                terminal: true,
-                zoomed: false,
-            },
-        ],
-    });
+    let spec = rebuild_spec(
+        split(
+            PaneOrientation::Vertical,
+            vec![0.5, 0.5],
+            vec![
+                edit_pane(file_a.to_str().expect("a.md path is UTF-8")),
+                terminal_pane(leaf.to_str().expect("leaf dir is UTF-8")),
+            ],
+        ),
+        None,
+    );
     let handles = core.rebuild_layout(&spec);
     assert_eq!(
         handles.len(),
@@ -656,24 +685,17 @@ fn a_terminal_leaf_without_a_directory_starts_in_the_tabpage_cwd() {
         "precondition: the removed directory must be gone"
     );
 
-    let spec = rebuild_layout_spec(&PaneNode::Split {
-        orientation: PaneOrientation::Horizontal,
-        weights: vec![0.5, 0.5],
-        children: vec![
-            PaneNode::Leaf {
-                path: String::new(),
-                preview: false,
-                terminal: true,
-                zoomed: false,
-            },
-            PaneNode::Leaf {
-                path: gone.to_str().expect("removed dir is UTF-8").to_string(),
-                preview: false,
-                terminal: true,
-                zoomed: false,
-            },
-        ],
-    });
+    let spec = rebuild_spec(
+        split(
+            PaneOrientation::Horizontal,
+            vec![0.5, 0.5],
+            vec![
+                terminal_pane(""),
+                terminal_pane(gone.to_str().expect("removed dir is UTF-8")),
+            ],
+        ),
+        None,
+    );
     let handles = core.rebuild_layout(&spec);
     assert_eq!(
         handles.len(),
@@ -706,24 +728,17 @@ fn a_terminal_leaf_without_a_directory_starts_in_the_tabpage_cwd() {
 fn rebuild_three_and_read_active(zoomed: Option<usize>) -> (Vec<i64>, Option<i64>) {
     let (core, _waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
     let files: Vec<tempfile::NamedTempFile> = (0..3).map(|_| common::temp_md(DOC)).collect();
-    let spec = rebuild_layout_spec(&PaneNode::Split {
-        orientation: PaneOrientation::Vertical,
-        weights: vec![1.0 / 3.0; files.len()],
-        children: files
-            .iter()
-            .enumerate()
-            .map(|(i, file)| PaneNode::Leaf {
-                path: file
-                    .path()
-                    .to_str()
-                    .expect("temp path is UTF-8")
-                    .to_string(),
-                preview: false,
-                terminal: false,
-                zoomed: zoomed == Some(i),
-            })
-            .collect(),
-    });
+    let spec = rebuild_spec(
+        split(
+            PaneOrientation::Vertical,
+            vec![1.0 / 3.0; files.len()],
+            files
+                .iter()
+                .map(|file| edit_pane(file.path().to_str().expect("temp path is UTF-8")))
+                .collect(),
+        ),
+        zoomed,
+    );
 
     let handles = core.rebuild_layout(&spec);
     // One read, straight after the return: what the front-end's restore sees.

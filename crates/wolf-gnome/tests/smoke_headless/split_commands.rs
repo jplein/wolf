@@ -1,6 +1,6 @@
 //! The Split Horizontal and Split Vertical smokes: each command run from the palette in the
 //! real app, from an editor pane, a terminal pane and a preview pane, read back from the
-//! frozen `state.json` layout.
+//! layout the app saves at its quit.
 
 use super::terminal::pin_terminal_smoke_shell;
 use super::*;
@@ -24,7 +24,7 @@ const SPLIT_SOURCE_FILE: &str = "splitsrc.md";
 
 /// The shape every smoke's frozen layout must have, in [`layout_shape`]'s notation: the first
 /// split side by side with the new pane on the right, and the second stacking a pane under it.
-const SPLIT_SHAPE_EXPECTED: &str = "vertical[leaf, horizontal[leaf, leaf]]";
+const SPLIT_SHAPE_EXPECTED: &str = "vertical[pane, horizontal[pane, pane]]";
 
 /// The kind of pane each smoke starts in, which the scenario reads as `SPLIT_KIND`.
 #[derive(Clone, Copy, Debug)]
@@ -50,29 +50,31 @@ impl FirstPane {
 }
 
 /// The scenario every split smoke runs: one launch, the first pane made per `SPLIT_KIND`, then
-/// Split Vertical and Split Horizontal from the palette, each awaited in the live `state.json`,
-/// which is then frozen into `$STATE_COPY`.
+/// Split Vertical and Split Horizontal from the palette, then Ctrl+Shift+Q, whose quit gathers
+/// every tab before the app exits, and a copy of the state database into `$STATE_COPY`.
 ///
-/// Leaves are counted on the pretty-printed `state.json`, where `wolf_core`'s
-/// `serde_json::to_string_pretty` puts each `"type": "leaf"` on a line of its own. The layout
-/// is persisted only once every leaf is reported, so a count reached is a whole layout.
+/// Each command is followed by a settle rather than a poll: a terminal pane takes no Ex
+/// command, so no readback can say a split has landed, and the saved layout is read only
+/// after the quit. A split that has not landed by the quit reads as a wrong shape.
 ///
 /// ## Exit codes
 ///
 /// | code | meaning |
 /// | --- | --- |
 /// | `11` | the app died before it was ready for input (the shared convention) |
+/// | `12` | the app was still alive after Ctrl+Shift+Q |
+/// | `13` | the app exited non-zero |
+/// | `16` | the app left no `wolf.sqlite` |
 /// | `40` | it never became ready (the shared convention) |
-/// | `61` | the palette's Preview left no preview leaf in `state.json` |
-/// | `62` | the layout never reached two leaves after Split Vertical |
-/// | `63` | the layout never reached three leaves after Split Horizontal |
 const SPLIT_SCENARIO: &str = r#"
 set -eu
 
-# SETTLE is the settle between steps; see SCENARIO.
+# SETTLE is the settle between steps; see SCENARIO. PREVIEW_SETTLE is the preview smoke's
+# budget for a cold preview open.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
-FILE_TRIES=100
+PREVIEW_SETTLE=2.0
+QUIT_TRIES=75
 
 cleanup() {
     set +e
@@ -86,24 +88,6 @@ trap cleanup EXIT INT TERM HUP
 "$WOLF_BIN" &
 app_pid=$!
 wait_ready "$app_pid" 11 "wolf-gnome split-command smoke"
-
-# $1 is a line pattern, $2 the count of state.json lines that must match it, $3 the exit code.
-wait_state_lines() {
-    t=0
-    while [ "$t" -lt "$FILE_TRIES" ]; do
-        n=$(grep -c "$1" "$STATE_SRC" 2>/dev/null || true)
-        if [ "${n:-0}" -eq "$2" ]; then
-            return 0
-        fi
-        t=$((t + 1))
-        sleep "$WAIT_INTERVAL"
-    done
-    echo "wolf-gnome split-command smoke: state.json never held $2 lines matching $1." >&2
-    if [ -s "$STATE_SRC" ]; then
-        cat "$STATE_SRC" >&2
-    fi
-    exit "$3"
-}
 
 # $1 is the query; Enter runs the palette's top row.
 palette() {
@@ -123,33 +107,55 @@ if [ "$SPLIT_KIND" != terminal ]; then
 fi
 if [ "$SPLIT_KIND" = preview ]; then
     palette "$PREVIEW_QUERY"
-    wait_state_lines '"preview": true' 1 61
-    sleep "$SETTLE"
+    sleep "$PREVIEW_SETTLE"
 fi
 
 # --- Step 2: Split Vertical, then Split Horizontal in the pane it focused --------
 palette "$SPLIT_VERTICAL_QUERY"
-wait_state_lines '"type": "leaf"' 2 62
 sleep "$SETTLE"
 palette "$SPLIT_HORIZONTAL_QUERY"
-wait_state_lines '"type": "leaf"' 3 63
-
-# --- Step 3: freeze the layout, once its third leaf's content has settled ------
 sleep "$SETTLE"
-cp "$STATE_SRC" "$STATE_COPY"
+
+# --- Step 3: quit, which gathers every tab first, then freeze the save ---------
+wtype -M ctrl -M shift -k q -m shift -m ctrl
+tries=0
+gone=0
+while [ "$tries" -lt "$QUIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        gone=1
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+if [ "$gone" -ne 1 ]; then
+    echo "wolf-gnome split-command smoke: the app (pid $app_pid) is still alive after Ctrl+Shift+Q." >&2
+    exit 12
+fi
+rc=0
+wait "$app_pid" || rc=$?
+if [ "$rc" -ne 0 ]; then
+    echo "wolf-gnome split-command smoke: the app (pid $app_pid) exited $rc, not 0." >&2
+    exit 13
+fi
+app_pid=
+if ! freeze_state "$STATE_SRC" "$STATE_COPY"; then
+    echo "wolf-gnome split-command smoke: the app left no wolf.sqlite in $STATE_SRC." >&2
+    exit 16
+fi
 
 exit 0
 "#;
 
-/// The layout's structure with every leaf written `leaf`, as `vertical[leaf, leaf]`.
-fn layout_shape(node: &PaneNode) -> String {
+/// The layout's structure with every pane written `pane`, as `vertical[pane, pane]`.
+fn layout_shape(node: &Node) -> String {
     match node {
-        PaneNode::Leaf { .. } => "leaf".to_owned(),
-        PaneNode::Split {
+        Node::Pane(_) => "pane".to_owned(),
+        Node::Layout(Layout {
             orientation,
             children,
             ..
-        } => {
+        }) => {
             let name = match orientation {
                 PaneOrientation::Horizontal => "horizontal",
                 PaneOrientation::Vertical => "vertical",
@@ -157,18 +163,6 @@ fn layout_shape(node: &PaneNode) -> String {
             let inner: Vec<String> = children.iter().map(layout_shape).collect();
             format!("{name}[{}]", inner.join(", "))
         }
-    }
-}
-
-/// Every leaf of `node`, in order.
-fn split_leaves<'a>(node: &'a PaneNode, out: &mut Vec<LeafFields<'a>>) {
-    match node {
-        PaneNode::Split { children, .. } => {
-            for child in children {
-                split_leaves(child, out);
-            }
-        }
-        leaf => out.extend(leaf_fields(leaf)),
     }
 }
 
@@ -220,16 +214,13 @@ fn run_split_smoke(smoke: &str, first: FirstPane) -> Vec<(String, bool, bool)> {
     std::fs::write(&source, "# Split source\n\nA paragraph to show.\n")
         .unwrap_or_else(|e| panic!("{smoke}: failed to write {}: {e}", source.display()));
 
-    let smoke_state_file = smoke_state_dir(&cwd).join(STATE_FILE_NAME);
-    let frozen_state_dir = runtime_dir.join(format!("wolf_gnome_split_{}_state", first.kind()));
-    std::fs::create_dir_all(&frozen_state_dir).unwrap_or_else(|e| {
-        panic!(
-            "{smoke}: failed to create the frozen-state dir {}: {e}",
-            frozen_state_dir.display()
-        )
-    });
-    let frozen_state_file = frozen_state_dir.join(STATE_FILE_NAME);
-    clear_evidence(&frozen_state_file, smoke);
+    let smoke_state = smoke_state_dir(&cwd);
+    let frozen = frozen_state_dir(
+        &runtime_dir,
+        &format!("wolf_gnome_split_{}_state", first.kind()),
+        smoke,
+    );
+    let frozen_state_file = frozen.join(STATE_DB_NAME);
 
     let mut cmd = cage_command(SPLIT_SCENARIO, &cwd, &runtime_dir);
     cmd.env("WOLF_BIN", bin)
@@ -238,8 +229,8 @@ fn run_split_smoke(smoke: &str, first: FirstPane) -> Vec<(String, bool, bool)> {
         .env("PREVIEW_QUERY", super::preview::PREVIEW_QUERY)
         .env("SPLIT_VERTICAL_QUERY", SPLIT_VERTICAL_QUERY)
         .env("SPLIT_HORIZONTAL_QUERY", SPLIT_HORIZONTAL_QUERY)
-        .env("STATE_SRC", &smoke_state_file)
-        .env("STATE_COPY", &frozen_state_file);
+        .env("STATE_SRC", &smoke_state)
+        .env("STATE_COPY", &frozen);
     if let FirstPane::Terminal = first {
         pin_terminal_smoke_shell(&mut cmd).env("WOLF_SMOKE_TERMINAL", "/bin/sh");
     }
@@ -251,32 +242,23 @@ fn run_split_smoke(smoke: &str, first: FirstPane) -> Vec<(String, bool, bool)> {
     assert!(
         status.success(),
         "{smoke}: the cage split-command scenario exited unsuccessfully ({status}); cage.log's \
-         stderr names the step and prints the last state.json. Exit 11: the app died before it \
-         was ready for input. Exit 40: it never became ready. Exit 61: the palette's Preview \
-         left no preview leaf, so the preview pane the smoke splits never existed. Exit 62: \
-         Split Vertical from the palette added no pane: its row is missing from the palette \
-         (`ui_action_for` not classifying it as dispatched) or `perform` does nothing with it. \
-         Exit 63: Split Horizontal added no pane, for the same reasons. Otherwise wtype or cp \
-         failed."
+         stderr names the step. Exit 11: the app died before it was ready for input. Exit 12: \
+         it was still alive after Ctrl+Shift+Q. Exit 13: it exited non-zero, which implicates \
+         the quit's gather of a split tab. Exit 16: it left no wolf.sqlite. Exit 40: it never \
+         became ready. Otherwise wtype or cp failed."
     );
 
     // --- Assertion 3: the shape names both orientations ------------------------
-    let saved = load_state(&frozen_state_dir).unwrap_or_else(|| {
-        panic!(
-            "{smoke}: wolf_core::load_state could not parse the frozen state at {}; the scenario \
-             saw it hold three leaves, so suspect its shape.",
-            frozen_state_file.display()
-        )
-    });
+    let saved = frozen_window_state(&frozen, smoke, "the save at the quit");
     let layout = saved
         .windows
         .first()
         .and_then(|window| window.tabs.first())
-        .and_then(|tab| tab.layout.as_ref())
+        .and_then(|tab| tab.content.root.as_ref())
         .unwrap_or_else(|| {
             panic!(
-                "{smoke}: the frozen state.json carries no layout in its first window's first \
-                 tab. File: {}",
+                "{smoke}: the saved window state carries no root in its first window's first \
+                 tab, so the tab was saved as an empty tab. File: {}",
                 frozen_state_file.display()
             )
         });
@@ -285,22 +267,29 @@ fn run_split_smoke(smoke: &str, first: FirstPane) -> Vec<(String, bool, bool)> {
         shape,
         SPLIT_SHAPE_EXPECTED,
         "{smoke}: Split Vertical then Split Horizontal in the pane it focused must leave \
-         {SPLIT_SHAPE_EXPECTED:?}, not {shape:?}. `horizontal[leaf, vertical[leaf, leaf]]` means \
+         {SPLIT_SHAPE_EXPECTED:?}, not {shape:?}. `horizontal[pane, vertical[pane, pane]]` means \
          the two commands are swapped: Split Horizontal is Vim's `:split`, stacked, and Split \
          Vertical `:vsplit`, side by side. The new pane on the left, or the second split taking \
-         the first pane, means the split did not focus its new pane. File: {}",
+         the first pane, means the split did not focus its new pane. A lone `pane`, or one \
+         layout of two, means a command added no pane: its row is missing from the palette \
+         (`ui_action_for` not classifying it as dispatched), `perform` does nothing with it, or \
+         it had not landed within the settle before the quit. For the preview smoke, a lone \
+         editor `pane` means the palette's Preview never opened one. File: {}",
         frozen_state_file.display()
     );
 
-    let mut leaves = Vec::new();
-    split_leaves(layout, &mut leaves);
-    leaves
+    layout
+        .panes()
         .into_iter()
-        .map(|leaf| (leaf.path.to_owned(), leaf.preview, leaf.terminal))
+        .map(|pane| {
+            let node = Node::Pane(pane.clone());
+            let leaf = leaf_fields(&node).expect("a pane node always has leaf fields");
+            (leaf.path.to_owned(), leaf.preview, leaf.terminal)
+        })
         .collect()
 }
 
-/// The file name of a persisted leaf path, or `""`.
+/// The file name of a persisted pane's path, or `""`.
 fn path_tail(path: &str) -> &str {
     Path::new(path)
         .file_name()
@@ -311,8 +300,8 @@ fn path_tail(path: &str) -> &str {
 /// **Split Vertical and Split Horizontal from the palette split an editor pane into windows
 /// on its buffer, in Vim's orientations.**
 ///
-/// Falsified by swapping the two orientations in `shell.rs`'s `perform` (assertion 3) and by
-/// classifying Split Vertical as deferred in `command_action.rs` (exit 62).
+/// Falsified by swapping the two orientations in `shell.rs`'s `perform` and by classifying
+/// Split Vertical as deferred in `command_action.rs`, each at assertion 3.
 #[test]
 fn split_commands_split_an_editor_pane_under_cage() {
     const SMOKE: &str = "split_commands_split_an_editor_pane_under_cage";
@@ -330,8 +319,8 @@ fn split_commands_split_an_editor_pane_under_cage() {
 /// **Split Vertical and Split Horizontal from the palette split a terminal pane into terminal
 /// panes.**
 ///
-/// `state.json` carries no session ids, so this does not tell a new session from a shared one;
-/// wolf-core's `split_commands.rs` does.
+/// The saved window state carries no session ids, so this does not tell a new session from a
+/// shared one; wolf-core's `split_commands.rs` does.
 #[test]
 fn split_commands_split_a_terminal_pane_under_cage() {
     const SMOKE: &str = "split_commands_split_a_terminal_pane_under_cage";
@@ -341,7 +330,7 @@ fn split_commands_split_a_terminal_pane_under_cage() {
             .iter()
             .all(|(_, preview, terminal)| *terminal && !preview),
         "{SMOKE}: every pane must be a terminal pane; the leaves are {leaves:?} (path, preview, \
-         terminal). An editor leaf means a terminal pane was split as a Neovim window."
+         terminal). An editor pane means a terminal pane was split as a Neovim window."
     );
 }
 
@@ -349,7 +338,7 @@ fn split_commands_split_a_terminal_pane_under_cage() {
 /// of the same source.**
 ///
 /// Falsified by making the split open an empty buffer in its new window, which leaves editor
-/// leaves where previews belong.
+/// panes where previews belong.
 #[test]
 fn split_commands_split_a_preview_pane_under_cage() {
     const SMOKE: &str = "split_commands_split_a_preview_pane_under_cage";
@@ -359,7 +348,7 @@ fn split_commands_split_a_preview_pane_under_cage() {
             path_tail(path) == SPLIT_SOURCE_FILE && *preview && !terminal
         }),
         "{SMOKE}: every pane must preview {SPLIT_SOURCE_FILE}; the leaves are {leaves:?} (path, \
-         preview, terminal). A leaf with preview false means a split of a preview pane showed \
+         preview, terminal). A pane with preview false means a split of a preview pane showed \
          something other than the preview, which a front-end draws as an editor."
     );
 }

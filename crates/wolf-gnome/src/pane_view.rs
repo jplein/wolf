@@ -55,10 +55,9 @@
 //! - **Save.** [`PaneHandle::layout_snapshot`] walks the live tree and resolves
 //!   each leaf out of the snapshot's WINDOW-KEYED maps — `Snapshot::previews`, then
 //!   `Snapshot::win_buffers` — by the pane's own Neovim window handle
-//!   ([`PaneInner::leaf_contents`]), encodes the result via
-//!   [`crate::pane_layout::encode`], and applies
-//!   [`crate::state_seam::persistable_layout`]'s CONTENT suppression rule. It is
-//!   called from [`crate::persistence`] for EVERY tab on every render wake and at
+//!   ([`PaneInner::leaf_contents`]), and encodes the result via
+//!   [`crate::pane_layout::encode`], with the zoomed pane's
+//!   [`crate::pane_layout::leaf_index`]. It is called from [`crate::persistence`] for EVERY tab on every render wake and at
 //!   `close-request`. [`PaneHandle::snapshot_readiness`] supplies the two counts
 //!   `state_seam::may_snapshot` gates on, so a snapshot taken before the first
 //!   pane binds can never wipe a good save.
@@ -67,7 +66,7 @@
 //!   the tab's own Neovim, so a BACKGROUND tab is gathered live rather than
 //!   last-known-good. A leaf whose window is in neither map refuses the whole tab's
 //!   gather ([`crate::pane_layout::LayoutGather::Refuse`]), and the tab then
-//!   contributes its cached subtree.
+//!   contributes its cached tab.
 //! - **Restore.** One route: [`PaneHandle::request_layout_rebuild`] queues the saved
 //!   tree at launch for the tab's first wake at which a window grid exists
 //!   ([`PaneInner::consume_pending_layout`]). It ends in
@@ -176,11 +175,11 @@ use gtk::{gio, glib};
 // with `adw::prelude::*` and makes every `WidgetExt` method ambiguous.
 use webkit6::prelude::{PolicyDecisionExt, WebViewExt};
 
+use wolf_core::app_state::{PaneRef, TabContent};
 use wolf_core::{
-    CursorShape, LayoutIntent, MouseAction, MouseButton, MouseEvent, PaneNode, PaneStatus,
-    PreviewInfo, Rgb, ScrollEvent, Snapshot, SplitOrientation, TerminalCommand, TerminalId,
-    TerminalMouseEvent, TerminalMouseKind, TerminalScrollEvent, TerminalTarget, ToastChunk,
-    WolfCore,
+    CursorShape, LayoutIntent, MouseAction, MouseButton, MouseEvent, PaneStatus, PreviewInfo, Rgb,
+    ScrollEvent, Snapshot, SplitOrientation, TerminalCommand, TerminalId, TerminalMouseEvent,
+    TerminalMouseKind, TerminalScrollEvent, TerminalTarget, ToastChunk, WolfCore,
 };
 
 use crate::cmdline_ui::{self, PumView, ToastView};
@@ -201,7 +200,6 @@ use crate::preview_ui::{self, DocumentUpdate, PreviewFilePress, PreviewLoad};
 use crate::ready_seam;
 use crate::render::{draw_glyph, draw_text_line, FALLBACK_BG, FALLBACK_FG};
 use crate::scrollbar;
-use crate::state_seam;
 use crate::statusbar_layout::{
     self, StatusbarLayout, STATUSBAR_LINE_GAP, STATUSBAR_VERTICAL_PADDING,
 };
@@ -603,13 +601,13 @@ struct PaneInner {
     ///
     /// Per tab. A zoom touches neither [`Self::tree`], its weights, [`Self::drawer_share`]
     /// nor [`Self::drawer`], so the layout a snapshot saves is the unzoomed one and an unzoom
-    /// rebuilds it exactly. `state.json` records it as the zoomed leaf's mark, which a launch
-    /// rebuild re-zooms. The rules are [`crate::pane_zoom`]'s.
+    /// rebuilds it exactly. The saved window state records it as the tab's `zoomed` pane index,
+    /// which a launch rebuild re-zooms. The rules are [`crate::pane_zoom`]'s.
     zoomed: Cell<Option<PaneId>>,
-    /// A saved pane tree awaiting realization, set ONCE at launch by
+    /// A saved tab awaiting realization, set ONCE at launch by
     /// [`PaneHandle::request_layout_rebuild`] and consumed by the first wake at
     /// which a window grid exists (see [`PaneInner::consume_pending_layout`]).
-    pending_layout: RefCell<Option<PaneNode>>,
+    pending_layout: RefCell<Option<TabContent>>,
     /// The trailing-render state machine behind the Markdown preview
     /// ([`PaneInner::request_preview_render`]).
     ///
@@ -933,7 +931,7 @@ impl PaneInner {
     ///
     /// 1. **Validate first.** [`pane_layout::decode`] rejects a malformed tree
     ///    BEFORE any spec is rendered, so nvim is never asked to realize one.
-    /// 2. Render the spec via `wolf_core::state::rebuild_layout_spec`.
+    /// 2. Render the spec via `wolf_core::app_state::tab_rebuild_spec`.
     /// 3. Call `rebuild_layout` under a SHORT borrow in its own statement.
     ///
     ///    **This is a BLOCKING RPC**, one of those this crate issues
@@ -948,16 +946,21 @@ impl PaneInner {
     /// 4. A handle count that does not match the decoded leaf count aborts,
     ///    leaving the single already-bound pane intact, and the tab unzoomed.
     ///
-    /// A leaf marked `zoomed` is re-zoomed through [`ZoomEvent::Restore`] and made the active
-    /// pane. The rebuild left Neovim's current window on that leaf, so no later wake reads a
-    /// focus move off it.
-    fn apply_layout_rebuild(self: &Rc<Self>, saved: &PaneNode) {
+    /// The pane `content.zoomed` names is re-zoomed through [`ZoomEvent::Restore`] and made the
+    /// active pane. The rebuild left Neovim's current window on that leaf, so no later wake reads
+    /// a focus move off it.
+    fn apply_layout_rebuild(self: &Rc<Self>, content: &TabContent) {
+        let Some(root) = content.root.as_ref() else {
+            return;
+        };
         let first_id = self.next_pane_id.get();
-        let Some((tree, leaf_ids)) = pane_layout::decode(saved, first_id) else {
+        let Some((tree, leaf_ids)) = pane_layout::decode(root, first_id) else {
             eprintln!("wolf-gnome: saved pane layout is unusable; keeping the fresh single pane");
             return;
         };
-        let spec = wolf_core::state::rebuild_layout_spec(saved);
+        let Some(spec) = wolf_core::app_state::tab_rebuild_spec(content) else {
+            return;
+        };
         let handles = {
             let core_ref = self.core.borrow();
             let Some(core) = core_ref.as_ref() else {
@@ -996,8 +999,10 @@ impl PaneInner {
         self.clear_drawer();
         self.zoomed.set(None);
         // Before the rebuild, so the first build already shows the zoomed host alone.
-        let saved_zoom =
-            pane_layout::zoomed_leaf_index(saved).and_then(|i| leaf_ids.get(i).copied());
+        let saved_zoom = match content.zoomed {
+            Some(PaneRef::Pane(i)) => leaf_ids.get(i).copied(),
+            _ => None,
+        };
         if let Some(id) = saved_zoom {
             self.apply_zoom_event(ZoomEvent::Restore(id));
         }
@@ -1221,40 +1226,41 @@ impl PaneInner {
         pane_layout::resolve_leaves(&leaves)
     }
 
-    /// The tab's gather answer for `state.json`.
+    /// The tab's gather answer for the saved window state.
     ///
     /// [`pane_layout::LayoutGather::Refuse`] when [`Self::leaf_contents`] could not
     /// resolve every leaf, which means "contribute the CACHE" one layer up rather
-    /// than "contribute nothing"; otherwise
-    /// [`pane_layout::LayoutGather::Ready`] carrying
-    /// [`state_seam::persistable_layout`]'s answer, whose `None` is the CONTENT
-    /// suppression rule and never an arity test.
+    /// than "contribute nothing"; otherwise [`pane_layout::LayoutGather::Ready`]
+    /// carrying the encoded root, whatever its shape.
     ///
     /// No core call beyond the one snapshot read [`Self::leaf_contents`] takes, so
     /// this is affordable for every tab on every render wake.
     ///
     /// **The terminal drawer is excluded BY CONSTRUCTION and needs no branch here.**
     /// This walks `tree.leaves()`, and the drawer is not a leaf, so it never persists:
-    /// `specs/terminal-panes.md` § Session restore keeps the drawer out of `state.json`,
+    /// `specs/terminal-panes.md` § Session restore keeps the drawer out of the saved tree,
     /// and a terminal leaf restores as a split pane, never as the drawer. Putting the
     /// drawer in the tree is what would break this, not editing this function.
     ///
-    /// The zoomed pane's leaf is marked `zoomed`. A zoomed drawer marks no leaf, so the tab
+    /// `zoomed` is the zoomed pane's depth-first index. A zoomed drawer has none, so the tab
     /// persists unzoomed.
     fn layout_snapshot(&self) -> pane_layout::LayoutGather {
         let Some(contents) = self.leaf_contents() else {
             return pane_layout::LayoutGather::Refuse;
         };
         let layout = self.tree.borrow().layout();
-        pane_layout::LayoutGather::Ready(state_seam::persistable_layout(pane_layout::encode(
-            &layout,
-            &contents,
-            self.zoomed.get(),
-        )))
+        let zoomed = self
+            .zoomed
+            .get()
+            .and_then(|id| pane_layout::leaf_index(&layout, id));
+        pane_layout::LayoutGather::Ready {
+            root: pane_layout::encode(&layout, &contents),
+            zoomed,
+        }
     }
 
     /// `(panes with a RESOLVED grid, windows nvim has reported a buffer or a preview
-    /// source for)` — the two readiness counts [`state_seam::may_snapshot`] gates on.
+    /// source for)` — the two readiness counts [`crate::state_seam::may_snapshot`] gates on.
     ///
     /// The reported count is `win_buffers.len() + previews.len()`, not
     /// `win_buffers.len()` alone: preview windows are omitted from `win_buffers`
@@ -3842,20 +3848,19 @@ impl PaneHandle {
         self.inner.on_render_wake();
     }
 
-    /// Queues a saved pane tree to be realized ONCE, on the first wake at which a
-    /// window grid exists.
+    /// Queues a saved tab, as `wolf_core::app_state::restored_tab` rewrote it, to be
+    /// realized ONCE, on the first wake at which a window grid exists.
     ///
     /// Called from `tab_view::TabsHandle::open_tab` before `present()`, with the
-    /// layout carried on that tab's `state_seam::TabPlan`. It cannot be applied here: no Neovim
+    /// tab carried on that tab's `state_seam::TabPlan`. It cannot be applied here: no Neovim
     /// window has appeared yet, so there is nothing to rebuild from. See
     /// [`PaneInner::consume_pending_layout`] for the three outcomes.
-    pub fn request_layout_rebuild(&self, saved: PaneNode) {
-        *self.inner.pending_layout.borrow_mut() = Some(saved);
+    pub fn request_layout_rebuild(&self, restored: TabContent) {
+        *self.inner.pending_layout.borrow_mut() = Some(restored);
     }
 
-    /// The tab's gather answer for `state.json` (see
-    /// [`PaneInner::layout_snapshot`]): `Refuse` means "contribute the cache", and
-    /// `Ready(None)` is the content suppression of an unnamed lone pane.
+    /// The tab's gather answer for the saved window state (see
+    /// [`PaneInner::layout_snapshot`]): `Refuse` means "contribute the cache".
     #[must_use]
     pub fn layout_snapshot(&self) -> pane_layout::LayoutGather {
         self.inner.layout_snapshot()
@@ -3938,7 +3943,7 @@ impl PaneHandle {
     /// - The pane TOPOLOGY is not restored ACROSS A CRASH RESTART — only the
     ///   Tier-1 file set is. Do not confuse this with the QUIT/RELAUNCH case,
     ///   which the layout persistence in this module's "Layout persistence"
-    ///   section DOES restore: that path reads a saved tree out of `state.json`
+    ///   section DOES restore: that path reads a saved tree out of the store
     ///   at launch, whereas an in-place restart has no saved tree to read and
     ///   deliberately rebinds a single fresh pane. Restoring the split layout
     ///   (and cursor/scroll position) across a RESTART remains out of scope.
@@ -4375,7 +4380,7 @@ impl DividerGuard {
 /// - The write-back rebuilds NOTHING — no [`PaneInner::rebuild_pane_area`], no
 ///   redraw, no snapshot request. A rebuild destroys every paned, including the one
 ///   holding the live gesture. The widget already shows the new position; only the
-///   tree is behind. The drag reaches `state.json` on the next render wake anyway,
+///   tree is behind. The drag reaches the store on the next render wake anyway,
 ///   because resizing a pane resizes its grid.
 fn install_paned_position(
     paned: &gtk::Paned,

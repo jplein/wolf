@@ -1,24 +1,25 @@
 //! The pure, GTK-free CODEC between the live pane tree and the persisted one.
 //!
 //! It bridges [`crate::layout`]'s [`PaneLayout`] / [`PaneId`] (whose leaves are
-//! pane IDS) and [`wolf_core::PaneNode`] (whose leaves are buffer PATHS, the
-//! `state.json` shape). No GTK, no serde, no IO — so every rule here is
-//! unit-testable headlessly, exactly like [`crate::layout`] and
+//! pane IDS) and [`wolf_core::app_state::Node`] (whose leaves are panes with
+//! paths, the saved window state's shape). No GTK, no serde, no IO — so every rule
+//! here is unit-testable headlessly, exactly like [`crate::layout`] and
 //! [`crate::geometry`].
 //!
 //! ## The single-pane persistence rule (read this before touching anything)
 //!
 //! A tab's open buffer paths have NO persistence channel of their own: they ride
-//! only inside `TabState::layout`'s leaves. A save side that suppressed the layout
-//! by ARITY (`leaf_count(..) > 1`) would persist the single most common shape (one
-//! window, one tab, one pane, one file) as its cwd and nothing else, and the file
+//! only inside its root's panes. A save side that suppressed the root by ARITY
+//! (`leaf_count(..) > 1`) would persist the single most common shape (one window,
+//! one tab, one pane, one file) as its directory and nothing else, and the file
 //! would not be reopened on relaunch.
 //!
-//! The rule, on both sides, is a CONTENT predicate: [`is_empty_leaf`] suppresses
-//! ONLY an unnamed, non-preview lone leaf (the empty-state "no folder" pane,
-//! whose `layout: None` is a pre-existing invariant), and the restore side
-//! rebuilds ANY saved layout with no arity guard at all. **Never gate persistence
-//! on [`leaf_count`]** — it exists solely to check the handle count
+//! So the save side writes every folder tab's root, a lone empty edit pane
+//! included, and only an empty tab writes none
+//! ([`crate::state_seam::tab_entry`]). The restore side skips the rebuild of a
+//! root that [`is_empty_leaf`] matches, a CONTENT predicate, and rebuilds any
+//! other root with no arity guard at all. **Never gate persistence on
+//! [`leaf_count`]** — it exists solely to check the handle count
 //! `wolf_core::WolfCore::rebuild_layout` returns.
 //!
 //! ## The all-or-nothing resolution rule
@@ -28,7 +29,7 @@
 //! unnamed buffer), while an absent WINDOW is not, so a single unresolvable leaf
 //! refuses the whole tab's gather rather than being written as `""`. That refusal
 //! is what makes the silent-loss shape — a well-formed multi-leaf tree whose paths
-//! are all empty, which [`is_empty_leaf`] never suppresses — unreachable.
+//! are all empty, which [`is_empty_leaf`] never matches — unreachable.
 //!
 //! ## Orientation, in one place
 //!
@@ -39,14 +40,14 @@
 
 use std::collections::HashMap;
 
-use wolf_core::{PaneNode, PaneOrientation};
+use wolf_core::app_state::{Layout, Node, Pane, PaneOrientation};
 
 use crate::layout::{Orientation, PaneId, PaneLayout, PaneTree};
 
 /// The most leaves [`decode`] will realize from a saved layout.
 ///
-/// A restore POLICY cap, not a tree limit: a corrupt or hand-edited `state.json`
-/// must not make the app ask nvim to create hundreds of windows at launch.
+/// A restore POLICY cap, not a tree limit: a corrupt or hand-edited saved window
+/// state must not make the app ask nvim to create hundreds of windows at launch.
 pub const MAX_RESTORE_LEAVES: usize = 64;
 
 /// The deepest saved layout [`decode`] will realize.
@@ -55,15 +56,15 @@ pub const MAX_RESTORE_LEAVES: usize = 64;
 /// recursion) against a pathological hand-edited nesting.
 pub const MAX_RESTORE_DEPTH: usize = 32;
 
-/// What one live pane contributes to a persisted leaf: the buffer path it holds
-/// and whether that buffer is a Markdown PREVIEW rather than an editable file.
+/// What one live pane contributes to a persisted pane: the path it holds and
+/// whether it is a Markdown PREVIEW or a terminal rather than an editable file.
 ///
-/// The two travel together because [`is_empty_leaf`] reads both, and a caller that
-/// carried only the path would have to re-derive the flag at the encode site —
-/// where the pane it belongs to is no longer in hand.
+/// They travel together because [`encode`] picks the pane's kind from the flags,
+/// and a caller that carried only the path would have to re-derive them at the
+/// encode site — where the pane it belongs to is no longer in hand.
 ///
 /// [`Default`] is the "no such pane" value, which is what makes a leaf id missing
-/// from [`encode`]'s map an empty, non-preview leaf without a second lookup.
+/// from [`encode`]'s map an empty edit pane without a second lookup.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LeafContent {
     /// The pane's RAW absolute buffer path (`""` for an unbound or unnamed pane).
@@ -97,18 +98,19 @@ pub enum WinContent {
 /// One tab's gather answer, as [`crate::pane_view::PaneHandle::layout_snapshot`]
 /// reports it.
 ///
-/// Two refusals with different meanings would be one `Option` too few:
-/// [`LayoutGather::Ready`]`(None)` is [`crate::state_seam::persistable_layout`]'s
-/// CONTENT suppression, a real answer that says "this tab holds an empty-state lone
-/// pane"; [`LayoutGather::Refuse`] says the tab could not be read at all and its
-/// caller must contribute the CACHE.
+/// [`LayoutGather::Refuse`] says the tab could not be read at all and its caller
+/// must contribute the CACHE.
 #[derive(Clone, Debug, PartialEq)]
 pub enum LayoutGather {
-    /// The tab was read. The payload is [`crate::state_seam::persistable_layout`]'s
-    /// answer, so `None` is content suppression rather than failure.
-    Ready(Option<PaneNode>),
+    /// The tab was read.
+    Ready {
+        /// The tab's root, as [`encode`] wrote it.
+        root: Node,
+        /// The zoomed pane's [`leaf_index`], or `None` when no pane is zoomed.
+        zoomed: Option<usize>,
+    },
     /// At least one leaf was unresolvable, so the whole tab's gather is refused and
-    /// the caller contributes its last good subtree instead.
+    /// the caller contributes its last good tab instead.
     Refuse,
 }
 
@@ -126,16 +128,16 @@ pub enum LayoutGather {
 /// the buffer arm is a real unnamed buffer — `:enew`, the empty-state pane — and
 /// refusing on it would stop persisting every tab holding a scratch buffer.
 /// Mapping the absent window onto that same `""` is the opposite error and a far
-/// worse one: it is the exact shape that writes a well-formed `state.json` over the
-/// user's files, because [`is_empty_leaf`] suppresses only a LONE empty leaf, so a
-/// multi-leaf tree of empty leaves is persisted verbatim and read back on the next
+/// worse one: it is the exact shape that writes a well-formed saved tab over the
+/// user's files, because [`is_empty_leaf`] matches only a LONE empty pane, so a
+/// multi-leaf tree of empty panes is persisted verbatim and read back on the next
 /// launch as a genuine topology of blank panes. No arity guard anywhere can catch
 /// that; the refusal here, at the only point where "empty" and "absent" are still
 /// distinguishable, is what makes it unreachable.
 ///
 /// An empty `leaves` slice resolves to an empty map: nothing is unresolvable, so
 /// there is nothing to refuse. [`encode`] then answers its missing-id fallback for
-/// every leaf, which the caller's own suppression rule handles as before.
+/// every leaf.
 #[must_use]
 pub fn resolve_leaves(leaves: &[(PaneId, WinContent)]) -> Option<HashMap<PaneId, LeafContent>> {
     leaves
@@ -164,114 +166,111 @@ pub fn resolve_leaves(leaves: &[(PaneId, WinContent)]) -> Option<HashMap<PaneId,
         .collect()
 }
 
-/// Maps a live [`PaneLayout`] (leaf IDs) into a persistable [`PaneNode`] (leaf
-/// PATHS), looking each leaf id up in `contents`.
+/// Maps a live [`PaneLayout`] (leaf IDs) into a persistable [`Node`] (panes
+/// with paths), looking each leaf id up in `contents`.
 ///
-/// A leaf id MISSING from `contents` becomes an empty leaf, `Leaf { path: "", .. }`
-/// (an unbound or unnamed pane persists as an empty leaf) rather than
-/// being dropped, because dropping it would change the topology and desynchronise
-/// the DFS zip the restore path depends on. That fallback is DEFENSIVE: the gather
-/// path builds `contents` from [`resolve_leaves`], which answers one entry per leaf
-/// or refuses outright, so a missing id cannot reach here from it.
+/// A leaf maps to [`Pane::Terminal`] when its content is a terminal, else to
+/// [`Pane::Preview`] when it is a preview, else to [`Pane::Edit`]; the cursor,
+/// top line and scroll are left unset.
 ///
-/// Weights and orientation are copied VERBATIM. The leaf whose id is `zoomed` is marked
-/// `zoomed`; a `zoomed` id that is no leaf, such as the drawer's, marks nothing.
+/// A leaf id MISSING from `contents` becomes an empty edit pane (an unbound or
+/// unnamed pane persists as one) rather than being dropped, because dropping it
+/// would change the topology and desynchronise the DFS zip the restore path
+/// depends on. That fallback is DEFENSIVE: the gather path builds `contents` from
+/// [`resolve_leaves`], which answers one entry per leaf or refuses outright, so a
+/// missing id cannot reach here from it.
+///
+/// Weights and orientation are copied VERBATIM.
 #[must_use]
-pub fn encode(
-    layout: &PaneLayout,
-    contents: &HashMap<PaneId, LeafContent>,
-    zoomed: Option<PaneId>,
-) -> PaneNode {
+pub fn encode(layout: &PaneLayout, contents: &HashMap<PaneId, LeafContent>) -> Node {
     match layout {
         PaneLayout::Leaf(id) => {
             // `LeafContent::default()` IS the "no such pane" value, which is why a
             // missing id needs no second branch.
             let content = contents.get(id).cloned().unwrap_or_default();
-            PaneNode::Leaf {
-                path: content.path,
-                preview: content.preview,
-                terminal: content.terminal,
-                zoomed: Some(*id) == zoomed,
-            }
+            let pane = if content.terminal {
+                Pane::Terminal { path: content.path }
+            } else if content.preview {
+                Pane::Preview {
+                    path: content.path,
+                    scroll: None,
+                }
+            } else {
+                Pane::Edit {
+                    path: content.path,
+                    cursor: None,
+                    top_line: None,
+                }
+            };
+            Node::Pane(pane)
         }
         PaneLayout::Split {
             orientation,
             children,
             weights,
-        } => PaneNode::Split {
+        } => Node::Layout(Layout {
             orientation: to_core_orientation(*orientation),
-            children: children
-                .iter()
-                .map(|c| encode(c, contents, zoomed))
-                .collect(),
+            children: children.iter().map(|c| encode(c, contents)).collect(),
             // VERBATIM. Equalizing here would silently re-centre every dragged
             // divider on the next launch while the restore side looked correct.
             weights: weights.clone(),
-        },
+        }),
     }
 }
 
-/// The "suppress from persistence" CONTENT predicate: `true` **iff** `node` is
-/// `Leaf { path: "", preview: false, terminal: false }`, whatever its `zoomed`.
-///
-/// A preview leaf, a terminal leaf, a leaf with a non-empty path, and EVERY split — including a
-/// split of two empty leaves — are `false`. **This is NEVER an arity test**; see
-/// the module docs for the bug that arity guard caused.
+/// The depth-first index of the leaf `id` under `layout`: the index a saved tab's
+/// `zoomed` names, and the index into [`decode`]'s leaf ids. `None` when `id` is no
+/// leaf of `layout`, as the drawer's is not.
 #[must_use]
-pub fn is_empty_leaf(node: &PaneNode) -> bool {
-    match node {
-        PaneNode::Leaf {
-            path,
-            preview,
-            terminal,
-            ..
-        } => path.is_empty() && !preview && !terminal,
-        PaneNode::Split { .. } => false,
-    }
-}
-
-/// The number of leaves under `node` (`1` for a leaf).
-///
-/// Used ONLY to validate the handle count `wolf_core::WolfCore::rebuild_layout`
-/// returns against the leaves [`decode`] produced. Never a persistence gate —
-/// that is [`is_empty_leaf`].
-#[must_use]
-pub fn leaf_count(node: &PaneNode) -> usize {
-    match node {
-        PaneNode::Leaf { .. } => 1,
-        PaneNode::Split { children, .. } => children.iter().map(leaf_count).sum(),
-    }
-}
-
-/// The depth-first index of the first leaf under `node` marked `zoomed`: the index into
-/// [`decode`]'s leaf ids, and the leaf `wolf_rebuild_layout` leaves current. A hand edit's
-/// later marks are ignored.
-#[must_use]
-pub fn zoomed_leaf_index(node: &PaneNode) -> Option<usize> {
-    fn walk(node: &PaneNode, index: &mut usize) -> Option<usize> {
-        match node {
-            PaneNode::Leaf { zoomed, .. } => {
+pub fn leaf_index(layout: &PaneLayout, id: PaneId) -> Option<usize> {
+    fn walk(layout: &PaneLayout, id: PaneId, index: &mut usize) -> Option<usize> {
+        match layout {
+            PaneLayout::Leaf(leaf) => {
                 let here = *index;
                 *index += 1;
-                zoomed.then_some(here)
+                (*leaf == id).then_some(here)
             }
-            PaneNode::Split { children, .. } => children.iter().find_map(|c| walk(c, index)),
+            PaneLayout::Split { children, .. } => children.iter().find_map(|c| walk(c, id, index)),
         }
     }
-    walk(node, &mut 0)
+    walk(layout, id, &mut 0)
 }
 
-/// The leaf paths under `node` in DFS order — the order
-/// `wolf_core::state::rebuild_layout_spec` emits leaves in, and therefore the
+/// The "nothing to rebuild" CONTENT predicate: `true` **iff** `node` is
+/// `Node::Pane(Pane::Edit { path: "", .. })`.
+///
+/// A preview pane, a terminal pane, a pane with a non-empty path, and EVERY layout —
+/// including a layout of two empty panes — are `false`. **This is NEVER an arity
+/// test**; see the module docs for the bug that arity guard caused.
+#[must_use]
+pub fn is_empty_leaf(node: &Node) -> bool {
+    matches!(node, Node::Pane(Pane::Edit { path, .. }) if path.is_empty())
+}
+
+/// The number of panes under `node` (`1` for a pane).
+///
+/// Used ONLY to validate the handle count `wolf_core::WolfCore::rebuild_layout`
+/// returns against the leaves [`decode`] produced. Never a persistence gate.
+#[must_use]
+pub fn leaf_count(node: &Node) -> usize {
+    match node {
+        Node::Pane(_) => 1,
+        Node::Layout(layout) => layout.children.iter().map(leaf_count).sum(),
+    }
+}
+
+/// The pane paths under `node` in DFS order — the order
+/// `wolf_core::app_state::tab_rebuild_spec` emits leaves in, and therefore the
 /// order `wolf_core::WolfCore::rebuild_layout` returns window handles in.
 #[must_use]
-pub fn leaf_paths_dfs(node: &PaneNode) -> Vec<String> {
-    let mut out = Vec::new();
-    collect_leaf_paths(node, &mut out);
-    out
+pub fn leaf_paths_dfs(node: &Node) -> Vec<String> {
+    node.panes()
+        .into_iter()
+        .map(|pane| pane.path().to_owned())
+        .collect()
 }
 
-/// Turns a saved [`PaneNode`] into a live [`PaneTree`] plus its leaf ids in DFS
+/// Turns a saved [`Node`] into a live [`PaneTree`] plus its leaf ids in DFS
 /// order, so the caller can zip each nvim window handle onto its rebuilt leaf.
 ///
 /// Ids are allocated sequentially from `first_leaf_id` in DFS order, so
@@ -289,7 +288,7 @@ pub fn leaf_paths_dfs(node: &PaneNode) -> Vec<String> {
 /// reshaping would desynchronise the DFS zip against handles nvim has already
 /// returned.
 #[must_use]
-pub fn decode(node: &PaneNode, first_leaf_id: PaneId) -> Option<(PaneTree, Vec<PaneId>)> {
+pub fn decode(node: &Node, first_leaf_id: PaneId) -> Option<(PaneTree, Vec<PaneId>)> {
     if leaf_count(node) > MAX_RESTORE_LEAVES || depth(node) > MAX_RESTORE_DEPTH {
         return None;
     }
@@ -316,51 +315,36 @@ fn from_core_orientation(orientation: PaneOrientation) -> Orientation {
     }
 }
 
-/// Appends every leaf path under `node` to `out` in DFS order.
-fn collect_leaf_paths(node: &PaneNode, out: &mut Vec<String>) {
-    match node {
-        PaneNode::Leaf { path, .. } => out.push(path.clone()),
-        PaneNode::Split { children, .. } => {
-            for child in children {
-                collect_leaf_paths(child, out);
-            }
-        }
-    }
-}
-
-/// The node depth of `node` (`1` for a leaf), for the [`MAX_RESTORE_DEPTH`] cap.
+/// The node depth of `node` (`1` for a pane), for the [`MAX_RESTORE_DEPTH`] cap.
 ///
 /// Recursing here is safe on untrusted input because `serde_json`'s own
-/// deserialization recursion limit (128) rejects anything deeper long before
-/// `load_state` hands a tree to this module.
-fn depth(node: &PaneNode) -> usize {
+/// deserialization recursion limit (128) rejects anything deeper long before the
+/// store hands a tree to this module.
+fn depth(node: &Node) -> usize {
     match node {
-        PaneNode::Leaf { .. } => 1,
-        PaneNode::Split { children, .. } => 1 + children.iter().map(depth).max().unwrap_or(0),
+        Node::Pane(_) => 1,
+        Node::Layout(layout) => 1 + layout.children.iter().map(depth).max().unwrap_or(0),
     }
 }
 
 /// Recursively mirrors `node` into a [`PaneLayout`], allocating a fresh
 /// [`PaneId`] for each leaf in DFS order and recording it in `leaf_ids`.
-fn to_layout(node: &PaneNode, next_id: &mut PaneId, leaf_ids: &mut Vec<PaneId>) -> PaneLayout {
+fn to_layout(node: &Node, next_id: &mut PaneId, leaf_ids: &mut Vec<PaneId>) -> PaneLayout {
     match node {
-        PaneNode::Leaf { .. } => {
+        Node::Pane(_) => {
             let id = *next_id;
             *next_id += 1;
             leaf_ids.push(id);
             PaneLayout::Leaf(id)
         }
-        PaneNode::Split {
-            orientation,
-            weights,
-            children,
-        } => PaneLayout::Split {
-            orientation: from_core_orientation(*orientation),
-            children: children
+        Node::Layout(layout) => PaneLayout::Split {
+            orientation: from_core_orientation(layout.orientation),
+            children: layout
+                .children
                 .iter()
                 .map(|c| to_layout(c, next_id, leaf_ids))
                 .collect(),
-            weights: weights.clone(),
+            weights: layout.weights.clone(),
         },
     }
 }
@@ -399,25 +383,22 @@ mod tests {
     /// range can be built from it without a cast.
     const ASYMMETRIC_LEAVES: PaneId = 3;
 
-    /// A non-preview leaf bound to `path`.
-    fn leaf(path: &str) -> PaneNode {
-        PaneNode::Leaf {
+    /// An edit pane bound to `path`.
+    fn leaf(path: &str) -> Node {
+        Node::Pane(Pane::Edit {
             path: path.to_string(),
-            preview: false,
-            terminal: false,
-            zoomed: false,
-        }
+            cursor: None,
+            top_line: None,
+        })
     }
 
-    /// A PREVIEW leaf bound to `path` (the predicate tests need one to prove
+    /// A PREVIEW pane bound to `path` (the predicate tests need one to prove
     /// `is_empty_leaf` is not just "the path is empty").
-    fn preview_leaf(path: &str) -> PaneNode {
-        PaneNode::Leaf {
+    fn preview_leaf(path: &str) -> Node {
+        Node::Pane(Pane::Preview {
             path: path.to_string(),
-            preview: true,
-            terminal: false,
-            zoomed: false,
-        }
+            scroll: None,
+        })
     }
 
     /// One live pane holding an ordinary editable buffer at `path`.
@@ -438,19 +419,19 @@ mod tests {
         }
     }
 
-    /// A [`PaneNode`] split along `orientation`.
-    fn split(orientation: PaneOrientation, weights: &[f64], children: Vec<PaneNode>) -> PaneNode {
-        PaneNode::Split {
+    /// A [`Node::Layout`] along `orientation`.
+    fn split(orientation: PaneOrientation, weights: &[f64], children: Vec<Node>) -> Node {
+        Node::Layout(Layout {
             orientation,
             weights: weights.to_vec(),
             children,
-        }
+        })
     }
 
     /// The exact tree the S1 relaunch smoke builds:
     /// `Vertical[ Horizontal[a, b], c ]` — a left COLUMN of two beside a full-height
     /// right pane. DFS leaves are `[a, b, c]`.
-    fn asymmetric_tree() -> PaneNode {
+    fn asymmetric_tree() -> Node {
         split(
             PaneOrientation::Vertical,
             &[WEIGHT_SMALL, WEIGHT_LARGE],
@@ -486,7 +467,7 @@ mod tests {
     /// is a bare leaf), for the [`MAX_RESTORE_DEPTH`] boundary rows. Its leaf count
     /// is also `depth`, which stays well under [`MAX_RESTORE_LEAVES`] at the depths
     /// tested, so the two caps are exercised independently.
-    fn nested_chain(depth: usize) -> PaneNode {
+    fn nested_chain(depth: usize) -> Node {
         if depth <= 1 {
             return leaf(PATH_A);
         }
@@ -499,7 +480,7 @@ mod tests {
 
     /// A FLAT split of `count` equally-weighted empty leaves, for the
     /// [`MAX_RESTORE_LEAVES`] boundary rows.
-    fn flat_split(count: usize) -> PaneNode {
+    fn flat_split(count: usize) -> Node {
         split(
             PaneOrientation::Vertical,
             &vec![WEIGHT_HALF; count],
@@ -531,8 +512,7 @@ mod tests {
     /// FALSIFYING EDIT: write `preview: false` on every leaf. The preview pane then
     /// persists as an ordinary editor leaf, so the next launch reopens the source
     /// file in what was the preview pane — and, worse, `is_empty_leaf` starts
-    /// suppressing an unnamed preview leaf, which is the one thing it exists not to
-    /// do.
+    /// matching an unnamed preview pane, which restore would then not rebuild.
     #[test]
     fn encode_maps_ids_to_paths() {
         let mut contents = HashMap::new();
@@ -541,7 +521,7 @@ mod tests {
         // since dropping it changes the topology and desynchronises the DFS zip.
         contents.insert(P2, preview_pane(PATH_C));
 
-        let got = encode(&asymmetric_layout(), &contents, None);
+        let got = encode(&asymmetric_layout(), &contents);
 
         // One whole-value comparison: editor, unmapped and preview ids, both orientations and both
         // weight vectors verbatim.
@@ -566,7 +546,7 @@ mod tests {
 
         // The two rules the whole-value comparison above could be read past, stated
         // where a failure names them.
-        let PaneNode::Split { children, .. } = &got else {
+        let Node::Layout(Layout { children, .. }) = &got else {
             panic!("encode turned the asymmetric layout into {got:?}, which is not a split at all");
         };
         assert_eq!(
@@ -575,10 +555,10 @@ mod tests {
             "the leaf for the PREVIEW pane must carry `preview: true`. The flag is the only thing \
              that tells a restored preview pane from a restored editor pane, and `is_empty_leaf` \
              reads it too: a preview leaf that lost its flag and its path becomes the one shape \
-             the save path suppresses outright."
+             restore does not rebuild."
         );
         assert_eq!(
-            encode(&PaneLayout::Leaf(P1), &contents, None),
+            encode(&PaneLayout::Leaf(P1), &contents),
             leaf(""),
             "a leaf id with NO entry in `contents` must encode as `Leaf {{ path: \"\", \
              preview: false }}`. `LeafContent::default()` is that value, which is why the lookup \
@@ -725,8 +705,7 @@ mod tests {
     /// FALSIFYING EDIT 1 — swap the two resolved arms' `preview` flag. Rows 1 and 4
     /// fail: a preview pane would persist as an ordinary editor leaf, so the next
     /// launch `:edit`s the source file into what was a preview, and an unnamed
-    /// preview leaf starts being suppressed by `is_empty_leaf` — the one thing that
-    /// predicate exists not to do.
+    /// preview leaf starts being matched by `is_empty_leaf`, so restore skips it.
     ///
     /// FALSIFYING EDIT 2 — route `Preview(p)` through the buffer arm. Same rows, same
     /// cost.
@@ -746,7 +725,7 @@ mod tests {
                 "case: {} — resolve_leaves({:?}) must be {want:?}, got {got:?}. Each wrong answer \
                  is its own data loss. A leaf carrying ANOTHER leaf's path binds the wrong file to \
                  the wrong pane on the next launch. A lost `preview: true` reopens the source in \
-                 an editor pane and makes an unnamed preview leaf suppressible. A `Some` where a \
+                 an editor pane and makes an unnamed preview leaf one restore skips. A `Some` where a \
                  `None` is due is the silent-loss shape this seam exists to make unreachable — see \
                  `an_unresolved_leaf_refuses_the_whole_gather`. A `None` where a `Some` is due \
                  refuses every gather, so the tab contributes only its cache and the user's edits \
@@ -782,7 +761,7 @@ mod tests {
             cases.iter().any(|case| case.want.is_none()),
             "no resolve_leaves row expects a refusal, so the all-or-nothing rule is unstated and a \
              seam that resolved everything would pass. That seam is the one that writes a \
-             well-formed `state.json` whose leaf paths are all empty."
+             well-formed saved tab whose leaf paths are all empty."
         );
     }
 
@@ -791,9 +770,9 @@ mod tests {
     ///
     /// The pair is the point. `""` and "absent" are the two answers a naive gather
     /// cannot tell apart, and mapping the second onto the first is precisely what
-    /// writes a well-formed layout over the user's files: `is_empty_leaf` suppresses
-    /// only a LONE empty leaf, so a multi-leaf tree of empty leaves is persisted
-    /// verbatim, `load_state` reads it back as a real topology, and the next launch
+    /// writes a well-formed layout over the user's files: `is_empty_leaf` matches
+    /// only a LONE empty pane, so a multi-leaf tree of empty panes is persisted
+    /// verbatim, the store reads it back as a real topology, and the next launch
     /// rebuilds a tab of blank panes where the files were. Nothing on screen says so
     /// and no arity guard can catch it — which is why the refusal lives here, at the
     /// only point where the difference is still visible.
@@ -814,8 +793,8 @@ mod tests {
             "one leaf whose window is in NEITHER `Snapshot::previews` nor \
              `Snapshot::win_buffers` must refuse the whole tab's gather, got {got:?}. The `Some` \
              here is the SILENT-LOSS SHAPE: two real files and one `\"\"`, encoded into a \
-             well-formed `PaneNode::Split` that `is_empty_leaf` never suppresses (it suppresses \
-             only a LONE empty leaf), committed over the saved tree, and read back on the next \
+             well-formed `Node::Layout` that `is_empty_leaf` never matches (it matches only a \
+             LONE empty pane), committed over the saved tree, and read back on the next \
              launch as a genuine three-pane topology with one pane blank. There is no arity guard \
              anywhere that could catch it and nothing on screen that could report it. The refusal \
              means `contribute the CACHE`, which is last-known-good rather than wrong."
@@ -844,16 +823,16 @@ mod tests {
              window is not."
         );
 
-        // A lone Unknown refuses too: there the wrong answer looks harmless, since `is_empty_leaf`
-        // suppresses a single empty leaf and the tab would silently forget its file.
+        // A lone Unknown refuses too: there the wrong answer looks harmless, since restore skips a
+        // lone empty pane and the tab would silently forget its file.
         let alone = [(P0, WinContent::Unknown)];
         assert_eq!(
             resolve_leaves(&alone),
             None,
             "a LONE unresolvable leaf must refuse as well. Mapped to an empty leaf it would take \
-             the other route to the same loss: `persistable_layout` suppresses a lone empty \
-             non-preview leaf, so the tab would persist `layout: None`, and a tab's open buffer \
-             paths ride ONLY inside `TabState::layout` — the file would not be reopened at all. \
+             the other route to the same loss: restore skips the rebuild of a lone empty edit \
+             pane, and a tab's open buffer paths ride ONLY inside its root's panes — the file \
+             would not be reopened at all. \
              That is the arity guard's failure arriving by a new road."
         );
     }
@@ -894,10 +873,9 @@ mod tests {
                 terminal: false,
             },
             "an unnamed buffer must resolve to an EMPTY, non-preview leaf — the value \
-             `is_empty_leaf` suppresses when it is alone, which is the pre-existing empty-state \
-             invariant. A `preview: true` here would make the empty-state pane persist as a \
-             preview leaf that `persistable_layout` no longer suppresses, so every project-less \
-             launch would start writing a layout it never had."
+             `is_empty_leaf` matches when it is alone, so restore does not rebuild it. A \
+             `preview: true` here would make an unnamed pane persist as a preview pane that \
+             restore then rebuilds, a preview of no file."
         );
 
         // Non-vacuity: a seam answering the empty leaf for everything satisfies the assertions above.
@@ -915,7 +893,7 @@ mod tests {
     /// One [`is_empty_leaf`] table row.
     struct EmptyLeafCase {
         desc: &'static str,
-        node: PaneNode,
+        node: Node,
         want: bool,
     }
 
@@ -923,22 +901,22 @@ mod tests {
     fn is_empty_leaf_table() {
         let cases = [
             EmptyLeafCase {
-                desc: "an unnamed, non-preview lone leaf is the ONE suppressed shape",
+                desc: "an unnamed edit pane is the ONE shape restore does not rebuild",
                 node: leaf(""),
                 want: true,
             },
             EmptyLeafCase {
-                desc: "an unnamed PREVIEW leaf still carries state and is not suppressed",
+                desc: "an unnamed PREVIEW pane still carries state and is rebuilt",
                 node: preview_leaf(""),
                 want: false,
             },
             EmptyLeafCase {
-                desc: "a NAMED lone leaf is not suppressed (this is the single-pane fix)",
+                desc: "a NAMED lone pane is rebuilt (this is the single-pane fix)",
                 node: leaf(PATH_A),
                 want: false,
             },
             EmptyLeafCase {
-                desc: "a named preview leaf is not suppressed",
+                desc: "a named preview pane is rebuilt",
                 node: preview_leaf(PATH_A),
                 want: false,
             },
@@ -982,8 +960,8 @@ mod tests {
             "a LONE leaf holding a real file ({PATH_A}) must NOT be suppressed from persistence. \
              A save side gated on `leaf_count(..) > 1` persists the single most common shape — \
              one window, one tab, one pane, one file — as its cwd and NOTHING ELSE, and the \
-             file is not reopened on relaunch (a tab's open buffer paths ride ONLY inside \
-             `TabState::layout`'s leaves). The predicate must be CONTENT (`is_empty_leaf`), never \
+             file is not reopened on relaunch (a tab's open buffer paths ride ONLY inside its \
+             root's panes). The predicate must be CONTENT (`is_empty_leaf`), never \
              `leaf_count(..) > 1`."
         );
 
@@ -1013,7 +991,7 @@ mod tests {
             leaf_paths_dfs(&asymmetric_tree()),
             vec![PATH_A.to_string(), PATH_B.to_string(), PATH_C.to_string()],
             "leaves must come out in DFS child-0-first order over `Vertical[Horizontal[a, b], c]` \
-             — the SAME order `wolf_core::state::rebuild_layout_spec` emits them in and therefore \
+             — the SAME order `wolf_core::app_state::tab_rebuild_spec` emits them in and therefore \
              the order `WolfCore::rebuild_layout` returns window handles in. An inversion here \
              binds each handle to the wrong pane while every count-based assertion stays green."
         );
@@ -1101,7 +1079,7 @@ mod tests {
                   correct — the `mouse::scroll_threshold_table` precedent"
     )]
     fn decode_round_trips_encode() {
-        // Literal non-equal weights, so this asserts the codec alone; a real drag reaching `state.json`
+        // Literal non-equal weights, so this asserts the codec alone; a real drag reaching the store
         // and back is `dragged_divider_weights_survive_relaunch_under_cage`.
         let layout = PaneLayout::Split {
             orientation: Orientation::Vertical,
@@ -1112,7 +1090,7 @@ mod tests {
         contents.insert(P0, editor_pane(PATH_A));
         contents.insert(P1, editor_pane(PATH_B));
 
-        let node = encode(&layout, &contents, None);
+        let node = encode(&layout, &contents);
         let Some((tree, leaf_ids)) = decode(&node, P0) else {
             panic!("decode rejected the encoding of a well-formed two-leaf tree: {node:?}");
         };
@@ -1149,11 +1127,11 @@ mod tests {
         tri_contents.insert(P0, editor_pane(PATH_A));
         tri_contents.insert(P1, editor_pane(PATH_B));
         tri_contents.insert(P2, editor_pane(PATH_C));
-        let tri_node = encode(&asymmetric_layout(), &tri_contents, None);
+        let tri_node = encode(&asymmetric_layout(), &tri_contents);
         assert_eq!(
             tri_node,
             asymmetric_tree(),
-            "encoding the asymmetric layout must produce exactly the asymmetric PaneNode tree"
+            "encoding the asymmetric layout must produce exactly the asymmetric Node tree"
         );
         let Some((tri_tree, tri_ids)) = decode(&tri_node, P0) else {
             panic!("decode rejected the encoding of the asymmetric tree: {tri_node:?}");
@@ -1171,7 +1149,7 @@ mod tests {
     /// One [`decode`] rejection row.
     struct MalformedCase {
         desc: &'static str,
-        node: PaneNode,
+        node: Node,
     }
 
     /// `decode` must reject every structurally impossible saved tree BEFORE the spec
@@ -1181,8 +1159,8 @@ mod tests {
     /// `children[0]` unconditionally, so a ZERO-CHILD split reaching the widget layer
     /// is a **panic**, and `layout::pane_rects` divides by the weight sum, so an
     /// all-zero vector is a division by zero. Every input here is reachable from a
-    /// hand-edited or corrupted `state.json`, which `load_state` deserializes without
-    /// any structural validation of its own.
+    /// hand-edited or corrupted saved window state, which the store deserializes
+    /// without any structural validation of its own.
     #[test]
     fn decode_rejects_malformed() {
         // MAX_RESTORE_LEAVES + 1 and MAX_RESTORE_DEPTH + 1, named so the two boundary
@@ -1275,8 +1253,8 @@ mod tests {
         for case in &cases {
             assert!(
                 decode(&case.node, P0).is_none(),
-                "decode must REJECT {} — a hand-edited or corrupted state.json can produce it, and \
-                 `load_state` performs no structural validation of its own. Rejecting BEFORE the \
+                "decode must REJECT {} — a hand-edited or corrupted saved window state can produce \
+                 it, and the store performs no structural validation of its own. Rejecting BEFORE the \
                  spec is rendered is what keeps nvim from being asked to realize it. Node was: \
                  {:?}",
                 case.desc,
@@ -1342,7 +1320,7 @@ mod tests {
     /// [`encode`] carries a DRAGGED weight vector onto the persisted node verbatim.
     ///
     /// The pure twin of the divider-relaunch smoke's save-side assertion. That smoke
-    /// reads the same property off a real `state.json`; this one is what says WHERE
+    /// reads the same property off a real saved window state; this one is what says WHERE
     /// to look when it goes red.
     ///
     /// FALSIFYING EDIT: in [`encode`], replace `weights: weights.clone()` with
@@ -1374,13 +1352,13 @@ mod tests {
             "precondition: the dragged head weight should be {DRAGGED_HEAD_FRACTION}, got {live:?}"
         );
 
-        let node = encode(&tree.layout(), &dragged_contents(), None);
+        let node = encode(&tree.layout(), &dragged_contents());
 
-        let PaneNode::Split {
+        let Node::Layout(Layout {
             orientation,
             weights,
             children,
-        } = &node
+        }) = &node
         else {
             panic!("encode turned a two-leaf split into {node:?}, which is not a split at all");
         };
@@ -1419,7 +1397,7 @@ mod tests {
     /// MEASURED: `the restored divider fraction is 0.5, not the dragged 0.7`.
     #[test]
     fn decode_restores_a_dragged_weight_vector() {
-        let node = encode(&dragged_two_leaf_tree().layout(), &dragged_contents(), None);
+        let node = encode(&dragged_two_leaf_tree().layout(), &dragged_contents());
 
         let Some((rebuilt, leaf_ids)) = decode(&node, P0) else {
             panic!("decode rejected the encoding of a dragged two-leaf split: {node:?}");
