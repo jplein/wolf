@@ -624,7 +624,7 @@ Purpose: Registers the editor render wake with the Rust core at launch, driving 
 
 #### `WindowRegistry.swift`
 
-Purpose: The process-global map from a core's wake token to the `TabCore` that owns it. The `*WakeBridge` thunks carry only a plain `u64` across the thread hop, and resolve it here.
+Purpose: The process-global map from a core's wake token to the `TabCore` that owns it. The per-core wake bridges' thunks carry only a plain `u64` across the thread hop, and resolve it here.
 
 **Public API**
 
