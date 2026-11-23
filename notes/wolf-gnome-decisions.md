@@ -98,7 +98,7 @@ The trailing edge is undroppable, and the cases that could drop it are answered 
 
 ## The coordinator and its windows
 
-Seven things are process-scoped, each because a second copy would be wrong rather than wasteful: the one `AppStateStore`, the window stacking order, the config read, the `CellMetrics`, the `app.` actions, the launch plans and the readiness probe. [The coordinator and its windows](wolf-gnome/the-coordinator-and-its-windows.md) gives each reason, why restore is positional, and why it maps the frontmost window last.
+Seven things are process-scoped, each because a second copy would be wrong rather than wasteful: the one `AppStateStore`, the window stacking order, the config read, the `CellMetrics`, the `app.` actions, the launch plans and the readiness probe. [The coordinator and its windows](wolf-gnome/the-coordinator-and-its-windows.md) gives each reason, why restore is positional, and why it maps the windows backmost first, each after the one behind it.
 
 ## Window structure
 
@@ -196,7 +196,7 @@ Every smoke holds one of a bounded number of cage slots for its whole body, beca
 
 **A keyboard on the seat is the delivery precondition.** A headless `cage` seat has no keyboard until a virtual keyboard has existed, and the first key the first virtual keyboard sends after the window maps is lost. The harness primes the seat with a key-free `wtype ""`, and the app waits until that virtual keyboard appears in its seat's device list, so no key is sent before the client can receive one. The window must also have a focus widget for the window-level key controller to receive from.
 
-**`is_active` and `Seat::keyboard()` are both rejected readings.** Under `cage` the toplevel turns active only after a real key arrives, so waiting for it deadlocks. `Seat::keyboard()` answers GDK's logical "Core Keyboard", which exists on a seat with no keyboard at all, so testing it is vacuous. `seat.devices(KEYBOARD)` lists only non-logical devices, so it turns non-empty when the virtual keyboard appears and stays so after the `wtype` that created it exits.
+**`is_active` and `Seat::keyboard()` are both rejected readings.** `cage` activates every toplevel as it maps, before it looks for a keyboard (`seat_set_focus` in cage's `seat.c`, called from `view_map`), so being active says nothing about whether a key can land. `Seat::keyboard()` answers GDK's logical "Core Keyboard", which exists on a seat with no keyboard at all, so testing it is vacuous. `seat.devices(KEYBOARD)` lists only non-logical devices, so it turns non-empty when the virtual keyboard appears and stays so after the `wtype` that created it exits.
 
 **The input window is the last mapped.** All windows share one Wayland connection, so the ordinal of each window's first frame-clock `after-paint` is its map order. Only that window must also have every shown pane's requested grid applied by Neovim, which is what makes pointer targets and `winwidth` readbacks mean what they say. An older, covered window may never be redrawn — inferred from wlroots' occlusion handling, not measured — so requiring it to be sized could hang.
 

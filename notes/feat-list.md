@@ -149,7 +149,7 @@ The GNOME counterpart to the macOS menu bar is a header-bar primary menu driven 
 
 That header bar is also the unified toolbar: Back and Forward and the sidebar's Files and Search toggles at the start, the primary menu at the end, and the window title between them.
 
-The application-state store is read and written. `wolf-gnome` submits on every wake without a timer or debounce, which is affordable because `AppStateStore::submit` ignores an unchanged tree and the writer thread coalesces; the window state carries every open window and every tab of it in stacking order, and a launch restores each saved window's size, active tab and minimized flag, and each tab's directory, sidebar preference, pane layout and zoom, mapping the frontmost window last.
+The application-state store is read and written. `wolf-gnome` submits on every wake without a timer or debounce, which is affordable because `AppStateStore::submit` ignores an unchanged tree and the writer thread coalesces; the window state carries every open window and every tab of it in stacking order, and a launch restores each saved window's size, active tab and minimized flag, and each tab's directory, sidebar preference, pane layout and zoom, mapping the windows backmost first, each after the one behind it.
 
 The single-pane fix is structural: the layout is suppressed by a content predicate, never by leaf arity, which is what made the original bug swallow the commonest shape of all — one window, one tab, one pane, one file.
 

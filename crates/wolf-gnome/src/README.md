@@ -195,7 +195,7 @@ Purpose: the process-scoped layer above the windows, and their ordered registry.
 
 - `build() -> Coordinator`, then `install_app_actions(app)` and `restore_session(app)`.
 - `open_new_window(app)`, `commit(waking)`, `on_window_closing(id)`, `quit(app)`, `raise(id)`, `palette_windows(exclude)`, `register(handle)`, `window_count()`, `on_window_focused(id)`, `on_window_minimized(id)`.
-- `next_free_id(next, live) -> WindowId`, the pure id arithmetic, and `upgrade(&weak)` for window-side closures.
+- `next_free_id(next, live) -> WindowId`, and `upgrade(&weak)` for window-side closures.
 - `ready_pending()`, `next_paint_ordinal()`, `check_ready()` — the readiness probe.
 
 **Decisions**
@@ -206,7 +206,7 @@ Purpose: the process-scoped layer above the windows, and their ordered registry.
 - `quit` closes every window the _application_ holds rather than every registered one, since a transient toplevel such as About would otherwise keep the process alive.
 - `next_free_id` is a free function because the wrap it guards is unreachable through the registry, and a reused id deregisters and raises the wrong window.
 - The readiness probe judges nothing until `restore_session` has opened every launch window, so no window is judged alone.
-- `restore_session` maps the frontmost window last ([why](../../../notes/wolf-gnome/the-coordinator-and-its-windows.md)).
+- `restore_session` maps the windows backmost first, each after the one behind it ([why](../../../notes/wolf-gnome/the-coordinator-and-its-windows.md)).
 
 #### `crash_overlay.rs`
 
@@ -931,6 +931,7 @@ Purpose: the pure application-state seam — what to restore at launch, and what
 - `restore_plans(saved, process_cwd, home, is_dir) -> Vec<RestorePlan>` — one plan per saved window with tabs, frontmost first, plus a fresh one in front for a terminal launch from a directory no saved tab holds. Capped at `MAX_RESTORE_TABS` per window and `MAX_RESTORE_NEOVIMS` across the session, and never empty.
 - `tab_entry`, `seeded_tab`, `ordered_tab_states`, `window_entry` — the write side, one tab's `Tab` up to a window's `Window` and tab recency.
 - `window_state(windows, stacking)`, `close_commit(shutting_down, other_live_windows) -> CloseCommit`.
+- `present_after(minimized) -> Vec<Option<usize>>` — the restore's present schedule, over the opened windows backmost first: the index of the window each waits to paint, or `None` to present at once.
 - `restored_window_size`, `sidebar_is_shown`, `snapshot_cwd`, `may_snapshot`.
 
 **Decisions**
@@ -1099,7 +1100,7 @@ Purpose: one window and everything scoped to it — an `adw::ApplicationWindow` 
 
 - `build(parts) -> Option<WindowHandle>` — `None` when no planned tab's core starts; a launch whose only window fails exits.
 - `WindowParts` — the construction inputs as a struct, under `clippy::too_many_arguments`.
-- `WindowHandle::id`, `present`, `show_after(others)`, `refresh_subtree`, `cached_window`, `display_cwd` and `readiness`, of the selected tab.
+- `WindowHandle::id`, `present`, `show_after(others)`, `cancel_present`, `refresh_subtree`, `cached_window`, `display_cwd` and `readiness`, of the selected tab.
 
 **Decisions**
 

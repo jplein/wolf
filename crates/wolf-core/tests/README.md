@@ -72,7 +72,7 @@ Headless (`//crates/wolf-core:app_state_rules`: real temp files for the existenc
 **Covers**
 
 - `project_tab` and `project_states`: [the three branches](../../../specs/application-state.md#which-tab-becomes-a-directorys-project-state), an active tab anywhere beating a recent one in a front window, unlisted tabs ranking after listed ones, and `""` choosing nothing.
-- `restored_tab`'s pane, zoom and focus rules, and the kind, cursor and zoom marks of the document `tab_rebuild_spec` renders: its leaves numbered depth-first through a nested layout, as a `PaneRef` counts them, and a non-finite weight rendered as `0.0` with the split's shape kept.
+- `restored_tab`'s pane, zoom and focus rules, and the kind, cursor and zoom marks of the document `tab_rebuild_spec` renders: its leaves numbered depth-first through a nested layout, as a `PaneRef` counts them, a non-finite weight rendered as `0.0` with the split's shape kept, and a path holding `"`, `\` and a newline kept byte for byte, at the root and under a layout.
 
 #### `app_state_store.rs`
 
