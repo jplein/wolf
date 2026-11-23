@@ -67,4 +67,60 @@ public enum StateSeam {
   ) -> CGRect? {
     zoomed || fullScreen ? previous : frame
   }
+
+  /// The active window a new window takes its size from (`specs/application-state.md` §7): its
+  /// recorded normal frame, its live frame, and whether it is zoomed or full screen.
+  public struct ActiveWindow: Equatable {
+    /// The normal frame recorded before the last zoom or full screen, `nil` when none was.
+    public let normalFrame: CGRect?
+    /// The window's live frame, which is the zoomed or full-screen frame while it is either.
+    public let frame: CGRect
+    /// Whether the window is zoomed.
+    public let zoomed: Bool
+    /// Whether the window is full screen.
+    public let fullScreen: Bool
+
+    public init(normalFrame: CGRect?, frame: CGRect, zoomed: Bool, fullScreen: Bool) {
+      self.normalFrame = normalFrame
+      self.frame = frame
+      self.zoomed = zoomed
+      self.fullScreen = fullScreen
+    }
+  }
+
+  /// Where a new window opens, as `newWindowFrame` decides it.
+  public enum NewWindowFrame: Equatable {
+    /// At a stored frame that intersects a screen.
+    case stored(CGRect)
+    /// At the active window's normal size, cascaded from `topLeft`, the top-left of the active
+    /// window's live frame: a zoomed or full-screen window cascades from where it is.
+    case cascaded(topLeft: CGPoint, size: CGSize)
+    /// At the built default size, where AppKit places it.
+    case system
+  }
+
+  /// Where a new window opens (`specs/application-state.md` §7): at `stored` when
+  /// `restoredWindowFrame` accepts it, else at `active`'s normal size, never its zoomed or
+  /// full-screen size, cascaded from the top-left of its live frame, so a zoomed or full-screen
+  /// window cascades from where it is; else at the default size and placement.
+  public static func newWindowFrame(
+    stored: CGRect?, active: ActiveWindow?, screenVisibleFrames: [CGRect]
+  ) -> NewWindowFrame {
+    if let stored,
+      let frame = restoredWindowFrame(
+        x: stored.origin.x, y: stored.origin.y, width: stored.size.width,
+        height: stored.size.height, screenVisibleFrames: screenVisibleFrames)
+    {
+      return .stored(frame)
+    }
+    if let active,
+      let normal = normalFrame(
+        previous: active.normalFrame, frame: active.frame, zoomed: active.zoomed,
+        fullScreen: active.fullScreen)
+    {
+      return .cascaded(
+        topLeft: CGPoint(x: active.frame.minX, y: active.frame.maxY), size: normal.size)
+    }
+    return .system
+  }
 }

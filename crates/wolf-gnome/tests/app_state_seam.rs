@@ -1,9 +1,10 @@
 //! Table-driven tests for the application-state seam of `wolf_gnome::state_seam`: the launch
 //! plans `restore_plans` makes of a saved `wolf_core::app_state::WindowState`
 //! (`specs/application-state.md` §5), and the entries the save side builds of the live windows
-//! and tabs (§2 and §4), and the schedule `present_after` gives a restore's presents. The
-//! per-tab extras are here too: the sidebar and drawer share each tab plans and writes, when a
-//! restored search runs, and the liveness gate on the cursor capture's blocking read.
+//! and tabs (§2 and §4), the schedule `present_after` gives a restore's presents, and the size a
+//! new window takes (§7). The per-tab extras are here too: the sidebar and drawer share each tab
+//! plans and writes, when a restored search runs, and the liveness gate on the cursor capture's
+//! blocking read.
 //!
 //! Pure: no display, no Neovim and no filesystem. `is_dir` answers from a fixed list, so a
 //! directory is "missing" by not being on it, and every expected value is written out by hand.
@@ -25,8 +26,9 @@ use wolf_gnome::search_panel::{SearchFields, SearchToggles};
 use wolf_gnome::sidebar::SidebarPage;
 use wolf_gnome::stacking::{StackingOrder, TabRecency};
 use wolf_gnome::state_seam::{
-    may_capture_cursor, present_after, restore_plans, restore_runs_search, restored_sidebar,
-    seeded_tab, sidebar_entry, tab_entry, window_entry, window_state, RestorePlan,
+    active_size, may_capture_cursor, new_window_size, present_after, restore_plans,
+    restore_runs_search, restored_sidebar, seeded_tab, sidebar_entry, tab_entry, window_entry,
+    window_state, RestorePlan,
 };
 use wolf_gnome::tabs_ui::TabId;
 
@@ -957,5 +959,69 @@ fn a_minimized_window_is_presented_at_once_and_nothing_waits_for_it() {
         "the minimized window 1 must be presented at once, and window 2 must wait for window 0, \
          the nearest before it that is not minimized; Some(1) for window 2 waits on the \
          minimized window, and Some(0) for window 1 chains a minimized window"
+    );
+}
+
+/// §7 G1a.
+#[test]
+fn a_new_window_keeps_its_stored_size() {
+    assert_eq!(
+        new_window_size(Some((1010, 690)), Some((900, 640))),
+        Some((1010, 690)),
+        "a window opened from a project state must keep that state's size (§6); (900, 640), the \
+         active window's, means the active size wins over the stored one"
+    );
+}
+
+/// §7 G2a.
+#[test]
+fn a_new_window_with_no_stored_size_takes_the_active_size() {
+    assert_eq!(
+        new_window_size(None, Some((900, 640))),
+        Some((900, 640)),
+        "a new window with no stored size must take the active window's (§7); None means it opens \
+         at the default size, inheriting nothing"
+    );
+}
+
+/// §7 G3a.
+#[test]
+fn a_new_window_with_no_active_window_opens_at_the_default_size() {
+    assert_eq!(
+        new_window_size(None, None),
+        None,
+        "with neither a stored nor an active size, the answer must be None, which leaves \
+         `window::build`'s default size; Some means a fixed size of the seam's own replaces it"
+    );
+}
+
+/// §7 G4a.
+#[test]
+fn the_active_size_is_the_frontmost_windows() {
+    let stacking = StackingOrder::seeded(&[(7, false), (3, false)]);
+    assert_eq!(
+        active_size(&[(3, (800, 500)), (7, (1010, 690))], &stacking),
+        Some((1010, 690)),
+        "window 7 is in front, so its (1010, 690) is the active size; (800, 500) means the first \
+         listed window is taken and the stacking order is ignored"
+    );
+}
+
+/// §7 G4b and G4c.
+#[test]
+fn there_is_no_active_size_without_a_window_of_usable_size() {
+    assert_eq!(
+        active_size(&[], &StackingOrder::default()),
+        None,
+        "with no window there is no active size, so a new window keeps the default; Some means a \
+         size is made up for a window that does not exist"
+    );
+    let stacking = StackingOrder::seeded(&[(7, false), (3, false)]);
+    assert_eq!(
+        active_size(&[(3, (800, 500)), (7, (0, 690))], &stacking),
+        None,
+        "the frontmost window 7 reports a zero width, the unset sentinel, so there is no usable \
+         active size; Some((0, 690)) means the size skips `restored_window_size`, and \
+         Some((800, 500)) means an unusable front window is passed over for the next"
     );
 }

@@ -285,6 +285,7 @@ swift_test(
         "Tests/WolfMacOSTests/FileTreeViewTests.swift",
         "Tests/WolfMacOSTests/LighthouseColours.swift",
         "Tests/WolfMacOSTests/LiveCore.swift",
+        "Tests/WolfMacOSTests/NewWindowPlacementTests.swift",
         "Tests/WolfMacOSTests/OffscreenRenderer.swift",
         "Tests/WolfMacOSTests/OffscreenRendererTests.swift",
         "Tests/WolfMacOSTests/OpenFolderRestoreTests.swift",

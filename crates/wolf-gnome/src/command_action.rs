@@ -80,8 +80,8 @@ pub enum UiAction {
     NewTab,
     /// Open a FRESH, EMPTY application window with its own core, at `$HOME`.
     ///
-    /// It inherits nothing from the window it was asked from — not its working
-    /// directory, not its layout, not its size
+    /// It takes the active window's normal size and nothing else of a window — not
+    /// its working directory, not its layout
     /// (`notes/wolf-gnome/the-coordinator-and-its-windows.md`). Inheriting
     /// a project is [`UiAction::NewTab`]'s behaviour.
     NewWindow,

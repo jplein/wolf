@@ -23,7 +23,8 @@ use super::extras::{CV_A_FILE, CV_B_FILE, CV_C_FILE, DZ_FILE, PS_FILE, RV_A_FILE
 use super::header_bar::{HB_READ_NAME, HB_TARGET_FILE};
 use super::open_folder::{
     OF_FILL_LEFT_FILE, OF_FILL_READBACK_NAME, OF_FILL_RIGHT_FILE, OF_NEW_BASE_FILE,
-    OF_NEW_LEFT_FILE, OF_NEW_READBACK_NAME, OF_NEW_RIGHT_FILE,
+    OF_NEW_LEFT_FILE, OF_NEW_READBACK_NAME, OF_NEW_RIGHT_FILE, OF_RECENT_READBACK_NAME,
+    OF_SIZE_NEW_READBACK_NAME,
 };
 use super::panes::{
     CHORD_CLOSE_OCR_GONE, CHORD_CLOSE_OCR_KEEP, CLOSE_OCR_GONE, CLOSE_OCR_KEEP, FOCUS_OCR_LEFT,
@@ -214,9 +215,9 @@ use super::*;
 /// * `three_windows_restore_in_their_stacking_order_under_cage` captures nothing: its
 ///   observables are the count of live `nvim` children and a frozen state database. Its
 ///   fixtures are registered in [`RELAUNCH_FIXTURE_NAMES`] for the generic loop's sake.
-/// * The three Open Folder smokes in `open_folder.rs` capture nothing: their observables are
-///   `getcwd()` and `winnr('$')` readbacks the captive Neovims write, the command MRU and a
-///   frozen state database. Their fixtures and readbacks are registered in
+/// * The Open Folder and New Window smokes in `open_folder.rs` capture nothing: their
+///   observables are `getcwd()` and `winnr('$')` readbacks the captive Neovims write, the
+///   command MRU and a frozen state database. Their fixtures and readbacks are registered in
 ///   [`RELAUNCH_FIXTURE_NAMES`] for the generic loop's sake.
 /// * `config_font_size_changes_the_grid_under_cage` likewise captures no PNG: its
 ///   two observables are the `winwidth(0)` integers the captive Neovim writes about
@@ -989,6 +990,16 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         OF_NEW_READBACK_NAME,
         "OF_NEW_READBACK_NAME",
         "open_recent_from_a_folder_tab_opens_a_restored_window_under_cage",
+    ),
+    (
+        OF_SIZE_NEW_READBACK_NAME,
+        "OF_SIZE_NEW_READBACK_NAME",
+        "new_window_takes_the_active_windows_normal_size_under_cage",
+    ),
+    (
+        OF_RECENT_READBACK_NAME,
+        "OF_RECENT_READBACK_NAME",
+        "open_recent_without_a_project_state_opens_at_the_active_windows_size_under_cage",
     ),
     // Three-tab fixtures and readbacks: no OCR runs, so these rows serve the generic loop only; an
     // exemption block in the guard covers their names.

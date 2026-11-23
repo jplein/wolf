@@ -294,6 +294,31 @@ pub fn restored_window_size(width: f64, height: f64) -> Option<(i32, i32)> {
     Some((w, h))
 }
 
+/// The size a new window opens at (`specs/application-state.md` §7): its `stored`
+/// size, else the `active` window's normal size. `None` leaves `window::build`'s
+/// default size.
+#[must_use]
+pub fn new_window_size(
+    stored: Option<(i32, i32)>,
+    active: Option<(i32, i32)>,
+) -> Option<(i32, i32)> {
+    stored.or(active)
+}
+
+/// The normal size of the active window, the first of `windows` that `stacking`
+/// puts in front (§2), when it is usable by [`restored_window_size`]'s rule.
+/// `None` with no window or an unusable size.
+#[must_use]
+pub fn active_size(
+    windows: &[(WindowId, (i32, i32))],
+    stacking: &StackingOrder,
+) -> Option<(i32, i32)> {
+    let ids: Vec<WindowId> = windows.iter().map(|(id, _)| *id).collect();
+    let front = *stacking.order(&ids).first()?;
+    let (_, (w, h)) = windows.iter().find(|(id, _)| *id == front)?;
+    restored_window_size(f64::from(*w), f64::from(*h))
+}
+
 /// The working directory to persist for the tab.
 ///
 /// The EMPTY state persists `""` ALWAYS — never the nvim fallback cwd. A

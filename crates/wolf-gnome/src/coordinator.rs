@@ -369,9 +369,11 @@ impl Coordinator {
     /// Opens a FRESH, EMPTY window: one tab, with a Neovim of its own.
     ///
     /// The plan is built from no saved state AND no process cwd, which by
-    /// construction is the empty state at `$HOME` with no layout and no restored
-    /// size, regardless of the originating window's directory
-    /// (`notes/wolf-gnome/the-coordinator-and-its-windows.md`). Passing the
+    /// construction is the empty state at `$HOME` with no layout, regardless of the
+    /// originating window's directory
+    /// (`notes/wolf-gnome/the-coordinator-and-its-windows.md`). It takes the active
+    /// window's normal size and nothing else of a window
+    /// (`specs/application-state.md` §7), else the default size. Passing the
     /// process cwd (or the invoking window's) here would inherit a project, which is
     /// what New TAB does and is not this row's behaviour.
     ///
@@ -391,10 +393,11 @@ impl Coordinator {
         let plans = state_seam::restore_plans(None, None, home.as_deref(), Path::is_dir);
         // `restore_plans` never returns an empty vec, so an empty one is a broken invariant, not a
         // condition to handle silently.
-        let Some(plan) = plans.into_iter().next() else {
+        let Some(mut plan) = plans.into_iter().next() else {
             eprintln!("wolf-gnome: restore_plans returned no plan for a new window; none opened");
             return;
         };
+        plan.window_size = state_seam::new_window_size(plan.window_size, self.active_size());
         if self.open_window(app.upcast_ref(), &plan, true).is_none() {
             eprintln!(
                 "wolf-gnome: the new window's tab failed to start its core; no window was opened"
@@ -437,7 +440,10 @@ impl Coordinator {
                 invoking.and_then(|handle| handle.fill_selected_tab(&plan))
             }
             Step::NewWindow => {
-                let plan = open_folder::plan(&directory, self.project_state(&directory).as_ref());
+                let mut plan =
+                    open_folder::plan(&directory, self.project_state(&directory).as_ref());
+                plan.window_size =
+                    state_seam::new_window_size(plan.window_size, self.active_size());
                 self.open_window(app, &plan, true)
                     .and_then(|handle| handle.selected_core())
             }
@@ -773,6 +779,17 @@ impl Coordinator {
         if let Some(handle) = self.handles().into_iter().find(|handle| handle.id() == id) {
             handle.present();
         }
+    }
+
+    /// The active window's normal size (`specs/application-state.md` §7), read
+    /// before a new window registers; `None` with no window to take it from.
+    fn active_size(&self) -> Option<(i32, i32)> {
+        let windows: Vec<_> = self
+            .handles()
+            .iter()
+            .map(|handle| (handle.id(), handle.normal_size()))
+            .collect();
+        state_seam::active_size(&windows, &self.inner.stacking.borrow())
     }
 
     /// Every live window's handle, cloned out so no `RefCell` borrow is held

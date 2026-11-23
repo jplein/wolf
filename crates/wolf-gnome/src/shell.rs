@@ -2157,9 +2157,10 @@ impl AppShell {
     /// job rather than this window's: the new window gets its own tab and core, its own
     /// [`AppShell`] and its own subtree of the persisted tree.
     ///
-    /// Nothing of THIS window is passed along — not its working directory, not its
-    /// size — and the coordinator is where that rule lives, so a reader wondering
-    /// what the new window inherits finds one answer rather than two.
+    /// Nothing of THIS window is passed along. The new window takes the active
+    /// window's normal size and nothing else of a window, not its working directory,
+    /// and the coordinator is where that rule lives, so a reader wondering what the
+    /// new window inherits finds one answer rather than two.
     ///
     /// Reached from the drained `Command::NewWindow` (`:WolfNewWindow`) and from
     /// the palette's New Window row; the primary menu's item and the `app.`

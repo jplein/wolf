@@ -187,4 +187,92 @@ final class StateSeamTests: XCTestCase {
       StateSeam.normalFrame(previous: nil, frame: current, zoomed: true, fullScreen: false),
       "a window zoomed before any normal frame was recorded has none to report")
   }
+
+  // MARK: - newWindowFrame
+
+  /// The active window of the §7 cases: in its normal frame, 1000 × 700, top-left (100, 900).
+  private static let activeNormal = CGRect(x: 100, y: 200, width: 1000, height: 700)
+  /// The size every cascaded case expects: `activeNormal`'s.
+  private static let normalSize = CGSize(width: 1000, height: 700)
+
+  /// An active window whose recorded normal frame is `activeNormal` and whose live frame is
+  /// `frame`.
+  private static func active(
+    frame: CGRect = activeNormal, zoomed: Bool = false, fullScreen: Bool = false
+  ) -> StateSeam.ActiveWindow {
+    StateSeam.ActiveWindow(
+      normalFrame: activeNormal, frame: frame, zoomed: zoomed, fullScreen: fullScreen)
+  }
+
+  /// M1a and M1b.
+  func testANewWindowTakesTheActiveWindowsSize() {
+    XCTAssertEqual(
+      StateSeam.newWindowFrame(
+        stored: nil, active: Self.active(), screenVisibleFrames: [kMainScreen]),
+      .cascaded(topLeft: CGPoint(x: 100, y: 900), size: Self.normalSize),
+      "a new window with no stored frame must take the active window's 1000 × 700 and cascade"
+        + " from its top-left (100, 900) (§7); .system means the active window is ignored, and a"
+        + " top-left of (100, 200) means the cascade starts from the bottom-left origin")
+  }
+
+  /// M2a and M2b.
+  func testANewWindowFromAZoomedWindowTakesItsNormalSize() {
+    let zoomed = Self.active(frame: CGRect(x: 0, y: 0, width: 1440, height: 875), zoomed: true)
+    XCTAssertEqual(
+      StateSeam.newWindowFrame(stored: nil, active: zoomed, screenVisibleFrames: [kMainScreen]),
+      .cascaded(topLeft: CGPoint(x: 0, y: 875), size: Self.normalSize),
+      "a new window from a zoomed window must take its normal 1000 × 700, never the zoomed"
+        + " size, and cascade from where the window is, its live top-left (0, 875) (§7); a size"
+        + " of 1440 × 875 means the zoom is not passed to normalFrame, a top-left of (100, 900)"
+        + " means the cascade starts from the normal frame instead of the live one, (0, 0) means"
+        + " it starts from the bottom-left, and .system means the active window is ignored")
+  }
+
+  /// M3a.
+  func testANewWindowFromAFullScreenWindowTakesItsNormalSize() {
+    let fullScreen = Self.active(
+      frame: CGRect(x: 0, y: 0, width: 1440, height: 900), fullScreen: true)
+    XCTAssertEqual(
+      StateSeam.newWindowFrame(stored: nil, active: fullScreen, screenVisibleFrames: [kMainScreen]),
+      .cascaded(topLeft: CGPoint(x: 0, y: 900), size: Self.normalSize),
+      "a new window from a full-screen window must take its normal 1000 × 700, never the"
+        + " screen's size, and cascade from where the window is, its live top-left (0, 900)"
+        + " (§7); a size of 1440 × 900 means full screen is not passed to normalFrame, a top-left"
+        + " of (100, 900) means the cascade starts from the normal frame instead of the live one,"
+        + " (0, 0) means it starts from the bottom-left, and .system means the active window is"
+        + " ignored")
+  }
+
+  /// M4a.
+  func testANewWindowWithNoActiveWindowKeepsTheDefaultSizeAndPlacement() {
+    XCTAssertEqual(
+      StateSeam.newWindowFrame(stored: nil, active: nil, screenVisibleFrames: [kMainScreen]),
+      .system,
+      "with no active window and no stored frame, the new window must keep MainWindow's default"
+        + " size and AppKit's placement (§7); .cascaded means a fixed size replaces the default")
+  }
+
+  /// M5a.
+  func testAStoredFrameOnAScreenIsApplied() {
+    let stored = CGRect(x: 128, y: 64, width: 1180, height: 760)
+    XCTAssertEqual(
+      StateSeam.newWindowFrame(
+        stored: stored, active: Self.active(), screenVisibleFrames: [kMainScreen]),
+      .stored(stored),
+      "a stored frame on a screen must be applied as it is (§6); .cascaded at 1000 × 700 means"
+        + " the active window's size wins over the project state's frame")
+  }
+
+  /// M6a.
+  func testAStoredFrameOnNoScreenGivesWayToTheActiveWindowsSize() {
+    let offscreen = CGRect(x: -5000, y: -5000, width: 900, height: 600)
+    XCTAssertEqual(
+      StateSeam.newWindowFrame(
+        stored: offscreen, active: Self.active(), screenVisibleFrames: [kMainScreen]),
+      .cascaded(topLeft: CGPoint(x: 100, y: 900), size: Self.normalSize),
+      "a stored frame that intersects no screen is discarded (§5), which leaves no stored frame"
+        + " to apply, so §7's active size and top-left (100, 900) must follow; .system means the"
+        + " rejected frame falls back to the default size, .stored means it is applied offscreen,"
+        + " and a top-left of (-5000, -4400) means the cascade starts from the rejected frame")
+  }
 }

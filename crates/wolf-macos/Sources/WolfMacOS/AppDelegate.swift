@@ -186,7 +186,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
       let restoredTab = RestoredTabState(
         saved: loadedTab.saved, rebuild: tab.hasFolder ? loadedTab.rebuild : nil)
       let controller = makeController(
-        tabId: mintTabId(), tabCore: tabCore, restoredTab: restoredTab, anchorFrame: nil,
+        tabId: mintTabId(), tabCore: tabCore, restoredTab: restoredTab, placement: .system,
         hasFolder: tab.hasFolder)
       controller.build()
       controllers.append(controller)
@@ -297,12 +297,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     return tabCore
   }
 
-  /// Starts a fresh empty-state tab (nvim at home) in a window of its own. Returns
-  /// the view, or `nil` when the core fails to start. The caller appends it.
-  private func startEmptyStateWindow() -> WolfWindowController? {
+  /// Starts a fresh empty-state tab (nvim at home) in a window of its own at `placement`.
+  /// Returns the view, or `nil` when the core fails to start. The caller appends it.
+  private func startEmptyStateWindow(placement: WindowPlacement = .system)
+    -> WolfWindowController?
+  {
     guard let tabCore = startTabCore(launchCwd: homeDir()) else { return nil }
     let controller = makeController(
-      tabId: mintTabId(), tabCore: tabCore, restoredTab: nil, anchorFrame: nil,
+      tabId: mintTabId(), tabCore: tabCore, restoredTab: nil, placement: placement,
       hasFolder: false)
     controller.build()
     return controller
@@ -460,12 +462,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   /// opens the empty state (no folder), regardless of the originating window's
   /// cwd — nvim launches at home, the sidebar is hidden, and the centered "Open
   /// folder…" overlay is shown. `originatingCwd` is ignored (kept as a label for
-  /// the shared dispatcher call site).
+  /// the shared dispatcher call site). The window takes the active window's normal
+  /// size and cascades from it (`newWindowPlacement`), and inherits nothing else.
   func makeNewWindow(originatingCwd _: String) {
     // Metrics/config are set at launch before any window opens; bail if not.
     guard metrics != nil, config != nil else { return }
     // A new window is a new tab with its own fresh nvim, in the empty state.
-    guard let controller = startEmptyStateWindow() else { return }
+    let placement = newWindowPlacement(stored: nil)
+    guard let controller = startEmptyStateWindow(placement: placement) else { return }
     controllers.append(controller)
     // Its window became main before it joined `controllers`, so that refresh missed it.
     refreshTabFocus()
@@ -484,7 +488,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     let (launchCwd, hasFolder) = Self.dir(launchDecision(restoredCwd: inheritedCwd))
     guard let tabCore = startTabCore(launchCwd: launchCwd) else { return }
     let controller = makeController(
-      tabId: mintTabId(), tabCore: tabCore, restoredTab: nil, anchorFrame: nil,
+      tabId: mintTabId(), tabCore: tabCore, restoredTab: nil, placement: .system,
       hasFolder: hasFolder)
     controller.build()
     if let keyWindow = key.nsWindow, let newWindow = controller.nsWindow {
@@ -653,7 +657,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     let project = WindowStateCodec.loadProject(wolf_ffi_app_state_project_state(directory))
     let controller = makeController(
       tabId: mintTabId(), tabCore: tabCore, restoredTab: Self.restoredTab(project, at: directory),
-      anchorFrame: nil, hasFolder: true)
+      placement: .system, hasFolder: true)
     controller.build()
     if let newWindow = controller.nsWindow {
       emptyWindow.addTabbedWindow(newWindow, ordered: .above)
@@ -671,20 +675,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     return controller
   }
 
-  /// §6 step 3: a new window holding one tab on `directory`, from its project state at the
-  /// stored frame when it intersects a screen, else a fresh tab at the default size. `nil` when
-  /// the core fails to start.
+  /// §6 step 3: a new window holding one tab on `directory`, from its project state when it has
+  /// one, else a fresh tab. It opens at the stored frame when that intersects a screen, else as
+  /// `newWindowPlacement` places a new window. `nil` when the core fails to start.
   private func openWindow(at directory: String) -> WolfWindowController? {
     guard let tabCore = startTabCore(launchCwd: directory) else { return nil }
     let project = WindowStateCodec.loadProject(wolf_ffi_app_state_project_state(directory))
-    let frame = project?.frame.flatMap { stored in
-      StateSeam.restoredWindowFrame(
-        x: stored.origin.x, y: stored.origin.y, width: stored.size.width,
-        height: stored.size.height, screenVisibleFrames: NSScreen.screens.map(\.visibleFrame))
-    }
+    let placement = newWindowPlacement(stored: project?.frame)
     let controller = makeController(
       tabId: mintTabId(), tabCore: tabCore, restoredTab: Self.restoredTab(project, at: directory),
-      anchorFrame: frame, hasFolder: true)
+      placement: placement, hasFolder: true)
     controller.build()
     controllers.append(controller)
     return controller
@@ -763,11 +763,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   /// committed at all: `nil` commits nothing.
   private func gatherTree() -> [WindowStateCodec.Window]? {
     let gathered = liveGroups().map { group in
-      let frame =
-        group.selected?.normalFrame ?? group.members.lazy.compactMap(\.normalFrame).first
-        ?? group.selectedWindow.frame
-      return SessionSeam.LiveWindow(
-        frame: frame,
+      SessionSeam.LiveWindow(
+        frame: group.normalFrame ?? group.selectedWindow.frame,
         tabs: group.members.map { SessionSeam.LiveTab(id: $0.tabId, tab: $0.persistedTab()) },
         selected: group.selected?.tabId)
     }
@@ -781,6 +778,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     let members: [WolfWindowController]
     let selected: WolfWindowController?
     let selectedWindow: NSWindow
+
+    /// The selected view's recorded normal frame, else any member's.
+    var normalFrame: CGRect? {
+      selected?.normalFrame ?? members.lazy.compactMap(\.normalFrame).first
+    }
+  }
+
+  /// Where a new window opens (`specs/application-state.md` §7): at `stored` when it intersects
+  /// a screen, else at the active window's normal size cascaded from it, else as AppKit places
+  /// it. The active window is the stacking order's first, never the key one. Called before the
+  /// new controller builds, since `build()` makes the new window main.
+  private func newWindowPlacement(stored: CGRect?) -> WindowPlacement {
+    let groups = liveGroups()
+    let active = stacking.order(groups.map { $0.members.map(\.tabId) }).first.map { groups[$0] }
+    let window = active.map { group in
+      StateSeam.ActiveWindow(
+        normalFrame: group.normalFrame, frame: group.selectedWindow.frame,
+        zoomed: group.selectedWindow.isZoomed,
+        fullScreen: group.selectedWindow.styleMask.contains(.fullScreen))
+    }
+    switch StateSeam.newWindowFrame(
+      stored: stored, active: window, screenVisibleFrames: NSScreen.screens.map(\.visibleFrame))
+    {
+    case .stored(let frame):
+      return .frame(frame)
+    case .cascaded(let topLeft, let size):
+      return .cascaded(topLeft: topLeft, size: size)
+    case .system:
+      return .system
+    }
   }
 
   /// The live views that are not torn down, grouped by their native tab group (a solo window is
@@ -969,7 +996,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   /// Builds a tab's controller owning `tabCore`, wired to this coordinator and the
   /// shared metrics/config.
   private func makeController(
-    tabId: Int, tabCore: TabCore, restoredTab: RestoredTabState?, anchorFrame: CGRect?,
+    tabId: Int, tabCore: TabCore, restoredTab: RestoredTabState?, placement: WindowPlacement,
     hasFolder: Bool
   ) -> WolfWindowController {
     // `metrics` / `config` are set in `applicationDidFinishLaunching` before
@@ -978,7 +1005,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
       tabId: tabId,
       tabCore: tabCore,
       restoredTab: restoredTab,
-      anchorFrame: anchorFrame,
+      placement: placement,
       hasFolder: hasFolder,
       metrics: metrics!,
       config: config!

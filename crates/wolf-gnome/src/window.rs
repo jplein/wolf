@@ -314,6 +314,15 @@ impl WindowHandle {
         }
     }
 
+    /// This window's normal size: GTK keeps the default size as the unmaximized,
+    /// non-fullscreen size, so a maximize or a fullscreen never changes it. The save
+    /// writes it, and a new window takes the active window's
+    /// (`specs/application-state.md` §7).
+    #[must_use]
+    pub fn normal_size(&self) -> (i32, i32) {
+        self.inner.window.default_size()
+    }
+
     /// This window's contribution to the saved window state: every tab that has
     /// something to contribute, in PAGE order, under this window's size, with its
     /// tab recency as indices into those tabs — or `None` when no tab contributed at
@@ -334,7 +343,7 @@ impl WindowHandle {
             .filter_map(|tab| Some((tab.page_position(), (tab.id(), tab.cached_tab()?))))
             .collect();
         // Position is never persisted on Wayland, so this is the whole geometry.
-        let (width, height) = self.inner.window.default_size();
+        let (width, height) = self.normal_size();
         let selected = self.inner.tabs.selected().map(|tab| tab.id());
         state_seam::window_entry(
             width,

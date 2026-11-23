@@ -1,8 +1,9 @@
-//! Open Folder smokes (`specs/application-state.md` §6): an Open Recent palette row for a
-//! directory `D`, driven over a state each smoke plants in its own store before the launch.
+//! Open Folder and New Window smokes (`specs/application-state.md` §6 and §7): an Open Recent
+//! palette row for a directory `D`, or the New Window row, driven over a state each smoke plants
+//! in its own store before the launch.
 //!
-//! Each focuses an open tab, fills an empty one, or opens a new window, and each reads what it
-//! needs without pixels: the save the `Ctrl+Shift+Q` quit leaves, frozen by the scenario, the
+//! Each focuses an open tab, fills an empty one, or opens a new window, at its project state's
+//! size or the active window's, and each reads what it needs without pixels: the save the `Ctrl+Shift+Q` quit leaves, frozen by the scenario, the
 //! command MRU, and a `getcwd()` / `winnr('$')` readback the tab that ends on `D` writes. A
 //! restored layout is read LIVE through that readback, never from the save alone: a tab
 //! contributes its seed until its first gather succeeds, so a save can echo a restore that never
@@ -52,6 +53,22 @@ pub(crate) const OF_NEW_BASE_FILE: &str = "ofpbase.md";
 
 /// S3's readback, in the launch cwd.
 pub(crate) const OF_NEW_READBACK_NAME: &str = "ofq_read.txt";
+
+/// The size every planted window has unless a smoke gives another.
+const OF_PLANTED_SIZE: (f64, f64) = (900.0, 640.0);
+
+/// The §7 smokes' active window size. It differs in both dimensions from [`OF_PLANTED_SIZE`],
+/// `window::build`'s default 1200 × 640 and the 1280 × 720 `cage` output.
+const OF_ACTIVE_SIZE: (f64, f64) = (1010.0, 690.0);
+
+/// N1's readback, in the launch cwd.
+pub(crate) const OF_SIZE_NEW_READBACK_NAME: &str = "ofn_read.txt";
+
+/// N2's `D`, a directory with no project state. Also its palette query.
+pub(crate) const OF_RECENT_TARGET_DIR: &str = "ofhalibut";
+
+/// N2's readback, in the launch cwd.
+pub(crate) const OF_RECENT_READBACK_NAME: &str = "ofh_read.txt";
 
 /// The Open Folder scenario, run as one `sh -c` string inside `cage` with
 /// [`with_nvim_pid_helper`] prepended for `wait_nvim_count`.
@@ -121,7 +138,8 @@ wtype -M ctrl -M shift -k p -m shift -m ctrl
 sleep "$SETTLE"
 wtype -- "$OF_QUERY"
 sleep "$SETTLE"
-# The sole row is D's Open Recent row; Enter hands it to AppShell::open_folder.
+# The sole row is D's Open Recent row, which Enter hands to AppShell::open_folder, or the New
+# Window row.
 wtype -k Return
 sleep "$SETTLE"
 sleep "$SETTLE"
@@ -192,7 +210,7 @@ struct OpenFolderRun<'a> {
     home: Option<&'a Path>,
     /// The Neovims the launch runs, one per planted tab.
     nvims: usize,
-    /// The palette query, `D`'s basename.
+    /// The palette query, `D`'s basename or the New Window query.
     query: &'a str,
     /// The readback path and the `(basename, window count)` it is polled for, if any.
     readback: Option<(&'a Path, &'a str, usize)>,
@@ -264,14 +282,24 @@ fn canonical(smoke: &str, path: &Path) -> String {
         .to_owned()
 }
 
-/// A window of one tab per entry of `tabs`, `(directory, root)`, with `active_tab`.
+/// A window of one tab per entry of `tabs`, `(directory, root)`, with `active_tab`, at
+/// [`OF_PLANTED_SIZE`].
 fn planted_window(tabs: Vec<(String, Option<Node>)>, active_tab: usize) -> Window {
+    sized_window(tabs, active_tab, OF_PLANTED_SIZE)
+}
+
+/// [`planted_window`] at `(width, height)`.
+fn sized_window(
+    tabs: Vec<(String, Option<Node>)>,
+    active_tab: usize,
+    (width, height): (f64, f64),
+) -> Window {
     Window {
         frame: Frame {
             x: None,
             y: None,
-            width: 900.0,
-            height: 640.0,
+            width,
+            height,
         },
         active_tab,
         minimized: false,
@@ -390,6 +418,24 @@ fn window_dirs(state: &WindowState) -> Vec<Vec<String>> {
                 .collect()
         })
         .collect()
+}
+
+/// Each saved window's first tab directory and its frame's `(width, height)`, sorted.
+fn window_sizes(state: &WindowState) -> Vec<(String, (f64, f64))> {
+    let mut sizes: Vec<(String, (f64, f64))> = state
+        .windows
+        .iter()
+        .map(|window| {
+            let dir = window
+                .tabs
+                .first()
+                .map(|tab| tab.directory.clone())
+                .unwrap_or_default();
+            (dir, (window.frame.width, window.frame.height))
+        })
+        .collect();
+    sizes.sort_by(|a, b| a.0.cmp(&b.0));
+    sizes
 }
 
 /// The readback's `(getcwd(), window count)`.
@@ -583,12 +629,16 @@ fn open_recent_from_an_empty_tab_fills_it_from_the_project_state_under_cage() {
 /// is `getcwd() == D` with two windows. The save holds two windows: `P`'s, one tab on `P`
 /// still showing its file, and `D`'s, one tab whose root is the planted split.
 ///
+/// `D`'s project state was saved from a window at [`OF_ACTIVE_SIZE`] and the launch window is
+/// at [`OF_PLANTED_SIZE`], so `D`'s window keeps the stored size over the active one (§7).
+///
 /// ## Falsifiers
 ///
 /// | # | edit | predicted red |
 /// | --- | --- | --- |
 /// | S3a | `open_folder::plan` ignores the project (G6a) | the readback reports 1 window |
 /// | S3b | `open_folder::step` answers `FillCurrent` whenever no tab is on `D` (G5a) | the save holds one window |
+/// | N3a | `new_window_size` answers `active.or(stored)` | D's window saves 900 × 640 |
 #[test]
 fn open_recent_from_a_folder_tab_opens_a_restored_window_under_cage() {
     const SMOKE: &str = "open_recent_from_a_folder_tab_opens_a_restored_window_under_cage";
@@ -606,13 +656,24 @@ fn open_recent_from_a_folder_tab_opens_a_restored_window_under_cage() {
         windows: vec![planted_window(vec![(project.clone(), Some(base))], 0)],
     };
     let holding = WindowState {
-        windows: vec![planted_window(
+        windows: vec![sized_window(
             vec![(target.clone(), Some(split.clone()))],
             0,
+            OF_ACTIVE_SIZE,
         )],
     };
     plant(SMOKE, &state, &[holding, launch]);
     assert_planted_project(SMOKE, &state, &target, &split);
+    let stored = AppStateStore::open(&state)
+        .project_state(&target)
+        .map(|project| (project.frame.width, project.frame.height));
+    assert_eq!(
+        stored,
+        Some(OF_ACTIVE_SIZE),
+        "{SMOKE}: premise: D's project state must hold the holding window's size; another \
+         size means a project state does not take its window's frame, and the size below \
+         would not tell the stored size from the active one"
+    );
     seed_recent(SMOKE, &state, &target);
 
     let readback = cwd.join(OF_NEW_READBACK_NAME);
@@ -674,6 +735,205 @@ fn open_recent_from_a_folder_tab_opens_a_restored_window_under_cage() {
             tab.directory
         );
     }
+    let mut want_sizes = vec![
+        (project.clone(), OF_PLANTED_SIZE),
+        (target.clone(), OF_ACTIVE_SIZE),
+    ];
+    want_sizes.sort_by(|a, b| a.0.cmp(&b.0));
+    let sizes = window_sizes(&saved);
+    assert_eq!(
+        sizes, want_sizes,
+        "{SMOKE}: the saved windows' sizes are {sizes:?}; want P's planted {OF_PLANTED_SIZE:?} \
+         and D's project-state {OF_ACTIVE_SIZE:?}. D at {OF_PLANTED_SIZE:?} means the active \
+         window's size won over D's stored size, which §7 gives only a window with none; \
+         D at 1200 x 640 means the stored size was dropped"
+    );
+}
+
+/// **New Window opens at the active window's normal size.** §7.
+///
+/// The launch is at folder `P`, restoring a planted window of one tab on `P`, with no root, at
+/// [`OF_ACTIVE_SIZE`]. The palette's New Window row opens an empty window, whose Neovim starts
+/// at `HOME`, and the readback is polled from it, the newest toplevel, for `HOME` with one window.
+///
+/// `cage` maximizes every toplevel, so `P`'s window is maximized when New Window runs, and this
+/// is also the maximized-active-window case: its normal size is the planted one. Premise: GTK
+/// keeps a maximized window's default size as its unmaximized size, which `P`'s own saved frame
+/// measures. That the new window opens unmaximized has no observable here, since `cage`
+/// maximizes it too.
+///
+/// ## Observables
+///
+/// The save holds two windows, `P`'s and the empty window's, whose directory is `""`, and both
+/// frames are [`OF_ACTIVE_SIZE`].
+///
+/// ## Falsifiers
+///
+/// | # | edit | predicted red |
+/// | --- | --- | --- |
+/// | N1a | `open_new_window` skips `new_window_size` | the empty window saves 1200 × 640 |
+/// | N1b | `WindowHandle::normal_size` answers `(width(), height())`, the maximized allocation | every window saves the allocation |
+#[test]
+fn new_window_takes_the_active_windows_normal_size_under_cage() {
+    const SMOKE: &str = "new_window_takes_the_active_windows_normal_size_under_cage";
+
+    let runtime_dir = require_smoke_env();
+    let cwd = make_temp_cwd();
+    let project = canonical(SMOKE, &cwd);
+    let home = canonical(SMOKE, smoke_home(&cwd));
+    let home_base = Path::new(&home)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_else(|| panic!("{SMOKE}: HOME {home} has no UTF-8 basename"))
+        .to_owned();
+
+    let state = smoke_state_dir(&cwd);
+    let launch = WindowState {
+        windows: vec![sized_window(
+            vec![(project.clone(), None)],
+            0,
+            OF_ACTIVE_SIZE,
+        )],
+    };
+    plant(SMOKE, &state, &[launch]);
+
+    let readback = cwd.join(OF_SIZE_NEW_READBACK_NAME);
+    let run = OpenFolderRun {
+        smoke: SMOKE,
+        cwd: &cwd,
+        home: None,
+        nvims: 1,
+        query: super::restore::TWOWIN_NEW_WINDOW_QUERY,
+        readback: Some((&readback, &home_base, 1)),
+        frozen_name: "wolf_gnome_new_window_size_state",
+    };
+    let frozen = run_open_folder(&run, &runtime_dir);
+
+    let (got_cwd, wins) = read_cwd_and_wins(SMOKE, &readback);
+    assert_eq!(
+        (got_cwd.as_str(), wins.as_str()),
+        (home.as_str(), "1"),
+        "{SMOKE}: precondition: the focused window's Neovim reports {got_cwd:?} with {wins} \
+         window(s); want HOME with 1, the new empty window. P means no window opened, or the \
+         keys never reached it, so nothing below is about New Window"
+    );
+
+    let saved = frozen_window_state(&frozen, SMOKE, "the save at the quit");
+    let dirs = window_dirs(&saved);
+    let mut sorted = dirs.clone();
+    sorted.sort();
+    let mut want = vec![vec![project.clone()], vec![String::new()]];
+    want.sort();
+    assert_eq!(
+        sorted, want,
+        "{SMOKE}: premise: the save holds the windows {dirs:?}; want P's and the empty window's \
+         (\"\"). Without the empty window, its tab never contributed and its size is unread"
+    );
+    let sizes = window_sizes(&saved);
+    let project_size = sizes
+        .iter()
+        .find(|(dir, _)| *dir == project)
+        .map(|(_, size)| *size);
+    assert_eq!(
+        project_size,
+        Some(OF_ACTIVE_SIZE),
+        "{SMOKE}: P's own window saved {project_size:?}; want its planted {OF_ACTIVE_SIZE:?}. \
+         The maximized allocation means either GTK let `cage`'s maximize overwrite the default \
+         size, or the size is read from the allocation rather than the default size; either \
+         way the active window's normal size is lost"
+    );
+    let new_size = sizes
+        .iter()
+        .find(|(dir, _)| dir.is_empty())
+        .map(|(_, size)| *size);
+    assert_eq!(
+        new_size,
+        Some(OF_ACTIVE_SIZE),
+        "{SMOKE}: the new window saved {new_size:?}; want the active window's normal size \
+         {OF_ACTIVE_SIZE:?} (§7). 1200 x 640 means New Window ignores the active window and \
+         opens at the default size; the maximized allocation means it took the maximized size"
+    );
+}
+
+/// **An Open Recent row for a directory with no project state, from a folder tab, opens a new
+/// window at the active window's normal size.** §6 step 3 and §7.
+///
+/// The launch is at folder `P`, restoring a planted window of one tab on `P`, with no root, at
+/// [`OF_ACTIVE_SIZE`]. `D` is [`OF_RECENT_TARGET_DIR`], on the folder MRU and with no project
+/// state, so the new window has no stored size to apply.
+///
+/// ## Observables
+///
+/// The readback from the new window is `getcwd() == D` with one window. The save holds `P`'s
+/// window and `D`'s, both at [`OF_ACTIVE_SIZE`].
+///
+/// ## Falsifiers
+///
+/// | # | edit | predicted red |
+/// | --- | --- | --- |
+/// | N2a | `Coordinator::open_folder`'s `NewWindow` arm skips `new_window_size` | D's window saves 1200 × 640 |
+#[test]
+fn open_recent_without_a_project_state_opens_at_the_active_windows_size_under_cage() {
+    const SMOKE: &str =
+        "open_recent_without_a_project_state_opens_at_the_active_windows_size_under_cage";
+
+    let runtime_dir = require_smoke_env();
+    let cwd = make_temp_cwd();
+    let project = canonical(SMOKE, &cwd);
+    let target = make_dir(SMOKE, smoke_home(&cwd), OF_RECENT_TARGET_DIR);
+
+    let state = smoke_state_dir(&cwd);
+    let launch = WindowState {
+        windows: vec![sized_window(
+            vec![(project.clone(), None)],
+            0,
+            OF_ACTIVE_SIZE,
+        )],
+    };
+    plant(SMOKE, &state, &[launch]);
+    let planted = AppStateStore::open(&state).project_state(&target);
+    assert!(
+        planted.is_none(),
+        "{SMOKE}: premise: D must have no project state, but the store holds {planted:?}, so \
+         the new window would take a stored size and this would not be §7's case"
+    );
+    seed_recent(SMOKE, &state, &target);
+
+    let readback = cwd.join(OF_RECENT_READBACK_NAME);
+    let run = OpenFolderRun {
+        smoke: SMOKE,
+        cwd: &cwd,
+        home: None,
+        nvims: 1,
+        query: OF_RECENT_TARGET_DIR,
+        readback: Some((&readback, OF_RECENT_TARGET_DIR, 1)),
+        frozen_name: "wolf_gnome_open_recent_size_state",
+    };
+    let frozen = run_open_folder(&run, &runtime_dir);
+    assert_open_recent_ran(SMOKE, &state, &target);
+
+    let (got_cwd, wins) = read_cwd_and_wins(SMOKE, &readback);
+    assert_eq!(
+        (got_cwd.as_str(), wins.as_str()),
+        (target.as_str(), "1"),
+        "{SMOKE}: precondition: the focused window's Neovim reports {got_cwd:?} with {wins} \
+         window(s); want D with 1. P means no window opened on D, or the keys never reached it"
+    );
+
+    let saved = frozen_window_state(&frozen, SMOKE, "the save at the quit");
+    let mut want = vec![
+        (project.clone(), OF_ACTIVE_SIZE),
+        (target.clone(), OF_ACTIVE_SIZE),
+    ];
+    want.sort_by(|a, b| a.0.cmp(&b.0));
+    let sizes = window_sizes(&saved);
+    assert_eq!(
+        sizes, want,
+        "{SMOKE}: the save holds {sizes:?} (first tab directory, size); want P's and D's \
+         windows, both at the active window's {OF_ACTIVE_SIZE:?}. D at 1200 x 640 means Open \
+         Folder's new window ignores the active window and opens at the default size; one \
+         window means P's tab was replaced, which §6 forbids for a tab with a directory"
+    );
 }
 
 /// The smokes' palette queries each select exactly their folder's Open Recent row: none
@@ -687,10 +947,11 @@ fn the_open_folder_queries_select_exactly_their_folder_row() {
         index: 1,
         cwd: format!("/tmp/nix-shell.abcdef/{TEMP_CWD_PREFIX}1-2-0/{OF_FOCUS_OTHER_DIR}"),
     };
-    let cases: [(&str, &[PaletteWindow]); 3] = [
+    let cases: [(&str, &[PaletteWindow]); 4] = [
         (OF_FOCUS_TARGET_DIR, std::slice::from_ref(&other)),
         (OF_FILL_TARGET_DIR, &[]),
         (OF_NEW_TARGET_DIR, &[]),
+        (OF_RECENT_TARGET_DIR, &[]),
     ];
     for (query, windows) in cases {
         let registry = wolf_gnome::palette::palette_rows(&[], &[], &[], query, usize::MAX);

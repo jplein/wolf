@@ -14,6 +14,30 @@ struct RestoredTabState {
   let rebuild: WindowStateCodec.Rebuild?
 }
 
+/// Where a controller's window opens before `build()` first orders it front.
+enum WindowPlacement: Equatable {
+  /// The built default size, where AppKit places it.
+  case system
+  /// A validated stored frame.
+  case frame(CGRect)
+  /// The active window's normal size, cascaded from its top-left (`specs/application-state.md`
+  /// §7). A point rather than the window, so the controller retains no other window.
+  case cascaded(topLeft: CGPoint, size: CGSize)
+}
+
+extension NSWindow {
+  /// Places this new window by `specs/application-state.md` §7: gives it `size`, then cascades it
+  /// down and right of `topLeft`, the active window's top-left. The size is set first, because
+  /// `cascadeTopLeft(from:)` constrains the frame to the screen at the size it has when called.
+  /// Only this window moves.
+  func cascade(fromTopLeft topLeft: CGPoint, size: CGSize) {
+    setFrame(NSRect(origin: frame.origin, size: size), display: false)
+    // The first call puts this window's top-left on the active window's; the second offsets it.
+    let cascaded = cascadeTopLeft(from: topLeft)
+    _ = cascadeTopLeft(from: cascaded)
+  }
+}
+
 /// Owns and drives a single top-level window (one tab) and its own captive Neovim.
 /// Created by the `AppDelegate` coordinator (once per tab); `build()` builds and
 /// shows the window. Wakes reach this controller through its `TabCore`, which
@@ -38,10 +62,8 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
   /// (Cmd-N / new-tab) window.
   private let restoredTab: RestoredTabState?
 
-  /// The validated window frame to anchor this window at (only the FIRST tab of
-  /// a restored group carries one); `nil` for a joining tab or a fresh window,
-  /// which keeps AppKit's cascade placement.
-  private let anchorFrame: CGRect?
+  /// Where `build()` puts this window before it first orders it front.
+  private let placement: WindowPlacement
 
   /// Whether this window has a real folder open. `false` for the empty state (a
   /// fresh first run, a Cmd-N window, or a restored window whose saved cwd was
@@ -137,7 +159,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
     tabId: Int,
     tabCore: TabCore,
     restoredTab: RestoredTabState?,
-    anchorFrame: CGRect?,
+    placement: WindowPlacement,
     hasFolder: Bool,
     metrics: CellMetrics,
     config: FfiConfig
@@ -145,7 +167,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
     self.tabId = tabId
     self.tabCore = tabCore
     self.restoredTab = restoredTab
-    self.anchorFrame = anchorFrame
+    self.placement = placement
     self.hasFolder = hasFolder
     self.metrics = metrics
     self.config = config
@@ -244,10 +266,10 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
     bufferPicker.onActivate = { [weak self] row in self?.activateBufferRow(row) }
     self.bufferPicker = bufferPicker
 
-    // A restored group's first tab and an Open Folder window anchor a validated saved frame; a
-    // joining tab or a fresh window keeps AppKit's cascade placement.
-    if let anchorFrame {
-      window.setFrame(anchorFrame, display: false)
+    switch placement {
+    case .system: break
+    case .frame(let frame): window.setFrame(frame, display: false)
+    case .cascaded(let topLeft, let size): window.cascade(fromTopLeft: topLeft, size: size)
     }
 
     // An empty-state window always hides the sidebar, ignoring the stored `sidebar_visible`; a
@@ -262,7 +284,12 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
     sidebarContainer.onChange = { [weak self] in self?.coordinator?.scheduleStateSnapshot() }
 
     window.delegate = self
+    // A placed window opens standalone: automatic tabbing off for its first order-front keeps it
+    // out of a full-screen window's tab group, which would open it full screen.
+    let standalone = placement != .system
+    if standalone { window.tabbingMode = .disallowed }
     window.makeKeyAndOrderFront(nil)
+    if standalone { window.tabbingMode = .automatic }
     // Setting the content VC can move first responder; ensure the editor pane
     // container keeps it so launch keystrokes reach Neovim.
     window.makeFirstResponder(paneContainer)
