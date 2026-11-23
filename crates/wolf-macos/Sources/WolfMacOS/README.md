@@ -15,18 +15,18 @@ Each compiles into this module and has its own README with the entries for its f
 
 #### `AppDelegate.swift`
 
-Purpose: The application coordinator: launch setup, the live `WolfWindowController`s, window/tab restore and persistence, tab focus, and the dynamic menus.
+Purpose: The application coordinator: launch, the live `WolfWindowController`s, their restore and persistence, tab focus, and the dynamic menus.
 
 **Public API**
 
 - `makeNewWindow(originatingCwd:)` — an empty-state tab in its own window, for `CommandDispatcher`'s shared call site.
-- `makeNewTab(from:)` — a tab in `key`'s group, its Neovim launched at `key`'s folder or at home.
+- `makeNewTab(from:)` — a tab in `key`'s group, at `key`'s folder or home.
 - `refreshTabFocus()` — sends each [`TabFocusSeam`](../WolfKeyMap/README.md#tabfocusseamswift) edge to its tab's core, and focuses the main window's tab in the [stacking order](../WolfKeyMap/Persistence/README.md#stackingorderswift). A main-tab change first captures the tab left ([capture](../../../../notes/wolf-macos-decisions.md#the-per-tab-extras)).
 - `windowMinimizedChanged(_:minimized:)` — marks or unmarks the controller's whole tab group there.
 - `scheduleStateSnapshot()` / `snapshotNow()` — throttled versus immediate whole-tree commit to the window state ([write model](../../../../notes/wolf-macos-decisions.md#state-is-a-tree-and-the-front-end-owns-every-write)).
 - `closeCommit(for:)` — a closing view's commit, through [`SessionSeam.CloseBurst`](../WolfKeyMap/Persistence/README.md#sessionseamswift), after capturing its tab group.
 - `otherWindows(excluding:)`, `raiseWindow(tabId:)` — Switch to Window's rows and raise.
-- `openFolder(_:from:)` — [Open Folder](../../../../notes/wolf-macos-decisions.md#opening-a-folder) from every entry point.
+- `openFolder(_:from:)` — runs [Open Folder](../../../../notes/wolf-macos-decisions.md#opening-a-folder).
 - `appAppearance(for:)` — a mode's forced `NSApp.appearance`; `nil` under `auto`.
 
 **Decisions**
@@ -34,7 +34,7 @@ Purpose: The application coordinator: launch setup, the live `WolfWindowControll
 - Launch order is fonts, config, metrics: measuring needs the config's font settings, and the bundled families must reach CoreText first.
 - `appearanceObservation` must stay stored: a deallocated `NSKeyValueObservation` invalidates itself, ending auto-mode appearance tracking.
 - Tab focus and the stacking order follow main ([why](../../../../notes/wolf-macos-decisions.md#one-neovim-per-tab)). Its loss rides `didResignActive`, where `NSApp.isActive` reads `false`.
-- The About panel's credits are coloured `labelColor`: uncoloured, they render black in dark mode.
+- The About panel's credits are Linux's attribution preamble, then the `wolf_ffi_*_license_notices()` verbatim, in `labelColor`: uncoloured, they render black in dark mode.
 
 **Gotchas**
 
