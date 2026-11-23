@@ -202,7 +202,7 @@ use crate::preview_coalescer::{PreviewCoalescer, RenderDecision};
 use crate::preview_link::{self, PreviewLink};
 use crate::preview_ui::{self, DocumentUpdate, PreviewFilePress, PreviewLoad};
 use crate::ready_seam;
-use crate::render::{draw_glyph, draw_text_line, FALLBACK_BG, FALLBACK_FG};
+use crate::render::{draw_cells, draw_glyph, draw_text_line, FALLBACK_BG, FALLBACK_FG};
 use crate::scrollbar;
 use crate::state_seam;
 use crate::statusbar_layout::{
@@ -3871,10 +3871,8 @@ impl PaneInner {
             for chunk in line {
                 let style = snap.highlights.resolve(chunk.attr_id);
                 let chunk_fg = style.fg.unwrap_or(fg);
-                if !chunk.text.is_empty() {
-                    draw_glyph(cr, metrics, x, y, &chunk.text, chunk_fg, &style);
-                }
-                x += chunk.text.chars().count() as f64 * metrics.cell_w;
+                let cells = draw_cells(cr, metrics, x, y, &chunk.text, chunk_fg, &style);
+                x += cells as f64 * metrics.cell_w;
             }
         }
     }
@@ -3922,13 +3920,9 @@ impl PaneInner {
             } else {
                 fg
             };
-            let label: String = cmdline_ui::pum_item_label(item)
-                .chars()
-                .take(cols)
-                .collect();
-            if !label.is_empty() {
-                draw_glyph(cr, metrics, pad, y, &label, text_fg, &base);
-            }
+            let label = cmdline_ui::pum_item_label(item);
+            let shown = cmdline_ui::clip_to_cells(&label, cols);
+            draw_cells(cr, metrics, pad, y, shown, text_fg, &base);
         }
     }
 

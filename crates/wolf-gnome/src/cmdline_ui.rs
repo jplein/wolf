@@ -38,7 +38,17 @@
 //! front-end owes no dismissal logic of its own: [`prompt_answered`] names the
 //! observable that follows from core's rule, and the only thing it drives is
 //! forgetting a scroll offset into messages that may be gone.
+//!
+//! ## Widths are cells
+//!
+//! Every width here is in grid cells by GLib's tables, the ones VTE uses: a wide
+//! character is two cells and a zero-width one is none. `crate::render::draw_cells`
+//! draws the toast and the popup on those same cells, so a box sized here holds what
+//! is drawn; a Pango run would advance by its own rounded glyph widths instead. GLib
+//! rather than a width crate because this crate already links it, and a new crate
+//! would move `Cargo.lock` and the Bazel lockfiles for a crate Bazel never builds.
 
+use gtk::glib::Unichar;
 use wolf_core::{PumItem, ToastChunk};
 
 /// The fraction of the space above the strip a toast may occupy.
@@ -90,6 +100,64 @@ pub fn cmdline_columns(prefix: &str, text: &str, byte: usize) -> usize {
         b -= 1;
     }
     prefix.chars().count() + text[..b].chars().count()
+}
+
+/// The cells one character takes: none when zero-width, two when wide, else one.
+fn char_cells(c: char) -> usize {
+    if c.is_zero_width() {
+        0
+    } else if c.is_wide() {
+        2
+    } else {
+        1
+    }
+}
+
+/// The cells `text` draws over on the grid.
+#[must_use]
+pub fn text_cells(text: &str) -> usize {
+    text.chars().map(char_cells).sum()
+}
+
+/// `text` split into clusters, each paired with the column it starts at.
+///
+/// A cluster is one character plus the zero-width characters after it, so a combining
+/// mark is drawn with its base. A leading zero-width character is a cluster of its own
+/// at column 0. The last cluster's column plus its cells is [`text_cells`] of `text`.
+#[must_use]
+pub fn cell_clusters(text: &str) -> Vec<(usize, &str)> {
+    let mut clusters: Vec<(usize, &str)> = Vec::new();
+    let mut start = 0;
+    let mut col = 0;
+    let mut start_col = 0;
+    for (i, c) in text.char_indices() {
+        if i > 0 && !c.is_zero_width() {
+            clusters.push((start_col, &text[start..i]));
+            start = i;
+            start_col = col;
+        }
+        col += char_cells(c);
+    }
+    if !text.is_empty() {
+        clusters.push((start_col, &text[start..]));
+    }
+    clusters
+}
+
+/// The longest prefix of `text` made of whole clusters that fit in `cols` cells.
+///
+/// A wide character that would straddle `cols` is dropped rather than drawn half
+/// outside the box, and a combining mark stays with its base.
+#[must_use]
+pub fn clip_to_cells(text: &str, cols: usize) -> &str {
+    let mut end = 0;
+    for (col, cluster) in cell_clusters(text) {
+        if col + text_cells(cluster) > cols {
+            break;
+        }
+        end += cluster.len();
+    }
+    &text[..end]
 }
 
 /// How many toast lines fit in `available_px` of space above the strip.
@@ -289,7 +357,8 @@ pub fn pum_item_label(item: &PumItem) -> String {
     label
 }
 
-/// The popup's width in cells: its widest visible row, capped at [`PUM_MAX_COLS`].
+/// The popup's width in grid cells ([`text_cells`]): its widest visible row, capped at
+/// [`PUM_MAX_COLS`].
 ///
 /// Measured over the VISIBLE rows only. Measuring the whole list would make the popup
 /// jump wider the moment a long item scrolled into range, and narrower again when it
@@ -300,14 +369,14 @@ pub fn pum_width_cols(items: &[PumItem], view: PumView) -> usize {
         .iter()
         .skip(view.first)
         .take(view.len)
-        .map(|i| pum_item_label(i).chars().count())
+        .map(|i| text_cells(&pum_item_label(i)))
         .max()
         .unwrap_or(0)
         .min(PUM_MAX_COLS)
 }
 
-/// The toast's width in cells: its widest VISIBLE line, where a line's width is the
-/// sum of its chunks.
+/// The toast's width in grid cells: its widest VISIBLE line, where a line's width is
+/// the sum of its chunks' [`text_cells`].
 ///
 /// Measured over the visible slice only, which is what makes the surface's size a
 /// function of the scroll offset — the reason `pane_view` re-places the box on a
@@ -320,7 +389,7 @@ pub fn toast_width_cols(lines: &[Vec<ToastChunk>], view: ToastView) -> usize {
         .iter()
         .skip(view.first)
         .take(view.len)
-        .map(|l| l.iter().map(|c| c.text.chars().count()).sum::<usize>())
+        .map(|l| l.iter().map(|c| text_cells(&c.text)).sum::<usize>())
         .max()
         .unwrap_or(0)
 }
@@ -665,8 +734,107 @@ mod tests {
         assert_eq!(
             toast_width_cols(&[line(&["éé"])], one_whole_line),
             2,
-            "counting is by character: \"éé\" is 4 bytes, so a 4 would mean len() \
-             was measured instead of chars().count()"
+            "counting is by cell: \"éé\" is 4 bytes and 2 cells, so a 4 would mean \
+             len() was measured instead of cells"
+        );
+    }
+
+    #[test]
+    fn text_cells_counts_a_wide_character_as_two_and_a_combining_mark_as_none() {
+        // (text, expected cells, why)
+        let table: &[(&str, usize, &str)] = &[
+            ("", 0, "empty"),
+            ("abc", 3, "narrow"),
+            ("中", 2, "U+4E2D is East Asian Wide"),
+            ("♈", 2, "U+2648 is East Asian Wide"),
+            ("a中b", 4, "a wide character among narrow ones"),
+            ("e\u{301}", 1, "a combining acute takes no cell of its own"),
+            ("é", 1, "precomposed U+00E9 is one narrow character"),
+        ];
+        for (text, want, why) in table {
+            assert_eq!(text_cells(text), *want, "{text:?}: {why}");
+        }
+    }
+
+    #[test]
+    fn cell_clusters_keeps_a_combining_mark_with_its_base_at_the_column_it_starts() {
+        assert_eq!(
+            cell_clusters("a中e\u{301}b"),
+            vec![(0, "a"), (1, "中"), (3, "e\u{301}"), (4, "b")],
+            "the wide character spans columns 1 and 2, and the acute rides on its e"
+        );
+        assert!(cell_clusters("").is_empty(), "empty text has no clusters");
+    }
+
+    #[test]
+    fn clip_to_cells_cuts_only_between_whole_clusters() {
+        // (text, cols, expected prefix, why)
+        let table: &[(&str, usize, &str, &str)] = &[
+            (
+                "ab中c",
+                3,
+                "ab",
+                "the wide character would straddle the edge",
+            ),
+            ("ab中c", 4, "ab中", "the wide character ends on the edge"),
+            ("ab中c", 99, "ab中c", "everything fits"),
+            (
+                "e\u{301}x",
+                1,
+                "e\u{301}",
+                "the combining mark stays with its base",
+            ),
+            ("abc", 0, "", "no cells, no text"),
+        ];
+        for (text, cols, want, why) in table {
+            assert_eq!(
+                clip_to_cells(text, *cols),
+                *want,
+                "{text:?} in {cols}: {why}"
+            );
+        }
+    }
+
+    #[test]
+    fn toast_width_cols_pays_two_cells_for_a_wide_character() {
+        let one_line = ToastView {
+            first: 0,
+            len: 1,
+            scrollable: false,
+        };
+        let both_lines = ToastView {
+            first: 0,
+            len: 2,
+            scrollable: false,
+        };
+        assert_eq!(
+            toast_width_cols(
+                &[line(&["victorlima"]), line(&["中中中中中中"])],
+                both_lines
+            ),
+            12,
+            "six wide characters draw over 12 cells; a 10 sizes the box for the ASCII \
+             line and leaves the wide line's last character outside it"
+        );
+        assert_eq!(
+            toast_width_cols(&[line(&["ab", "中"])], one_line),
+            4,
+            "a wide character in the last chunk is 2 cells; a 3 clips the line's last cell"
+        );
+    }
+
+    #[test]
+    fn pum_width_cols_pays_two_cells_for_a_wide_character_and_caps_in_cells() {
+        let one_row = PumView { first: 0, len: 1 };
+        assert_eq!(
+            pum_width_cols(&[item("中中中", "", "")], one_row),
+            6,
+            "three wide characters are 6 cells; a 3 clips the label's last half"
+        );
+        assert_eq!(
+            pum_width_cols(&[item(&"中".repeat(40), "", "")], one_row),
+            PUM_MAX_COLS,
+            "40 wide characters are 80 cells, capped; a 40 means characters were counted"
         );
     }
 }

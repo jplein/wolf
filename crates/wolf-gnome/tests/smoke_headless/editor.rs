@@ -2818,7 +2818,7 @@ pub(crate) const PUM_OCR_ITEM: &str = "setglobal";
 /// into the command line; two items on screen at once can only be a list.
 pub(crate) const PUM_OCR_ITEM2: &str = "setfiletype";
 
-/// The MULTI-LINE MESSAGE scenario: launch, settle, `:echo` a two-line string,
+/// The MULTI-LINE MESSAGE scenario: launch, settle, `:echo` a three-line string,
 /// then capture without pressing anything else.
 ///
 /// The trailing keystroke rule is load-bearing here for a second reason: any key is
@@ -2839,9 +2839,9 @@ wtype -k o
 wtype -k Escape
 sleep "$SETTLE"
 
-# One `msg_show` carrying TWO lines: core splits the content on "\n", so the toast
-# holds two lines rather than two messages.
-wtype -- ":echo \"$MSG_FIRST\n$MSG_SECOND\""
+# One `msg_show` carrying THREE lines: core splits the content on "\n", so the toast
+# holds three lines rather than three messages. The wide line is the oldest.
+wtype -- ":echo \"$MSG_WIDE\n$MSG_FIRST\n$MSG_SECOND\""
 wtype -k Return
 
 sleep "$SETTLE"
@@ -2854,17 +2854,45 @@ wait "$app_pid" 2>/dev/null
 exit 0
 "#;
 
-/// The FIRST line of the two-line `:echo`, and the one that discriminates.
+/// The middle line of the three-line `:echo`, and the one that discriminates.
 ///
 /// It is the line a single-row strip cannot show: with only the last line drawn this
 /// term is absent and [`MSG_OCR_SECOND`] is present.
 pub(crate) const MSG_OCR_FIRST: &str = "victorlima";
 
-/// The SECOND (last) line of the two-line `:echo`.
+/// The last line of the three-line `:echo`.
 ///
 /// Asserted as a control rather than as the feature: a single-row strip draws it
 /// too, so on its own it proves only that the message arrived at all.
 pub(crate) const MSG_OCR_SECOND: &str = "oscarhotel";
+
+/// The first (oldest) line of the three-line `:echo`, and its widest: eight U+2648
+/// ARIES, East Asian Width `W` in Unicode's `EastAsianWidth.txt`, so each draws over
+/// two grid cells.
+///
+/// Written as Vim `\u` escapes, so `wtype` types only ASCII keys and the captive
+/// Neovim decodes them inside the double-quoted string. The line is its own, so no
+/// word OCR reads shares a line with a non-ASCII glyph. Nothing asserts that the
+/// glyphs are legible: the width assertion reads the toast's box, not its ink.
+const MSG_WIDE_ESCAPES: &str = r"\u2648\u2648\u2648\u2648\u2648\u2648\u2648\u2648";
+
+/// The width of [`MSG_WIDE_ESCAPES`]'s line in grid cells: eight wide characters at
+/// two cells each.
+///
+/// A literal on purpose. Computing it through `wolf_gnome::cmdline_ui` would restate
+/// the rule under test, and a wrong rule would then size the toast and its
+/// expectation alike.
+const MSG_WIDE_CELLS: f64 = 16.0;
+
+/// How many lines the toast shows: the three of the `:echo`.
+const MSG_TOAST_LINES: f64 = 3.0;
+
+/// How far inside the toast's left edge the width probe reads its column, in pixels.
+///
+/// It lands in the toast's left padding, where no glyph draws, so the column holds
+/// only the toast's background between its top and bottom edge strokes. That rests on
+/// `cmdline_ui::SURFACE_PADDING_PX` exceeding it, which the smoke asserts.
+const MSG_TOAST_PROBE_INSET_PX: usize = 2;
 
 /// The CONFIRM-PROMPT scenario: make an unsaved edit, run `:confirm bdelete`,
 /// capture the dialog, answer it with Cancel, and capture again.
@@ -2999,6 +3027,7 @@ fn multi_line_message_shows_more_than_its_last_line_under_cage() {
     let status = cage_command(MSG_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
+        .env("MSG_WIDE", MSG_WIDE_ESCAPES)
         .env("MSG_FIRST", MSG_OCR_FIRST)
         .env("MSG_SECOND", MSG_OCR_SECOND)
         .status()
@@ -3021,12 +3050,121 @@ fn multi_line_message_shows_more_than_its_last_line_under_cage() {
     );
     assert!(
         ocr_text.contains(MSG_OCR_FIRST),
-        "{SMOKE}: OCR contained the message's last line {MSG_OCR_SECOND:?} but not its FIRST line \
-         {MSG_OCR_FIRST:?}. That is exactly the single-row failure: a \
-         two-line `msg_show` reduced to its final line. Check `pane_view::place_toast`'s height \
+        "{SMOKE}: OCR contained the message's last line {MSG_OCR_SECOND:?} but not the line \
+         before it, {MSG_OCR_FIRST:?}. That is exactly the single-row failure: a \
+         three-line `msg_show` reduced to its final line. Check `pane_view::place_toast`'s height \
          and `cmdline_ui::toast_view`'s budget. PNG kept at {}.\n\nOCR output was:\n{ocr_text}",
         out_png.display()
     );
+
+    let capture = decode_capture(&out_png, SMOKE, "the message capture");
+    let toast_w = toast_width_from_capture(SMOKE, &capture, &out_png);
+    let metrics = cell_metrics_for_smoke();
+    let pad = wolf_gnome::cmdline_ui::SURFACE_PADDING_PX;
+    let widest = MSG_WIDE_CELLS.mul_add(metrics.cell_w, 2.0 * pad);
+    let toast_w = f64::from(u32::try_from(toast_w).expect("a capture column fits a u32"));
+    assert!(
+        toast_w >= widest,
+        "{SMOKE}: the toast is {toast_w} px wide, narrower than its widest line's \
+         {MSG_WIDE_CELLS} cells plus {pad} px of padding on each side ({widest} px; cell_w \
+         {}). The last characters of that line are cut off. Its eight U+2648 are East Asian \
+         Wide, so a box that pays each one cell instead of two is sized for 8 cells: check that \
+         `cmdline_ui::toast_width_cols` counts grid cells rather than characters. PNG kept at {}.",
+        metrics.cell_w,
+        out_png.display()
+    );
+    assert!(
+        toast_w <= widest.ceil(),
+        "{SMOKE}: the toast is {toast_w} px wide, wider than its widest line's {MSG_WIDE_CELLS} \
+         cells plus {pad} px of padding on each side, rounded up to a whole pixel ({} px). \
+         `pane_view::place_toast` added a margin, or sized the box from something other than \
+         the line's cells. PNG kept at {}.",
+        widest.ceil(),
+        out_png.display()
+    );
+}
+
+/// The message toast's width in the capture, in pixels, from its left edge stroke to
+/// its right one.
+///
+/// The toast is the tab overlay's bottom-left child, so its left edge is the pane
+/// area's, [`OVERLAY_ORIGIN_X_EXPECTED`], and its bottom edge sits on the command-line
+/// strip. Both it and the strip fill with Neovim's default background, the strip is
+/// blank once the `:echo` has run, and `pane_view::fill_surface` strokes the toast's
+/// edges in a blend of foreground and background. So a column inside the toast's left
+/// padding reads background from the capture's bottom row up to the bottom edge, and
+/// background again up to the top edge; a row inside its top padding reads background
+/// from there to the right edge.
+///
+/// Two premises are asserted before the width is read: the box is as tall as three
+/// lines and their padding, and its left edge is where it was modelled. Their messages
+/// name the candidate causes.
+fn toast_width_from_capture(smoke: &str, capture: &Capture, png: &Path) -> usize {
+    let metrics = cell_metrics_for_smoke();
+    let pad = wolf_gnome::cmdline_ui::SURFACE_PADDING_PX;
+    assert!(
+        f64::from(u32::try_from(MSG_TOAST_PROBE_INSET_PX).expect("a small inset fits a u32")) < pad,
+        "{smoke}: the probe inset of {MSG_TOAST_PROBE_INSET_PX} px is not inside the toast's \
+         {pad} px left padding, so the probe column could cross glyph ink and read it as an \
+         edge. Shrink MSG_TOAST_PROBE_INSET_PX below SURFACE_PADDING_PX."
+    );
+    let left = pixel_index(OVERLAY_ORIGIN_X_EXPECTED, "the toast's left edge");
+    let probe_x = left + MSG_TOAST_PROBE_INSET_PX;
+    let bottom = capture.height - 1;
+    let bg = capture.pixel(probe_x, bottom);
+
+    let edge_below = |from: usize, what: &str| {
+        (0..from)
+            .rev()
+            .find(|&y| capture.pixel(probe_x, y) != bg)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{smoke}: column {probe_x} is the background {bg:?} from row {from} to the \
+                     top of the capture, so the toast's {what} edge was not found. The toast did \
+                     not show, or its left edge is not at x = {left}. PNG kept at {}.",
+                    png.display()
+                )
+            })
+    };
+    let y_bottom = edge_below(bottom, "bottom");
+    let y_top = edge_below(y_bottom, "top");
+
+    let toast_h = y_bottom - y_top + 1;
+    let want_h = pixel_index(
+        MSG_TOAST_LINES.mul_add(metrics.cell_h, 2.0 * pad).ceil(),
+        "the toast's height",
+    );
+    assert_eq!(
+        toast_h,
+        want_h,
+        "{smoke}: along column {probe_x}, the box found from row {y_top} to row {y_bottom} is \
+         {toast_h} px tall, not the {want_h} px of {MSG_TOAST_LINES} lines of cell_h {} plus \
+         {pad} px of padding on each side. In order: the toast did not show; not all three \
+         lines are visible; the overlay origin moved off x = {left}; or the command-line strip \
+         is not blank. PNG kept at {}.",
+        metrics.cell_h,
+        png.display()
+    );
+
+    let row = y_top + MSG_TOAST_PROBE_INSET_PX;
+    assert_ne!(
+        capture.pixel(left, row),
+        bg,
+        "{smoke}: pixel ({left}, {row}) is the toast's background, not its left edge stroke, so \
+         the toast's left edge is not at OVERLAY_ORIGIN_X_EXPECTED and the width read along \
+         row {row} would start from the wrong column. PNG kept at {}.",
+        png.display()
+    );
+    let x_right = (probe_x..capture.width)
+        .find(|&x| capture.pixel(x, row) != bg)
+        .unwrap_or_else(|| {
+            panic!(
+                "{smoke}: row {row} is the background {bg:?} from column {probe_x} to the \
+                 capture's right edge, so the toast's right edge was not found. PNG kept at {}.",
+                png.display()
+            )
+        });
+    x_right - left + 1
 }
 
 #[test]

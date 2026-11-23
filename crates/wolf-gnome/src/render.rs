@@ -31,6 +31,7 @@
 use wolf_core::{Grid, HighlightTable, ResolvedStyle, Rgb};
 
 use crate::cell_metrics_math;
+use crate::cmdline_ui;
 use crate::glyph_style;
 
 /// Divisor to convert an 8-bit channel (0–255) to Cairo's 0.0–1.0 range.
@@ -401,6 +402,42 @@ pub(crate) fn draw_glyph(
     style: &ResolvedStyle,
 ) {
     GlyphPainter::new(cr).draw(cr, metrics, x, y, text, fg, style);
+}
+
+/// Draws `text` on the grid from `(x, y)`, one cluster per cell at
+/// `x + col * metrics.cell_w`, and returns the cells it covered.
+///
+/// The text paint of the surfaces sized in cells by [`crate::cmdline_ui`], the message
+/// toast and the completion popup. A string laid out as one Pango run advances by
+/// Pango's whole-pixel-rounded glyph widths rather than `metrics.cell_w`, so where the
+/// face's advance rounds up the run outgrows a box sized in cells and its last
+/// character is cut off. Drawing cell by cell keeps the text on the cells the box was
+/// sized for, as [`paint`] does for the grid.
+///
+/// Widths follow [`crate::cmdline_ui::text_cells`]: a wide character covers two
+/// cells, and a zero-width one is drawn with the character before it.
+pub fn draw_cells(
+    cr: &cairo::Context,
+    metrics: &CellMetrics,
+    x: f64,
+    y: f64,
+    text: &str,
+    fg: Rgb,
+    style: &ResolvedStyle,
+) -> usize {
+    let mut painter = GlyphPainter::new(cr);
+    for (col, cluster) in cmdline_ui::cell_clusters(text) {
+        painter.draw(
+            cr,
+            metrics,
+            (col as f64).mul_add(metrics.cell_w, x),
+            y,
+            cluster,
+            fg,
+            style,
+        );
+    }
+    cmdline_ui::text_cells(text)
 }
 
 /// Lays out and draws ONE line of free text in `fg`, with the layout's TOP at `y`.
