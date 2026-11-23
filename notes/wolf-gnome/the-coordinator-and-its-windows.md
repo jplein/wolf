@@ -1,10 +1,10 @@
 # The coordinator and its windows
 
-Last verified at commit `3e6c8fd487ede16675bb41d4baddfe4f43dab136`.
+Last verified at commit `745eed6c2c4aaf9461c0e622afe54d4bcd6f3885`.
 
-A process-scoped coordinator sits above the window-scoped shell, and exactly seven things live up there, each because a second copy of it would be wrong rather than merely wasteful: the one `AppStateStore`, the window stacking order, the one config read, the one `CellMetrics` measurement, the `app.`-namespace actions, the session's launch plans, and the test-only [readiness probe](../wolf-gnome-decisions.md#the-readiness-file), whose condition spans every window a launch restores. Everything else is per-window and stays there.
+A process-scoped coordinator sits above the window-scoped shell, and exactly eight things live up there, each because a second copy of it would be wrong rather than merely wasteful: the one `AppStateStore`, the window stacking order, the one config read, the one `CellMetrics` measurement, the `app.`-namespace actions, the session's launch plans, the test-only [readiness probe](../wolf-gnome-decisions.md#the-readiness-file), whose condition spans every window a launch restores, and the open channel's listener. Everything else is per-window and stays there.
 
-The config is read once so two windows cannot disagree about the font mid-session; the metrics because they are deterministic given the config and already shared by `Rc` inside a window; the plans because a launch restores a session rather than a window; the stacking order because it ranks the windows against each other. The store's reason is sharper.
+The config is read once so two windows cannot disagree about the font mid-session; the metrics because they are deterministic given the config and already shared by `Rc` inside a window; the plans because a launch restores a session rather than a window; the stacking order because it ranks the windows against each other; the listener because a state directory has one socket, a second bind is refused as in use, and a request can name a tab of any window. The store's reason is sharper.
 
 **The store is process-scoped because two stores over one `wolf.sqlite` lose a session silently.** A second store keeps its own unchanged-tree baseline, and each of its writes replaces the whole window state the other wrote. No panic and no corruption — one window's entire session is simply gone. `wolf-ffi` shares one store across macOS windows for the same reason.
 
@@ -44,7 +44,9 @@ Two tabs on one file share the durable swap directory, and that is left alone de
 
 Open Folder lives up here because it spans windows: a tab in any window can be the one it focuses. The dialog, the empty state's button through it, and an Open Recent palette row all reach `AppShell::open_folder`, which canonicalizes the path and hands it to `Coordinator::open_folder`. That gathers every window's live tabs and asks [`open_folder.rs`](../../crates/wolf-gnome/src/README.md#open_folderrs) for the step.
 
-A focus selects the tab §4's rule picks in its `adw::TabView` and presents its window, best-effort as above, and reads no project state. A fill and a new window read the folder's project state, which marks it used; a new window opens through the same `open_window` a restored one does, at the project state's size, else the active window's normal size.
+A focus selects the tab §4's rule picks in its `adw::TabView` and raises its window, best-effort as above, and reads no project state. A fill and a new window read the folder's project state, which marks it used; a new window opens through the same `open_window` a restored one does, at the project state's size, else the active window's normal size.
+
+The tab a fill replaces is the current one Open Folder is handed: the menu's window and its selected tab, or a request's current tab, which can be a background tab. A fill raises its window too.
 
 **A fill replaces the empty tab; it never chdirs its Neovim.** Core's tracked cwd moves only when Neovim reports `DirChanged`, and the drawer's shell and a terminal leaf whose saved directory is gone start in that cwd, so a rebuild racing a `:tcd` would start them in the old directory. A gather between the chdir and the rebuild would also write a one-pane tab over the folder's project state.
 
@@ -53,3 +55,17 @@ So `TabsHandle::replace` opens a tab planned from the folder, its Neovim startin
 A fill gives the window the stored size only when the empty tab was its only tab. It also gives the search panel the new tab's recorded fields, as a launch does, or the next `record_selected_sidebar` would overwrite the restored query with the panel's.
 
 Every Open Folder, a focus included, records the folder through `WolfCore::record_recent_dir` on the core of the tab that ends on it. That tab's Neovim starts in the folder, and core records no launch directory.
+
+## Opening from outside Wolf
+
+The `wolf` command's requests ([§2](../../specs/cli-and-file-open.md#2-the-channel)) come up here because a request spans windows: its `WOLF_TAB_ID` names a tab of any window, and a file goes to its project's tab wherever that is. The first `activate` binds the listener and a main-loop task drains it on each wake, handing each request to [`open_request.rs`](../../crates/wolf-gnome/src/README.md#open_requestrs) with every window's live tabs and tab IDs, then acting on the route. A directory, and a file outside any named tab, take the Open Folder path above, so §4's focus, fill and new window are one implementation.
+
+**The listener binds before `restore_session`, and its requests still run after the restore.** The drain task runs only once `activate` returns, so a cold launch restores the session before it handles the request that started it. Binding first sends the launching `wolf` its `Taken` before any window maps; binding after the restore delays that past the maps. Under `cage`, the cold-launch smoke primes the keyboard once `wolf` returns, and a window that maps before any keyboard exists is never given focus there.
+
+**`quit` drops the listener right after latching `shutting_down`, and the last window's close drops it too.** A `wolf` connecting to an app that is exiting would otherwise get `Taken` for a request nothing handles. Requests drained while shutting down are dropped.
+
+**Every raise from a request or from Open Folder goes through `WindowHandle::raise`, which presents a window only once it has painted.** A request handled during the restore's present chain could otherwise map a window ahead of the ones behind it, out of the saved order.
+
+A file is queued on its tab's pane view and placed by `wolf_core::choose_pane` on a later wake, once a pane is bound, every restore step of the tab has run and `open_request::may_place` admits its Neovim. A refused gather or a crash restart keeps it queued, so a file sent to a tab Open Folder has just opened waits for that tab's restore, and one sent to a dead Neovim lands after the restart.
+
+The pane a file lands in is made active at once, not on the wake Neovim reports the move, or keys would still reach the pane that was active, a terminal's session among them. `pending_focus` keeps `update_active_pane` from reading Neovim's previous window back meanwhile. The whole-tab split binds the window `WolfCore::open_split_left` answers to a new pane from `PaneTree::split_root_left`, since no `Split` intent names it.

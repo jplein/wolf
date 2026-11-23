@@ -14,9 +14,11 @@ The GTK 4 and libadwaita front-end: a runnable multi-window Linux application th
 
 ## Entry point
 
-`src/main.rs` forwards the exit code from `app::run`, which builds the `adw::Application` and, on activate, builds the process-scoped coordinator and asks it to restore the saved session — one window per saved window, or one empty-state window when there is nothing to restore. The crate is also a library: every decision expressible as a function of values lives in a seam that needs no display server, and the binary is the widget glue over those seams.
+`src/main.rs` forwards the exit code from `app::run`, which builds the `adw::Application` and, on activate, builds the process-scoped coordinator, has it listen on the open channel of [`specs/cli-and-file-open.md`](../../specs/cli-and-file-open.md#2-the-channel), and asks it to restore the saved session — one window per saved window, or one empty-state window when there is nothing to restore. The crate is also a library: every decision expressible as a function of values lives in a seam that needs no display server, and the binary is the widget glue over those seams.
 
-The binary takes no command-line arguments. The picker, the sidebar, the primary menu's native `gtk::FileDialog`s and Neovim itself all open files the same way, through `InputEvent::Open`, which core performs as `:e`. A result in the sidebar's search panel opens a location rather than a file, through `InputEvent::OpenAt`, which core performs as `:edit` followed by `nvim_win_set_cursor` in one input-pump step; over a preview pane it repoints the preview through `preview_file` instead, falling back to `OpenAt` when core declines. Saving goes the same way, through `InputEvent::Save` and `InputEvent::SaveAs`, from the primary menu's Save and Save As items, from `Ctrl+Shift+S`, and from `:w` or `:saveas` typed inside Neovim.
+The binary takes no command-line arguments: the `wolf` command, and GNOME Files through the desktop entry, send a path over the open channel instead. The app places such a file by core's pane choice, through `InputEvent::Open`, or `WolfCore::open_split_left` for a whole-tab split.
+
+The picker, the sidebar, the primary menu's native `gtk::FileDialog`s and Neovim itself all open files the same way, through `InputEvent::Open`, which core performs as `:e`. A result in the sidebar's search panel opens a location rather than a file, through `InputEvent::OpenAt`, which core performs as `:edit` followed by `nvim_win_set_cursor` in one input-pump step; over a preview pane it repoints the preview through `preview_file` instead, falling back to `OpenAt` when core declines. Saving goes the same way, through `InputEvent::Save` and `InputEvent::SaveAs`, from the primary menu's Save and Save As items, from `Ctrl+Shift+S`, and from `:w` or `:saveas` typed inside Neovim.
 
 ## Running
 
@@ -37,7 +39,7 @@ Running needs a Wayland or X11 session, or the headless compositor the smoke tes
 
 ## Packaging
 
-`nix build .#wolf-gnome` produces the installed Linux application: the release binary, wrapped so it supplies its own Neovim, ripgrep, treesitter trees and font configuration, beside a captive `init.lua` with the vendored `orlando` and `lighthouse` trees as siblings, Wolf's compiled `xterm-ghostty` terminfo entry, a desktop entry, the hicolor icon set, both editor font families and the Symbols Nerd Font Mono icon face. The commands, the output's layout, how a NixOS configuration consumes the flake and the one script that produces evidence about the artifact are all [`build.md`](../../build.md)'s.
+`nix build .#wolf-gnome` produces the installed Linux application: the release binary, wrapped so it supplies its own Neovim, ripgrep, treesitter trees and font configuration, beside a captive `init.lua` with the vendored `orlando` and `lighthouse` trees as siblings, Wolf's compiled `xterm-ghostty` terminfo entry, a desktop entry, the hicolor icon set, both editor font families, the Symbols Nerd Font Mono icon face, and the `wolf` command beside the app, which the desktop entry runs as `wolf %f` for Markdown files and folders. The commands, the output's layout, how a NixOS configuration consumes the flake and the one script that produces evidence about the artifact are all [`build.md`](../../build.md)'s.
 
 ## Testing
 

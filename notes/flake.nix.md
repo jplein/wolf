@@ -86,7 +86,9 @@ A curated subset would run only the pure seams the checkout's `cargo test` alrea
 
 ## Wrapper environment
 
-`wrapGAppsHook4` wraps during `fixupPhase` and consumes the `gappsWrapperArgs` array, so these flags are appended to it. A hand-rolled `wrapProgram` would double-wrap and shadow the hook's own `--prefix XDG_DATA_DIRS`, `GSETTINGS_SCHEMA_DIR`, `GIO_EXTRA_MODULES` and `GDK_PIXBUF_MODULE_FILE`.
+`wrapGAppsHook4` consumes the `gappsWrapperArgs` array, so these flags are appended to it. A hand-rolled `wrapProgram` would double-wrap and shadow the hook's own `--prefix XDG_DATA_DIRS`, `GSETTINGS_SCHEMA_DIR`, `GIO_EXTRA_MODULES` and `GDK_PIXBUF_MODULE_FILE`.
+
+`dontWrapGApps` stops the hook wrapping every file in `bin/`, and `postFixup` calls the hook's `wrapGApp` on `bin/wolf-gnome` alone, from the same array. `bin/wolf` stays the bare command: it links no GTK, and a wrapper would only hand it the app's environment. The app it launches is the wrapped `bin/wolf-gnome`, which supplies its own.
 
 Every flag is `--set-default`, for reasons that differ by group. `WOLF_NVIM_BIN` and `WOLF_RG_BIN` are macOS parity: `TabCore.swift` sets both with `setenv(name, value, 0)`, so a developer's own export wins there too. The treesitter directories follow for consistency, and so a developer testing a work-in-progress query tree can point the packaged binary at one. `FONTCONFIG_FILE` follows so the devShell's exclusionary pin keeps winning inside `nix develop`, which keeps `paint_golden.rs` and every OCR smoke reproducible; outside the shell the packaged additive config applies. `WOLF_TERMINFO_DIR` is macOS parity again, with `TabCore.swift`'s bundled terminfo directory.
 

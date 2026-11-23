@@ -200,6 +200,9 @@ A state table at a newer version is frozen per `db::Table` handle. Its flag is s
 - The wire is one JSON object per line, and unknown keys are ignored, so either side can gain a field. A path that is not UTF-8 has no JSON string, so the command refuses it.
 - A linked worktree is recognised by reading `.git` and `commondir`, not by running `git`: a GUI app's `PATH` is minimal, and on macOS `/usr/bin/git` is an Xcode shim that can prompt.
 - On macOS the command's `launcher` runs `/usr/bin/open -b` on Wolf's bundle identifier, which `crates/wolf-macos/Info.plist` also holds. Under a non-empty `WOLF_STATE_DIR` there is no launcher: an app started by Launch Services inherits no environment, so it listens in the default state directory and never in the override, and a launch could only wait out `LAUNCH_TIMEOUT`. This also keeps every test, which sets `WOLF_STATE_DIR`, from launching an installed Wolf.
+- On Linux the `launcher` starts the `wolf-gnome` beside the executable, the package's `bin/` layout, and with none there is no launcher, which keeps a test's copied `wolf` from launching anything. The child inherits the environment, so it listens where the command connects and the `WOLF_STATE_DIR` rule does not apply; a relative `WOLF_STATE_DIR` is made absolute, since the child starts elsewhere.
+- The Linux child starts in `/`, so its restore adds no window for the command's directory and a cold launch restores the session alone; the request carries its own absolute path. It gets no `WOLF_TAB_ID`, since the app belongs to no tab.
+- The Linux child's stdout and stderr are nulled when they are a terminal, since writing to a closed terminal would fail every later `eprintln!`, and inherited otherwise, for the journal or a smoke's log. It runs in its own process group, so a terminal's hangup does not reach it.
 - [§5.2](../specs/cli-and-file-open.md#52-choosing-the-pane) rule 4's whole-tab split is `WolfCore::open_split_left`, a `topleft vsplit` that answers the new window synchronously and emits no `Split` intent. A `Split` intent names the pane it split from, which a front-end splits, never the whole tab, so the front-end binds the window it is handed.
 
 ## Present limitations
@@ -211,7 +214,7 @@ A state table at a newer version is frozen per `db::Table` handle. Its flag is s
 - The file-search watcher does not cover a root it cannot watch, a session started with `WOLF_FS_WATCH=0` whose root no watched session shares, or any root when the watcher cannot start. A recursive inotify watch adds one watch per directory, ignored and skipped trees included, so a root as large as `$HOME` can exhaust `max_user_watches`. An FSEvents stream that fails to start is silent, because notify 8.2.0 ignores `FSEventStreamStart`'s result. An external change under such a root waits for an nvim trigger, and GNOME forwards no OS focus, so `FocusGained` never fires there.
 - An edit to `.git/info/exclude`, to the global excludes file, or to a `.gitignore` above the session root changes what the walk lists without forcing a rescan. The watcher's filter can also go on judging events by the rules it read before such an edit until the root stops being watched.
 - The open listener refuses every wait, so `wolf --wait` exits `2`.
-- wolf-gnome binds no `OpenListener` and calls no `set_tab_id`, and the command's `launcher` starts nothing on Linux. There `wolf` exits `2` saying Wolf is not running, and every terminal session starts with `WOLF_TAB_ID` removed.
+- A launched app that exits before it listens leaves the command polling until `LAUNCH_TIMEOUT`, then exiting `2` saying Wolf is not running.
 
 ## Deferred
 

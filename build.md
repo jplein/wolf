@@ -63,6 +63,8 @@ Most tests spawn the pinned Neovim as a real child process rather than a mock, a
 
 `cargo test` also runs the rustdoc doctests in `src/**`, which `rust_test` does not. A doctest is therefore Linux-only coverage, the exact mirror of the Bazel wiring gap under [Running the tests](#running-the-tests): a fenced or indented block in a `//!` or `///` comment compiles as Rust unless it is tagged `text` or `ignore`, and a prose list that only looks like code fails there and nowhere else.
 
+The file-open smokes run the `wolf` command beside the app binary, `target/debug/wolf`, which `cargo build` and `cargo test` build for the whole workspace but a bare `cargo test -p wolf-gnome` does not: run `cargo build -p wolf-core --bin wolf` first, or the smokes fail naming it.
+
 What each target covers lives with the tests: [`wolf-core/tests`](crates/wolf-core/tests/README.md), [`wolf-ffi/tests`](crates/wolf-ffi/tests/README.md), [`wolf-gnome/tests`](crates/wolf-gnome/tests/README.md). The GTK end-to-end smokes run in that suite rather than opting in: they launch the real window under `cage`, a headless Wayland compositor, and drive it with `wtype`, `grim`, `tesseract`, `wlr-randr`, which resizes the headless output, and [`wolf-pointer-inject`](tools/wolf-pointer-inject/README.md), each scenario under `dbus-run-session`. All of them come from the devShell, and the smokes fail loudly rather than skipping when one is missing, since absence means the suite is running outside `nix develop`.
 
 Several cages run at once. `WOLF_SMOKE_JOBS=<n>` sets how many, and `1` runs them serially; unset, the count is `available_parallelism` divided by `DEFAULT_SMOKE_JOBS_CPUS_PER_CAGE`, clamped to between 1 and `DEFAULT_SMOKE_JOBS_CAP`, whose doc comment in `crates/wolf-gnome/tests/smoke_headless/main.rs` carries the measured wall times. Two `cargo test` runs share no socket or file, but each sizes its slots for the whole host, so never overlap them: together they oversubscribe the CPU and stretch the scenarios' fixed settles.
@@ -116,7 +118,7 @@ nix build .#wolf-gnome --no-link --print-out-paths
 
 | Path                    | Contents                                                                            |
 | ----------------------- | ----------------------------------------------------------------------------------- |
-| `bin/`                  | the wrapper and the binary it execs                                                 |
+| `bin/`                  | the app's wrapper, the binary it execs, and the unwrapped `wolf` command            |
 | `share/wolf/nvim/`      | the captive `init.lua`, with sibling `orlando/` and `lighthouse/` trees             |
 | `share/wolf/fonts.conf` | the additive fontconfig fragment `FONTCONFIG_FILE` defaults to                      |
 | `share/wolf/terminfo/`  | the compiled `xterm-ghostty` entry `WOLF_TERMINFO_DIR` defaults to                  |
@@ -292,7 +294,7 @@ Run the built binary by its path from the directory a relative `PATH` should res
 
 On macOS, `:Wolf` and `:WolfRelease` bundle it at `Wolf.app/Contents/Resources/bin/wolf`, through the `:wolf_cli_tree` copy of `//crates/wolf-core:wolf`, and the app's Install `wolf` Command links `/usr/local/bin/wolf` to it ([`crates/wolf-macos`](crates/wolf-macos/README.md#the-wolf-command-and-finder)).
 
-The command reaches Wolf through a socket in `state_dir()`, which `WOLF_STATE_DIR` overrides. The macOS app listens on it from launch, and with nothing listening the command launches `Wolf.app` by bundle identifier, unless `WOLF_STATE_DIR` is set ([why](notes/wolf-core-decisions.md#opening-files-from-outside-wolf)). wolf-gnome does not listen, so on Linux the command exits `2` saying Wolf is not running ([limitations](notes/wolf-core-decisions.md#present-limitations)).
+The command reaches Wolf through a socket in `state_dir()`, which `WOLF_STATE_DIR` overrides, and both apps listen on it from launch. With nothing listening, the command on macOS launches `Wolf.app` by bundle identifier unless `WOLF_STATE_DIR` is set, and on Linux it starts the `wolf-gnome` beside it, whatever `WOLF_STATE_DIR` says; with no `wolf-gnome` there it exits `2` saying Wolf is not running ([why](notes/wolf-core-decisions.md#opening-files-from-outside-wolf)).
 
 ## Running the tests
 

@@ -627,5 +627,5 @@ Purpose: the `wolf` command of [§1](../../../specs/cli-and-file-open.md#1-the-c
 **Decisions**
 
 - A refused invocation, `--wait DIR` included, exits `2` before connecting, so it never reaches the app. A path that is not UTF-8 exits `2` too, because the request is JSON.
-- `launcher()` is the hook that starts Wolf when nothing listens. On macOS it runs `open -b` on Wolf's bundle identifier, unless `WOLF_STATE_DIR` is set and non-empty ([why](../../../notes/wolf-core-decisions.md#opening-files-from-outside-wolf)); elsewhere it is `None`, so nothing listening exits `2` with "Wolf is not running". A launcher makes the command use `connect_or_launch` with `LAUNCH_TIMEOUT`.
+- `launcher()` is the hook that starts Wolf when nothing listens. On macOS it runs `open -b` on Wolf's bundle identifier, unless `WOLF_STATE_DIR` is set and non-empty; on Linux it starts the `wolf-gnome` beside the executable, when there is one ([why](../../../notes/wolf-core-decisions.md#opening-files-from-outside-wolf)). Otherwise it is `None`, so nothing listening exits `2` with "Wolf is not running". A launcher makes the command use `connect_or_launch` with `LAUNCH_TIMEOUT`.
 - It waits `REPLY_TIMEOUT` for `Taken`, then without a limit for a wait's end.

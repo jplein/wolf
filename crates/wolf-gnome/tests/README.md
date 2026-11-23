@@ -10,7 +10,7 @@ The devShell is not optional: it supplies GTK, exports `WOLF_NVIM_BIN` and `WOLF
 
 Rules that are decidable from their arguments are pinned in each seam's own `#[cfg(test)] mod tests`, which is the point of the seam split in [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md).
 
-The drawer share's, the key seam's, the terminal seams', the other-pane seam's, the zoom rules', the per-pane views', the sidebar toggles', the titlebar seam's, the restore caps', the application-state seam's, the stacking order's and the tab focus rule's tables are files here instead, [`drawer_share.rs`](#drawer_sharers), [`gdk_key.rs`](#gdk_keyrs), [`terminal_seams.rs`](#terminal_seamsrs), [`other_pane_seam.rs`](#other_pane_seamrs), [`pane_zoom.rs`](#pane_zoomrs), [`pane_views.rs`](#pane_viewsrs), [`sidebar_toggles.rs`](#sidebar_togglesrs), [`titlebar_background.rs`](#titlebar_backgroundrs), [`restore_caps.rs`](#restore_capsrs), [`app_state_seam.rs`](#app_state_seamrs), [`stacking.rs`](#stackingrs) and [`tab_focus.rs`](#tab_focusrs).
+Some seams' tables are files here instead: [`drawer_share.rs`](#drawer_sharers), [`gdk_key.rs`](#gdk_keyrs), [`terminal_seams.rs`](#terminal_seamsrs), [`other_pane_seam.rs`](#other_pane_seamrs), [`open_request.rs`](#open_requestrs), [`pane_zoom.rs`](#pane_zoomrs), [`pane_views.rs`](#pane_viewsrs), [`sidebar_toggles.rs`](#sidebar_togglesrs), [`titlebar_background.rs`](#titlebar_backgroundrs), [`restore_caps.rs`](#restore_capsrs), [`app_state_seam.rs`](#app_state_seamrs), [`stacking.rs`](#stackingrs) and [`tab_focus.rs`](#tab_focusrs).
 
 The other files below cover what a seam cannot reach: a real Neovim, a real window, the built binary together with the manifest that shaped it, and the store output `nix build .#wolf-gnome` installs — a different artifact from the checkout build, making different claims.
 
@@ -135,6 +135,17 @@ The other files below cover what a seam cannot reach: a real Neovim, a real wind
 - Pure: no display, no Neovim and no filesystem. No window or tab id equals an index asserted on, and every window list is passed out of stacking order, so only the stacking puts the answer right.
 - The opened directory exists on no host, so a plan that consulted the filesystem would plan an empty tab.
 
+#### `open_request.rs`
+
+**Covers**
+
+- `open_request::route` and `current_tab` against [§3 to §5.1](../../../specs/cli-and-file-open.md#3-tab-ids), in the cases of [`FileOpenSeamTests.swift`](../../wolf-macos/Tests/WolfKeyMapTests/README.md#fileopenseamtestsswift) a pure seam can hold: the frontmost window's selected tab, else its most recent; a live `WOLF_TAB_ID` naming a background tab as a directory's current tab, and a file's tab whatever its project; an unmapped ID, and one mapped to a tab no window holds, handled as unset; a file without one going to the deepest open project.
+- `placement` resolving each index to its leaf, and `None` past the last; `may_place` admitting `Alive` alone; `PaneTree::split_root_left` over a leaf, a `Vertical` and a `Horizontal` root.
+
+**Gotchas**
+
+- Pure, with the fixtures [`open_folder.rs`](#open_folderrs) uses: ids equal no index, window lists come out of stacking order, and no directory exists, so `project_directory` answers from the open directories alone.
+
 #### `other_pane_seam.rs`
 
 **Covers**
@@ -151,7 +162,7 @@ The other files below cover what a seam cannot reach: a real Neovim, a real wind
 **Covers**
 
 - The tree `nix build .#wolf-gnome` installs, read out of the store path `WOLF_PACKAGE_OUT` names. The captive `init.lua` is byte-identical to the checkout's and sits at `<out>/bin` joined with the resolver's own `INSTALLED_INIT_LUA_RELATIVE`; both vendored Lua trees are non-empty beside it, carrying what the Bazel filegroups keep and none of what they exclude.
-- The desktop entry's `Exec` as the absolute wrapped path, with no field code and no `MimeType`; each icon decoding to the pixel size its hicolor directory names; the wrapper naming every variable it must supply and never `WOLF_INIT_LUA`; both editor font families beside an additive `fonts.conf`; the Symbols Nerd Font Mono icon face under the `share/fonts` that `fonts.conf` names, with both of its upstream notices under `share/licenses/`; the compiled `xterm-ghostty` entry at `share/wolf/terminfo/x/xterm-ghostty`, in ncurses' compiled format, naming `xterm-ghostty` first and carrying the extended `setrgbf` that only `tic -x` keeps.
+- `bin/wolf` refusing `--bogus` with its usage line; the desktop entry's exact `Exec`, `$out/bin/wolf %f`, and `MimeType`; each icon decoding to the pixel size its hicolor directory names; the wrapper naming every variable it must supply and never `WOLF_INIT_LUA`; both editor font families beside an additive `fonts.conf`; the Symbols Nerd Font Mono icon face under the `share/fonts` that `fonts.conf` names, with both of its upstream notices under `share/licenses/`; the compiled `xterm-ghostty` entry at `share/wolf/terminfo/x/xterm-ghostty`, in ncurses' compiled format, naming `xterm-ghostty` first and carrying the extended `setrgbf` that only `tic -x` keeps.
 
 **Gotchas**
 
@@ -192,6 +203,7 @@ The other files below cover what a seam cannot reach: a real Neovim, a real wind
 - `pane_zoom`'s rules, K1 to K5 and K7 to K14, with the ids of [`PaneZoomTests.swift`](../../wolf-macos/Tests/WolfKeyMapTests/README.md#panezoomtestsswift). K6 is absent, since it tests the frozen dividers and no divider exists while a view here is zoomed, and K10 tests `shown_alone` over bound ids where the Swift tests `visibleRects`. K11 to K13 compose `focus_origin`, `drawer::focus_target` and `zoomed_after` as `apply_focus` does, over a plus-shaped tree above the drawer.
 - The saved zoom through `pane_layout`: G6a pins `leaf_index`, the depth-first index a saved tab's `zoomed` names, and the drawer's `None`. P3 is this file's own, the `leaf_index`, `encode` and `decode` round trip a relaunch makes, since this front-end has no FFI push-builder for the Swift P3 to cover.
 - `restore_targets` (E10): a saved zoom and focus mapped onto the rebuilt leaves, the drawer only while it restores open, and a zoom winning the focus.
+- `ZoomEvent::OpenFile` (Z1) unzooming whichever pane is zoomed, the drawer included.
 
 **Gotchas**
 
@@ -265,7 +277,7 @@ The other files below cover what a seam cannot reach: a real Neovim, a real wind
 **Covers**
 
 - The crate root and shared harness of the `smoke_headless` binary, whose smokes launch the built application under `cage` and assert on OCR, raw pixels, Neovim readbacks, files on disk or the exit status. Each feature's smokes are a module beside it. Its `RESIZE_OUTPUT_FRAGMENT` is how a smoke resizes the window, under [Smoke conventions](#smoke-conventions).
-- The harness guards: `cage` spawns only through `cage_command`, each cage is isolated from the host session, the slots bound concurrency, every launch waits for readiness, the appearance pin holds, and the column cap cannot bind at the OCR geometry.
+- The harness guards: `cage` spawns only through `cage_command`, each cage is isolated from the host session, `WOLF_TAB_ID` included, the slots bound concurrency, every launch waits for readiness, the appearance pin holds, and the column cap cannot bind at the OCR geometry.
 
 **Decisions**
 
@@ -277,7 +289,6 @@ The other files below cover what a seam cannot reach: a real Neovim, a real wind
 - Run with `cargo test -p wolf-gnome --test smoke_headless` inside the devShell. `--exact` takes `<module>::<name>`, as in `editor::window_renders_typed_text_under_cage`; the guards here keep bare names.
 - Every `*_under_cage` test is a cage smoke and every other test a compositor-free guard; `passed` counts both.
 - The source-scanning guards read the crate's test sources at run time: a `cage` spawned under `tests/` outside `cage_command` fails one, and a declared module left unread fails both.
-- Read [Smoke conventions](#smoke-conventions) first.
 - A failing smoke keeps its runtime directory, with its captures and `cage.log`, and prints its path and the log's tail.
 - Spell checking is off in every smoke, so OCR reads glyphs not undercurls; see `seed_smoke_spell_override`.
 
@@ -328,6 +339,14 @@ The header bar's contents smoke: one keyboard-only launch, so no pointer hover r
 #### `smoke_headless/lighthouse.rs`
 
 Not a smoke: the oracle that reads expected colours from the pinned `colors/lighthouse.lua` in the tree `WOLF_TEST_LIGHTHOUSE_DIR` names, a copy of wolf-ffi's `common::Lighthouse` that parses the same shapes ([`//bazel/lighthouse`](../../../bazel/lighthouse/README.md#the-pin)). It panics when the variable is unset, since the devShell always exports it, and is read in the test process only: the packaged smokes scrub the variable from the cage. Its `stage_init_lua` stages the checkout's `init.lua` beside a copy of the pinned colorscheme, for a smoke that runs the real Lighthouse.
+
+#### `smoke_headless/file_open.rs`
+
+The `wolf` command's smokes, each over a planted state. They run the `wolf` beside the app binary, which Cargo names in no variable for another package, and fail when it is absent ([Building and testing](../../../build.md#building-and-testing)). `wolf D` from the empty state fills the empty current tab with `D`, adding no Neovim. `wolf FILE` lands by each [§5.2](../../../specs/cli-and-file-open.md#52-choosing-the-pane) rule, one tab per rule: the active editor pane, on a missing file left off disk; the larger leftmost editor pane; a preview made an editor; the pane already on the file focused; and a zoomed tab unzoomed first.
+
+A terminal pane's shell sees its tab's `WOLF_TAB_ID`, distinct per tab, and its `wolf` lands in that tab through the whole-tab split; a stale ID goes to the file's project. With no app running, `wolf FILE` launches the app beside it, which restores both planted windows, adds none for the command's directory, and places the file after the restore.
+
+Every request lands in the window that holds the keyboard, and no smoke asserts a raise, since `cage` raises no background window. Each request is followed by a polled Neovim readback, because `wolf` exits `0` once the request is taken, not handled.
 
 #### `smoke_headless/open_folder.rs`
 
@@ -693,7 +712,7 @@ Being scrupulous about this is the point of the section.
 - **Where the drawer strip sits after a rebuild.** The drawer smoke's leg f proves only that the drawer's binding survives a split's rebuild, and `clear_drawer()` in `apply_split` turns it red. No capture follows the `:vsplit`, so where the rebuilt strip lands reaches no assertion.
 - **The drawer's own status bar reaches no assertion.** Its OCR band is sampled below the statusbar deliberately, the region measured byte-identical across runs, so nothing here reads the shell's name the statusbar shows; `wolf-ffi`'s [`pane_status.rs`](../../wolf-ffi/tests/README.md#pane_statusrs) asserts that string. The same shape as the per-pane status-bar entry above.
 - **The snapshot gate.** Its whole domain is table-tested, but no smoke arranges a wake in which Neovim is dead, or no pane is bound, and then checks that the layout saved before it survived. Inducing that race under a compositor would be timing-dependent rather than deterministic.
-- **The Switch to Window raise, and Open Folder's.** `Coordinator::raise` and an Open Folder focus call `present()`, which `cage` declines: it shows one toplevel at a time and keeps the newest on top, so no capture can show two windows and nothing can bring a backgrounded one forward. The palette's rows are proven as values by `palette.rs`'s tables and `Coordinator::raise` is executed by no test at all; an Open Folder focus is observed only as the tab it selects. Closing the gap needs a `wlr-foreign-toplevel` client, which is a `tools/` deliverable of its own.
+- **The Switch to Window raise, and Open Folder's and a request's.** `Coordinator::raise` calls `present()`, and an Open Folder focus or fill and every request raise through `WindowHandle::raise`, which `cage` declines: it shows one toplevel at a time and keeps the newest on top, so no capture can show two windows and nothing can bring a backgrounded one forward. The palette's rows are proven as values by `palette.rs`'s tables and `Coordinator::raise` is executed by no test at all; an Open Folder focus is observed only as the tab it selects, and `wolf` alone, which selects and raises the current tab, by nothing. Closing the gap needs a `wlr-foreign-toplevel` client, which is a `tools/` deliverable of its own.
 - **`close_commit`'s `DropSubtree` arm.** No smoke closes one of two windows — and on the last window the arm is not merely unobserved but indistinguishable from a no-op, because an empty contribution set means "commit nothing" rather than "commit an empty state" and so cannot write `windows: []`. The rule is covered by its table in `state_seam.rs`.
 - **`close_commit`'s `Skip` arm.** The store no-ops on an identical tree, so a redundant commit on the quit path writes nothing and no observable a smoke has can tell it apart from the correct answer. Same table.
 - **That the close path is what saved the session, rather than the last per-wake commit.** Measured: by the time `:qa` reaches the drain a per-wake commit has already written an identical tree, so the close path's commit and flush are redundant on every existing scenario and no smoke discriminates them. The redundancy is pre-existing rather than introduced. What did establish the routing is a two-step falsifier: disabling the per-wake commit alone leaves both relaunch smokes green, and adding the close-path revert on top reddens both.
@@ -768,7 +787,8 @@ Being scrupulous about this is the point of the section.
 - **The multi-window merge of one accumulator.** N windows run N drain loops over one process-global accumulator, and whichever wakes first after the interval elapses emits the process-wide report. The frame-stats smoke launches one window, and nothing counts a report against the windows that contributed to it.
 - **`wakes/key` is an upper bound no assertion can tighten.** It is a ratio of two counters, and mouse, scroll, resize and out-of-band core notifications all inflate it, so there is no value a smoke could assert it against — that smoke deliberately asserts none.
 - **The readiness file's `layout-pending` condition has no end-to-end falsifier.** Its only falsifier is its unit row in `ready_seam.rs`. No smoke has been measured with the check skipped against a restore realized on each tab's own first wake, so whether any smoke ever waits on it is unknown.
-- **Nothing observes a desktop shell using the installed icon or the desktop entry.** The packaged smokes run under `cage`, which has no shell, no launcher and only its own private session bus. What is shown is that the icons install at the sizes their directories name, that `desktop-file-validate` accepts the entry inside the derivation, and that `Exec` is the absolute wrapped binary carrying no field code and no `MimeType`. That a launcher draws the icon, or associates a running window with the entry, is unobserved.
+- **Nothing observes a desktop shell using the installed icon or the desktop entry.** The packaged smokes run under `cage`, which has no shell, no launcher and only its own private session bus. What is shown is that the icons install at the sizes their directories name, that `desktop-file-validate` accepts the entry inside the derivation, and that `Exec` runs the packaged `wolf` with `%f` for Markdown files and folders. That a launcher draws the icon, associates a running window with the entry, or runs the entry for a file in GNOME Files, is unobserved.
+- **The fill of a named background tab.** Every request here lands in the frontmost window, so no smoke sends `wolf D` from the terminal of an empty background tab; that the fill replaces that tab, not the selected one, rests on `open_folder`'s `current` and [`open_request.rs`](#open_requestrs)'s route.
 - **`StartupWMClass` is tied to nothing.** `app.rs`'s `APP_ID` is a private const, and the desktop entry repeats its value as a literal no test reads — `packaged_layout.rs` retypes the same string for the `Icon` key and the icon filenames and never looks at the class. A renamed application id would break the window-to-entry association with nothing failing anywhere. Closing it needs the id exported from the crate, or an assertion against the built binary's own bytes.
 - **The bundled-face half of the packaged fontconfig is unexercised.** `packaged_binary_renders_typed_text_under_cage` runs with `FONTCONFIG_FILE` scrubbed and reads glyphs back, but the face it renders is `DejaVu Sans Mono`, which the packaged fragment resolves through its `<include>` of the host configuration rather than through its own `<dir>`. `packaged_layout.rs` pins the installed files and the fragment's text; that a packaged launch resolves a bundled face through that directory is not shown.
 - **The lighthouse pixel band has no taken red run.** The isolating edit — leave the tree installed and activatable and change what it paints in the installed copy, so `vim.g.colors_name` still reads `lighthouse` — is written down in the smoke and was not executed, and deleting the tree falsifies the readback four assertions earlier without reaching the band. The orlando band's equivalent recipe was taken, by turning `code_block` off in the installed copy, and reddens that band alone.

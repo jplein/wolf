@@ -10,7 +10,7 @@ This is the GTK 4 / libadwaita front-end: a runnable multi-window application th
 
 Split, close, and focus move are driven by core's layout-intent channel; a divider drag is the `gtk::Paned` handle's own gesture, landing in the pure tree's weights, or for the terminal drawer's divider in the tab's drawer share. Menu items, accelerators, and commands drained from Neovim all resolve through one `gio` action namespace.
 
-Files reach Neovim two ways, and [`README.md`](../crates/wolf-gnome/README.md) states both. What is durable here is that `InputEvent::OpenAt`'s edit and cursor move happen inside one input-pump step, so no other event can interleave between them.
+Files reach Neovim through `InputEvent::Open` and `InputEvent::OpenAt`, and a file from the `wolf` command also through `WolfCore::open_split_left`; [`README.md`](../crates/wolf-gnome/README.md) states each. What is durable here is that `InputEvent::OpenAt`'s edit and cursor move happen inside one input-pump step, so no other event can interleave between them.
 
 ## Platform and build
 
@@ -24,7 +24,7 @@ The binary locates the captive `init.lua` in three branches, in order: the `WOLF
 
 The override is deliberately not existence-checked while the executable-relative guess is, and the asymmetry is the point. A typed override is an instruction rather than a candidate: checking it would turn a typo into a silent fall-through to a different `init.lua`, where the failure that replaces the check is loud — Neovim launched with a missing `-u` never attaches, and the app prints `failed to start core` and opens no window.
 
-This crate also has a package output, `packages.wolf-gnome` in `flake.nix`, whose install layout and the executable-relative constant are one contract rather than two. Its evidence comes from `#[ignore]`d tests that one committed script always runs with the store path exported, not from the default suite, because a Nix builder can run none of them. [`build.md`](../build.md) owns the commands and [`tests/README.md`](../crates/wolf-gnome/tests/README.md) the claims.
+This crate also has a package output, `packages.wolf-gnome` in `flake.nix`, whose install layout and the executable-relative constant are one contract rather than two. So are `bin/wolf` beside `bin/wolf-gnome` and the `wolf` command's launcher, which starts the app it finds beside its own executable. Its evidence comes from `#[ignore]`d tests that one committed script always runs with the store path exported, not from the default suite, because a Nix builder can run none of them. [`build.md`](../build.md) owns the commands and [`tests/README.md`](../crates/wolf-gnome/tests/README.md) the claims.
 
 ## The GUI denylist does not apply here
 
@@ -98,7 +98,7 @@ The trailing edge is undroppable, and the cases that could drop it are answered 
 
 ## The coordinator and its windows
 
-Seven things are process-scoped, each because a second copy would be wrong rather than wasteful: the one `AppStateStore`, the window stacking order, the config read, the `CellMetrics`, the `app.` actions, the launch plans and the readiness probe. [The coordinator and its windows](wolf-gnome/the-coordinator-and-its-windows.md) gives each reason, why restore is positional, and why it maps the windows backmost first, each after the one behind it.
+Eight things are process-scoped, each because a second copy would be wrong rather than wasteful: the one `AppStateStore`, the window stacking order, the config read, the `CellMetrics`, the `app.` actions, the launch plans, the readiness probe and the open channel's listener. [The coordinator and its windows](wolf-gnome/the-coordinator-and-its-windows.md) gives each reason, why restore is positional, why it maps the windows backmost first, each after the one behind it, and how a request from outside Wolf is routed.
 
 ## Window structure
 
