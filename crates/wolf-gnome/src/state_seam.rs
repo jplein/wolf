@@ -532,6 +532,38 @@ pub fn close_commit(shutting_down: bool, other_live_windows: usize) -> CloseComm
     }
 }
 
+/// The restore's present schedule: for each opened window, in build order
+/// (backmost first) with whether it is minimized, the index of the window whose
+/// first paint it waits for, or `None` to be presented at once.
+///
+/// A window that is not minimized waits for the nearest window built before it
+/// that is not minimized, and the first such window is presented at once. Windows
+/// presented in one burst map in no order GTK promises, and a compositor that
+/// focuses each new toplevel turns every map into a focus, so the map order is the
+/// stacking order the next save writes. A window paints its first frame on the one
+/// Wayland connection before the next is presented, so the chain maps them backmost
+/// first.
+///
+/// Every minimized window is presented at once, and nothing waits for one. The
+/// stacking order puts it behind every window that is not minimized whatever its map
+/// order, and whether a window minimized before it maps ever paints is unknown, so
+/// waiting on one could keep every window in front of it unmapped. Presented ahead
+/// of the chain's frontmost, it never takes the focus from that window.
+#[must_use]
+pub fn present_after(minimized: &[bool]) -> Vec<Option<usize>> {
+    let mut behind = None;
+    minimized
+        .iter()
+        .enumerate()
+        .map(|(index, &minimized)| {
+            if minimized {
+                return None;
+            }
+            behind.replace(index)
+        })
+        .collect()
+}
+
 /// One window dimension, validated and rounded, or `None` when it is the unset
 /// sentinel.
 ///

@@ -301,13 +301,16 @@ impl Coordinator {
     /// Restores the whole saved SESSION: every saved window, or exactly one
     /// empty-state window when there is nothing to restore.
     ///
-    /// The plans are frontmost first, and they are built BACKMOST first: a Wayland
-    /// client cannot raise itself and a compositor focuses a newly mapped toplevel,
-    /// so the frontmost window has to be the last one mapped. Every window is built
-    /// and registered here, so no commit sees part of the session, but the frontmost
-    /// is presented only once every other window that is not minimized has painted
-    /// ([`WindowHandle::show_after`]). The stacking order is seeded from the plans
-    /// once every window is built.
+    /// The plans are frontmost first, and every window is built and registered
+    /// BACKMOST first, unpresented, so no commit sees part of the session. The
+    /// stacking order is seeded from the plans before any window is presented.
+    ///
+    /// The windows then map backmost first, each presented only once the one behind
+    /// it has painted ([`state_seam::present_after`], [`WindowHandle::show_after`]). A
+    /// Wayland client cannot raise itself, a compositor may focus each toplevel as it
+    /// maps, and windows presented in one burst map in no promised order, so only a
+    /// chain maps the frontmost last and keeps the others in their saved order.
+    /// Minimized windows are presented at once, outside the chain.
     ///
     /// A window opens when at least one of its tabs' cores starts; one where none
     /// does is skipped and does not abort the others. If none opens at all the
@@ -331,17 +334,12 @@ impl Coordinator {
             Path::is_dir,
         );
 
-        // Backmost first; the frontmost plan, index 0, is built last and presented last.
+        // Backmost first; the frontmost plan, index 0, is built last.
         let mut built: Vec<(WindowHandle, bool)> = Vec::new();
-        let mut front = None;
-        for (index, plan) in plans.iter().enumerate().rev() {
-            let Some(handle) = self.open_window(app.upcast_ref(), plan, index != 0) else {
-                continue;
-            };
-            if index == 0 {
-                front = Some(handle.clone());
+        for plan in plans.iter().rev() {
+            if let Some(handle) = self.open_window(app.upcast_ref(), plan, false) {
+                built.push((handle, plan.minimized));
             }
-            built.push((handle, plan.minimized));
         }
         let seeded: Vec<(WindowId, bool)> = built
             .iter()
@@ -349,13 +347,12 @@ impl Coordinator {
             .map(|(handle, minimized)| (handle.id(), *minimized))
             .collect();
         *self.inner.stacking.borrow_mut() = StackingOrder::seeded(&seeded);
-        if let Some(front) = front {
-            let others: Vec<WindowHandle> = built
-                .iter()
-                .filter(|(handle, minimized)| !minimized && handle.id() != front.id())
-                .map(|(handle, _)| handle.clone())
-                .collect();
-            front.show_after(&others);
+        let minimized: Vec<bool> = built.iter().map(|(_, minimized)| *minimized).collect();
+        for ((handle, _), behind) in built.iter().zip(state_seam::present_after(&minimized)) {
+            match behind {
+                None => handle.show_after(&[]),
+                Some(behind) => handle.show_after(&[built[behind].0.clone()]),
+            }
         }
         let opened: Vec<WindowId> = seeded.iter().map(|(id, _)| *id).collect();
         if opened.is_empty() {
@@ -634,6 +631,10 @@ impl Coordinator {
     /// the application's too, and leaving one up would keep the process alive
     /// after a Quit.
     ///
+    /// Every window still waiting on the restore's present chain has its present
+    /// cancelled first ([`WindowHandle::cancel_present`]): closing an unrealized
+    /// window does nothing, so it would keep its Neovims and map later.
+    ///
     /// Deliberately not `gio::Application::quit()`, which bypasses
     /// `close-request` and leaves every captive Neovim orphaned.
     pub fn quit(&self, app: &gtk::Application) {
@@ -641,6 +642,9 @@ impl Coordinator {
         self.refresh_all();
         self.commit_tree();
         self.flush();
+        for handle in self.handles() {
+            handle.cancel_present();
+        }
         for window in app.windows() {
             window.close();
         }

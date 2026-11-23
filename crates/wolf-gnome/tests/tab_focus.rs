@@ -4,8 +4,9 @@
 //! Pure: no display, no Neovim and no compositor. Every expected value is written out by hand,
 //! never computed by the function under test. Whether `TabsHandle::sync_ui_focus` sends these
 //! edges to the right core is the reload smoke's question, in `smoke_headless/panes.rs`; the
-//! window's activation and deactivation are covered here alone, since under `cage` the window
-//! turns active once and never resigns.
+//! window's activation and deactivation are covered here alone. Under `cage` a window turns
+//! active as it maps and resigns only when another toplevel maps, and no smoke checks what
+//! those edges do.
 
 use wolf_gnome::tabs_ui::{focus_edges, focused_tab, FocusEdge, TabId};
 

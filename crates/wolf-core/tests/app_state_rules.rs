@@ -10,8 +10,9 @@
 //!   an empty edit pane in the same position, a zoom on such a pane or one that would hide
 //!   nothing is dropped, and a focused pane keeps the focus.
 //! - The document `tab_rebuild_spec` renders for the captive Neovim's `wolf_rebuild_layout`:
-//!   its leaves numbered depth-first through nested layouts, as a `PaneRef` counts them, and a
-//!   non-finite weight rendered as `0.0`, so the split keeps its shape.
+//!   its leaves numbered depth-first through nested layouts, as a `PaneRef` counts them, a
+//!   non-finite weight rendered as `0.0`, so the split keeps its shape, and a path holding `"`,
+//!   `\` and a newline kept byte for byte, at the root and under a layout.
 //!
 //! The existence checks run against real files in a tempdir. Windows are built in code, with
 //! directories named after their role (`D` the one asked about, `X` and `Y` others).
@@ -667,5 +668,51 @@ fn a_non_finite_weight_renders_as_zero() {
         paths,
         ["/srv/weights/top.md", "/srv/weights/bottom.md"],
         "the split must keep both panes in order; document: {doc}"
+    );
+}
+
+/// The path of the rebuild document's root leaf, parsed back from `spec`.
+fn root_leaf_path(spec: &str) -> Option<String> {
+    let doc: Value = serde_json::from_str(spec)
+        .unwrap_or_else(|err| panic!("the rebuild document must be JSON: {err}\n{spec}"));
+    object(&doc, "the rebuild document's root")
+        .get("path")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
+#[test]
+fn the_rebuild_document_keeps_a_path_byte_for_byte() {
+    // A Linux file name may hold `"`, `\` and a newline, and one unescaped quote makes
+    // `vim.json.decode` reject the document and the whole restore abort.
+    const NASTY: &str = "/proj/we\"ird\\path\nnewline.md";
+
+    let spec = tab_rebuild_spec(&content(Some(edit(NASTY))))
+        .expect("a tab with a root must render a rebuild document");
+    assert_eq!(
+        root_leaf_path(&spec).as_deref(),
+        Some(NASTY),
+        "a root edit pane's path holding `\"`, `\\` and a newline must parse back byte for byte; \
+         a parse panic means the document is not valid JSON, so the path went out unescaped, and \
+         a different path means a character was dropped or rewritten. Document: {spec}"
+    );
+
+    let nested = content(Some(layout(
+        PaneOrientation::Vertical,
+        vec![0.5, 0.5],
+        vec![edit(NASTY), edit("/proj/plain.md")],
+    )));
+    let spec = tab_rebuild_spec(&nested).expect("a tab with a root must render a rebuild document");
+    let doc: Value = serde_json::from_str(&spec)
+        .unwrap_or_else(|err| panic!("the rebuild document must be JSON: {err}\n{spec}"));
+    let mut leaves = Vec::new();
+    doc_leaves(&doc, &mut leaves);
+    let paths: Vec<&str> = leaves.iter().map(|(p, _)| p.as_str()).collect();
+    assert_eq!(
+        paths,
+        [NASTY, "/proj/plain.md"],
+        "under a layout the same path must parse back byte for byte, ahead of its untouched \
+         sibling; a changed first path means the escaping differs inside a split, and a changed \
+         second one means the first leaf's escaping spilled into the next. Document: {doc}"
     );
 }

@@ -14,6 +14,8 @@ The relaunch smokes run two sequential app launches inside one `cage`, so each h
 - `16`: run 1 wrote no `wolf.sqlite` (the single-pane and two-window smokes).
 - `21` to `31`: the two-window smoke's own, in `TWOWIN_SCENARIO`'s table.
 
+The three-window smoke runs one launch, so its `11`, `12`, `13` and `16` are run 1's codes above, with `12` and `13` for the `Ctrl+Shift+Q` quit. Its own `21` is a count other than three live `nvim` children once the app is ready, and `wait_ready`'s `40` covers a chain of presents that stalls, since readiness waits for every launch window to paint.
+
 Every observable is polled rather than slept for. Run 1 is reaped with `wait` so its exit status is checked, because "the process is gone" is equally true of a clean shutdown and of a panic in the GTK main loop.
 
 A save is read from a copy the prelude's `freeze_state` makes after the run that wrote it has exited. The store creates `wolf.sqlite` at its first open, so the file existing proves no save; that the save holds windows is asserted on the Rust side, through `AppStateStore` on the copy.
@@ -27,6 +29,8 @@ The second window opens from inside the one process, through the palette (Ctrl+S
 Window A is opened first and window B second, and B is the window focused last, so the registry order and the stacking order differ, and a save in either order is told apart. The restore maps the saved frontmost window last, and under `cage` the last-mapped window is the one keys reach, so run 2's readback says which window came back in front.
 
 Every tab is in the one project, B's after a typed `:cd`, so the project state is the rule for a directory open in two windows. Each tab shows a file no other tab shows, which is what lets the saved panes say which tab is where. Under `shortmess+=A` a swap a live Neovim owns raises no notice, so tabs sharing a project load their files quietly.
+
+The three-window smoke plants its state so that the order the save is checked against comes from no code under test, and one launch suffices. The Rust side submits the window state through `AppStateStore` on the smoke's state directory, flushes and drops the store, and reads it back before the launch. Each planted tab's directory is the canonicalized project, so the launch cwd is taken as held and no window is added in front.
 
 The fixture names may be the strings the assertions compare, because no page is read: the strings come from the saved panes' paths and from the captive Neovim's own `getcwd()`, which no sidebar row or toast can write. The names are still in `RELAUNCH_FIXTURE_NAMES`, and the exemption block of `restore_fixture_names_cannot_satisfy_their_own_assertions` states the exemption and the crossing executably.
 

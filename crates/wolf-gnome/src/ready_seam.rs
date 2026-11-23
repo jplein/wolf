@@ -28,8 +28,9 @@
 //!   a virtual keyboard exists, and a key sent before the client has bound one has
 //!   nothing to land on, so the first key of the first keyboard is lost. The harness
 //!   primes the seat with a key-free `wtype ""`; this conjunct is the client-side
-//!   half of that handshake. `gtk::Window::is_active` is no substitute: under `cage`
-//!   it turns true only after a real key arrives.
+//!   half of that handshake. `gtk::Window::is_active` is no substitute: `cage`
+//!   activates every toplevel as it maps, before it looks for a keyboard, so an active
+//!   window may have no keyboard to receive from.
 //!
 //! Only the last-mapped window must be sized and keyboard-ready. An older window is covered
 //! and may get no frame callbacks at all (inferred from wlroots' occlusion handling,

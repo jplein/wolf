@@ -643,7 +643,9 @@ fn stale_state_json_files_are_removed_at_launch() {
     for name in LEGACY_STATE_NAMES {
         assert!(
             !state.path().join(name).exists(),
-            "opening the application-state store must delete the legacy {name}; it is still              there, so the open's removal list does not name it, or the store's open skips the              removal"
+            "opening the application-state store must delete the legacy {name}; it is still \
+             there, so the open's removal list does not name it, or the store's open skips the \
+             removal"
         );
     }
     assert!(
@@ -653,7 +655,8 @@ fn stale_state_json_files_are_removed_at_launch() {
     let saved = store.window_state();
     assert!(
         saved.is_none(),
-        "a fresh wolf.sqlite must hold no window state; it holds {saved:?}, which can only have          been imported from the legacy state file"
+        "a fresh wolf.sqlite must hold no window state; it holds {saved:?}, which can only have \
+         been imported from the legacy state file"
     );
 }
 

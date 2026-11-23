@@ -55,9 +55,10 @@ use super::restore::{
     RESTORE_OCR_BRAVO, RESTORE_OCR_CHARLIE, RESTORE_READBACK_NAME, SOLO_DECOY_FILE, SOLO_FILE,
     SOLO_OCR_ABSENT, SOLO_OCR_PRESENT, SOLO_READBACK_NAME, STALE_STATE_FILE,
     STALE_STATE_READBACK_NAME, TABS_RESTORE_FILES, TABS_RESTORE_FILE_ONE, TABS_RESTORE_FILE_THREE,
-    TABS_RESTORE_FILE_TWO, TABS_RESTORE_READBACK_NAME, TWOWIN_A_FIRST_FILE, TWOWIN_A_LEFT_FILE,
-    TWOWIN_A_ZOOMED_FILE, TWOWIN_B_ACTIVE_FILE, TWOWIN_B_FIRST_FILE, TWOWIN_NEW_WINDOW_QUERY,
-    TWOWIN_READBACK_B_NAME, TWOWIN_READBACK_R2_NAME,
+    TABS_RESTORE_FILE_TWO, TABS_RESTORE_READBACK_NAME, THREEWIN_A_FILE, THREEWIN_B_FILE,
+    THREEWIN_C_FILE, TWOWIN_A_FIRST_FILE, TWOWIN_A_LEFT_FILE, TWOWIN_A_ZOOMED_FILE,
+    TWOWIN_B_ACTIVE_FILE, TWOWIN_B_FIRST_FILE, TWOWIN_NEW_WINDOW_QUERY, TWOWIN_READBACK_B_NAME,
+    TWOWIN_READBACK_R2_NAME,
 };
 use super::search_toggles::{
     ST_ALL_MD_FILE, ST_ALL_TXT_FILE, ST_CASE_LOWER_FILE, ST_CASE_UPPER_FILE, ST_OCR_ALL_MD,
@@ -204,6 +205,9 @@ use super::*;
 ///   observables are whether two planted files survive the launch, a readback the
 ///   Neovim writes about itself and a frozen state database. Its fixture and readback
 ///   are registered in [`RELAUNCH_FIXTURE_NAMES`] for the generic loop's sake.
+/// * `three_windows_restore_in_their_stacking_order_under_cage` captures nothing: its
+///   observables are the count of live `nvim` children and a frozen state database. Its
+///   fixtures are registered in [`RELAUNCH_FIXTURE_NAMES`] for the generic loop's sake.
 /// * `config_font_size_changes_the_grid_under_cage` likewise captures no PNG: its
 ///   two observables are the `winwidth(0)` integers the captive Neovim writes about
 ///   its own grid, so no fixture filename can help or hurt it.
@@ -915,6 +919,22 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         STALE_STATE_READBACK_NAME,
         "STALE_STATE_READBACK_NAME",
         "a_stale_state_json_is_deleted_at_launch_under_cage",
+    ),
+    // Three-window fixtures: no OCR runs, so these rows serve the generic loop only.
+    (
+        THREEWIN_A_FILE,
+        "THREEWIN_A_FILE",
+        "three_windows_restore_in_their_stacking_order_under_cage",
+    ),
+    (
+        THREEWIN_B_FILE,
+        "THREEWIN_B_FILE",
+        "three_windows_restore_in_their_stacking_order_under_cage",
+    ),
+    (
+        THREEWIN_C_FILE,
+        "THREEWIN_C_FILE",
+        "three_windows_restore_in_their_stacking_order_under_cage",
     ),
     // Three-tab fixtures and readbacks: no OCR runs, so these rows serve the generic loop only; an
     // exemption block in the guard covers their names.

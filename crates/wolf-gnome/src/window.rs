@@ -199,9 +199,7 @@ impl WindowHandle {
 
     /// Presents this window, which [`WindowParts::present`] deferred, once each of
     /// `others` has painted its first frame or been unrealized, so this window maps
-    /// after them. A compositor focuses the toplevel mapped last, and a Wayland
-    /// client cannot raise itself, so this is how a restore puts its frontmost window
-    /// in front. Windows built in one burst map in no order GTK promises.
+    /// after each of them. Windows built in one burst map in no order GTK promises.
     pub fn show_after(&self, others: &[WindowHandle]) {
         let remaining = Rc::new(Cell::new(others.len()));
         if others.is_empty() {
@@ -219,6 +217,19 @@ impl WindowHandle {
                     }
                 }
             }));
+        }
+    }
+
+    /// Drops this window's deferred present, so it never runs, and realizes the
+    /// window when it is not, mapping nothing. A window already presented is left
+    /// alone.
+    ///
+    /// `close()` returns at once on an unrealized window, so without this a window
+    /// still waiting at a quit would keep its Neovims and be presented later.
+    pub fn cancel_present(&self) {
+        let show = self.inner.show.borrow_mut().take();
+        if show.is_some() && !self.inner.window.is_realized() {
+            gtk::prelude::WidgetExt::realize(&self.inner.window);
         }
     }
 

@@ -1,6 +1,7 @@
 //! Session-restore smokes: two launches in one cage, the second reading what the first
 //! saved, for the pane layout, a lone file, tabs, two windows and dragged divider weights;
-//! and one launch over a stale `state.json`, which must be deleted and not restored.
+//! one launch over a stale `state.json`, which must be deleted and not restored; and one
+//! launch over a planted state of three windows, which must keep their stacking order.
 
 use super::pointer::{
     divider_seed_span, head_width_ratio, BASELINE_TOLERANCE_CELLS, BISECT_STEPS, MIN_DRAG_CELLS,
@@ -8,6 +9,7 @@ use super::pointer::{
 };
 use super::recovery::with_nvim_pid_helper;
 use super::*;
+use wolf_core::app_state::{Frame, Tab, TabContent};
 
 /// Pixels the single divider is dragged right in
 /// [`dragged_divider_weights_survive_relaunch_under_cage`].
@@ -2639,16 +2641,19 @@ fn window_summary(window: &Window) -> WindowSummary {
 /// so this smoke's save would be right by either route; that redundancy is recorded
 /// in `tests/README.md`.
 ///
+/// **It cannot see the restore's seed of the stacking order.** `cage` focuses each window
+/// as it maps, so those focuses order the save with or without the seed.
+///
 /// ## Falsifiers (each run alone)
 ///
 /// | # | edit | predicted red | measured |
 /// | --- | --- | --- | --- |
-/// | S1a | in `state_seam::window_state`, keep the input order | assertion 1: window 0 is A | — |
-/// | S1b | delete the `on_window_focused` call in `window.rs`'s `is-active` handler | assertion 1: window 0 is A | — |
-/// | S1c | in `restore_session`, build the plans front to back | assertion 4: the readback names `waright.md` | — |
-/// | S1d | in `window::build`, select the first opened tab | assertion 4: the readback names `wbfirst.md` | — |
-/// | S1e | in `layout_snapshot`, answer `zoomed: None` | assertion 2: A's second tab saved unzoomed | — |
-/// | S1f | in `apply_layout_rebuild`, skip the `ZoomEvent::Restore` | assertion 5: run 2 saved A's second tab unzoomed | — |
+/// | S1a | in `state_seam::window_state`, keep the input order | assertion 1: window 0 is A | Red at assertion 1. |
+/// | S1b | delete the `on_window_focused` call in `window.rs`'s `is-active` handler | assertion 1: window 0 is A | Red at assertion 1. |
+/// | S1c | in `restore_session`, present every window at once, ignoring `present_after` | assertion 4: the readback names `waright.md` or `waleft.md` | Red at assertion 4, naming `waright.md`. |
+/// | S1d | in `window::build`, select the first opened tab | assertion 4: the readback names `wbfirst.md` | Red at assertion 4. |
+/// | S1e | in `layout_snapshot`, answer `zoomed: None` | assertion 2: A's second tab saved unzoomed | Red at assertion 2. |
+/// | S1f | in `apply_layout_rebuild`, skip the `ZoomEvent::Restore` | assertion 5: run 2 saved A's second tab unzoomed | Red at assertion 5. |
 /// | F1 | in `command_action.rs`, restore `Command::NewWindow => UiAction::Deferred(..)` | exit 21, with a count of 2 | Not re-measured since the app-state switch. |
 /// | F3 | in `coordinator.rs`'s `open_new_window`, pass the process cwd to `restore_plans` | exit 22 | Not re-measured since the app-state switch. |
 /// | step 6 | in `coordinator.rs`, delete the body of `install_app_actions` | exit 12 | Not re-measured since the app-state switch. |
@@ -2912,9 +2917,8 @@ fn two_windows_two_neovims_and_two_saved_sessions_under_cage() {
          ((directory, panes, zoomed) per tab, active tab)). A's second tab unzoomed here alone \
          means run 2 restored the layout but not its zoom, so its own gather saved it \
          unzoomed: `apply_layout_rebuild` applied no `ZoomEvent::Restore`. The windows in the \
-         other order means run 2's stacking order was not seeded from the plans, or the \
-         window mapped last was not the saved frontmost. A different active tab means the \
-         restore selected another tab. Frozen copies: {} and {}",
+         other order means the window mapped last was not the saved frontmost. A different \
+         active tab means the restore selected another tab. Frozen copies: {} and {}",
         run1_state_dir.display(),
         run2_state_dir.display()
     );
@@ -3162,6 +3166,261 @@ fn a_stale_state_json_is_deleted_at_launch_under_cage() {
         "{SMOKE}: the save at the quit shows {STALE_STATE_FILE} in the (window, tab)s \
          {planted:?}. No step of the scenario opens it, so the planted state.json was imported. \
          Frozen copy: {}",
+        frozen.display()
+    );
+}
+
+// Three-window fixtures: no capture is taken, so the names serve the generic fixture loop only.
+
+/// The file of the planted backmost window A's one pane.
+pub(crate) const THREEWIN_A_FILE: &str = "wsa.md";
+
+/// The file of the planted middle window B's one pane.
+pub(crate) const THREEWIN_B_FILE: &str = "wsb.md";
+
+/// The file of the planted frontmost window C's one pane.
+pub(crate) const THREEWIN_C_FILE: &str = "wsc.md";
+
+/// The three fixtures with the heading written into each. Nothing reads a heading: the
+/// bodies exist only so each planted pane restores on a real file.
+const THREEWIN_FIXTURES: [(&str, &str); 3] = [
+    (THREEWIN_A_FILE, "# STACKALFA"),
+    (THREEWIN_B_FILE, "# STACKBRAVO"),
+    (THREEWIN_C_FILE, "# STACKCHARLIE"),
+];
+
+/// How long the planting's flush may take before the smoke gives up on it.
+const THREEWIN_PLANT_FLUSH: Duration = Duration::from_secs(5);
+
+/// The scenario of [`three_windows_restore_in_their_stacking_order_under_cage`]: one launch
+/// over a planted three-window state, a count of its Neovims, the `Ctrl+Shift+Q` quit and a
+/// frozen copy of the save it leaves.
+///
+/// ## Exit codes
+///
+/// The scenario calls only `wait_nvim_count` of [`with_nvim_pid_helper`]'s fragment, which
+/// never exits on its own, so that fragment's `16` is unreachable and `16` means what this
+/// table says.
+///
+/// | code | meaning |
+/// | --- | --- |
+/// | `11` | the app died before it was ready for input |
+/// | `12` | the app was still alive after `Ctrl+Shift+Q` |
+/// | `13` | the app exited non-zero |
+/// | `16` | the app left no `wolf.sqlite` |
+/// | `21` | the app did not have exactly three live `nvim` children once ready |
+/// | `40` | the app never reported ready, which a chain of presents that stalls also gives |
+const THREEWIN_SCENARIO: &str = r#"
+set -eu
+
+# FILE_TRIES and WAIT_INTERVAL are also `wait_nvim_count`'s budget, since it reads them.
+WAIT_INTERVAL=0.2
+QUIT_TRIES=75
+FILE_TRIES=100
+
+cleanup() {
+    set +e
+    if [ -n "${app_pid:-}" ]; then
+        kill "$app_pid" 2>/dev/null
+        wait "$app_pid" 2>/dev/null
+    fi
+}
+trap cleanup EXIT INT TERM HUP
+
+"$WOLF_BIN" &
+app_pid=$!
+# Ready only once every window has painted, so a chain whose next present never runs exits 40.
+wait_ready "$app_pid" 11 "wolf-gnome three-window smoke"
+
+# One tab per planted window; a fourth means a launch window was added in front of them.
+wait_nvim_count 3 21 "after the restore of the three planted windows"
+
+# C, mapped last, holds the keyboard focus, so the quit reaches it.
+wtype -M ctrl -M shift -k q -m shift -m ctrl
+tries=0
+gone=0
+while [ "$tries" -lt "$QUIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        gone=1
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+if [ "$gone" -ne 1 ]; then
+    echo "wolf-gnome three-window smoke: the app (pid $app_pid) is still alive after Ctrl+Shift+Q." >&2
+    echo "  Suspect Coordinator::quit not closing a window, such as one whose present was" >&2
+    echo "  still deferred when the close loop reached it." >&2
+    exit 12
+fi
+rc=0
+wait "$app_pid" || rc=$?
+if [ "$rc" -ne 0 ]; then
+    echo "wolf-gnome three-window smoke: the app (pid $app_pid) exited $rc, not 0." >&2
+    exit 13
+fi
+app_pid=
+
+if ! freeze_state "$THREEWIN_STATE_SRC" "$THREEWIN_STATE_COPY"; then
+    echo "wolf-gnome three-window smoke: the app left no wolf.sqlite in $THREEWIN_STATE_SRC." >&2
+    exit 16
+fi
+
+exit 0
+"#;
+
+/// **Three planted windows come back in their stacking order: the save the relaunch leaves
+/// lists them frontmost first, as they were planted.**
+///
+/// One launch in one cage, over a state the Rust side plants through `AppStateStore`: three
+/// windows, frontmost first C, B and A, each with one tab in the project on its own fixture.
+/// The scenario waits until the app is ready, counts three Neovims, quits with
+/// `Ctrl+Shift+Q` and freezes the save.
+///
+/// ## Why the order is observable
+///
+/// The restore builds the windows backmost first, A, B, C, and presents each only after
+/// the one behind it has painted. `cage` focuses every toplevel as it maps (`view_map` in
+/// cage's `view.c`), so each map is a focus, and the save lists the windows in reverse map
+/// order. The planted order, C, B, A, therefore comes back only when they mapped A, B, C.
+/// The quit key reaches C, the window mapped last.
+///
+/// ## Premises
+///
+/// - Reading the planted state back gives the three windows in the planted order. Asserted
+///   before the launch.
+/// - `wait_ready` passing means all three windows painted, since readiness needs a painted
+///   frame of every launch window. A chain of presents that stalls therefore exits 40.
+///
+/// ## What it does NOT prove
+///
+/// **It cannot see the restore's seed of the stacking order.** Each map's focus moves that
+/// window to the front, so the save is the same with or without the seed. `stacking.rs`
+/// covers the seed rule, and nothing covers its install.
+///
+/// **It does not show the order on mutter.** Whether mutter focuses each restored window as
+/// it maps is a person check.
+///
+/// **Nothing here minimizes a window**, for S1's reason.
+///
+/// ## Falsifiers (each run alone)
+///
+/// Both reds rest on the map order of a burst of presents, which GTK does not promise.
+///
+/// | # | edit | predicted red | measured |
+/// | --- | --- | --- | --- |
+/// | S3b | in `restore_session`, present every window at once (`show_after(&[])` for each), ignoring `present_after` | the save lists an order other than the planted one, such as `[wsa, wsb, wsc]` | Red: the save lists `[wsa, wsb, wsc]`. |
+/// | S3c | in `restore_session`, ignore `present_after`: present every built window but the last with `show_after(&[])`, and the last, the frontmost, with `show_after` of every other built window that is not minimized | the save lists `[wsc, wsa, wsb]` | Red: the save lists `[wsc, wsa, wsb]`. |
+#[test]
+fn three_windows_restore_in_their_stacking_order_under_cage() {
+    const SMOKE: &str = "three_windows_restore_in_their_stacking_order_under_cage";
+
+    let runtime_dir = require_smoke_env();
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // Canonical, so the planted directory holds the launch cwd and no launch window is added.
+    let cwd = make_temp_cwd();
+    write_relaunch_fixtures(SMOKE, &cwd, &THREEWIN_FIXTURES);
+    let project = std::fs::canonicalize(&cwd)
+        .unwrap_or_else(|e| panic!("{SMOKE}: failed to canonicalize {}: {e}", cwd.display()));
+    let project_str = project
+        .to_str()
+        .unwrap_or_else(|| panic!("{SMOKE}: the temp cwd {} is not UTF-8", cwd.display()))
+        .to_owned();
+
+    let planted_window = |file: &str| Window {
+        frame: Frame {
+            x: None,
+            y: None,
+            width: 800.0,
+            height: 600.0,
+        },
+        active_tab: 0,
+        minimized: false,
+        tabs: vec![Tab {
+            directory: project_str.clone(),
+            content: TabContent {
+                root: Some(Node::Pane(Pane::Edit {
+                    path: project.join(file).to_string_lossy().into_owned(),
+                    cursor: None,
+                    top_line: None,
+                })),
+                ..TabContent::default()
+            },
+        }],
+    };
+    let planted = WindowState {
+        windows: vec![
+            planted_window(THREEWIN_C_FILE),
+            planted_window(THREEWIN_B_FILE),
+            planted_window(THREEWIN_A_FILE),
+        ],
+    };
+
+    let smoke_state = smoke_state_dir(&cwd);
+    {
+        let store = AppStateStore::open(&smoke_state);
+        store.submit(planted.clone(), vec![vec![0]; 3]);
+        assert!(
+            store.flush(THREEWIN_PLANT_FLUSH),
+            "{SMOKE}: planting the three-window state in {} did not flush within \
+             {THREEWIN_PLANT_FLUSH:?}, so the launch would restore whatever the file holds",
+            smoke_state.display()
+        );
+    }
+    assert_eq!(
+        AppStateStore::open(&smoke_state).window_state().as_ref(),
+        Some(&planted),
+        "{SMOKE}: premise: the planted window state must read back as planted, C, B, A; \
+         otherwise the order the save is compared with is not the one the launch restores"
+    );
+
+    let frozen = frozen_state_dir(&runtime_dir, "wolf_gnome_threewin_state", SMOKE);
+    let scenario = with_nvim_pid_helper(THREEWIN_SCENARIO);
+    let status = cage_command(&scenario, &cwd, &runtime_dir)
+        .env("WOLF_BIN", bin)
+        .env("THREEWIN_STATE_SRC", &smoke_state)
+        .env("THREEWIN_STATE_COPY", &frozen)
+        .status()
+        .expect("failed to spawn `cage` for the headless three-window scenario");
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage three-window scenario exited unsuccessfully ({status}). Exit 11: the \
+         app died before it was ready. Exit 40: it never reported ready, which a window whose \
+         deferred present never ran gives, since readiness waits for every window to paint. \
+         Exit 21: the launch did not run exactly three Neovims, so the restore lost a planted \
+         window, or a launch window was added because the cwd was not taken as held. Exit 12 or \
+         13: the quit hung or was not clean. Exit 16: the app left no wolf.sqlite in {}.",
+        smoke_state.display()
+    );
+
+    let saved = frozen_window_state(&frozen, SMOKE, "the save at the quit");
+    let order: Vec<Vec<Option<String>>> = saved
+        .windows
+        .iter()
+        .map(|window| {
+            window
+                .tabs
+                .iter()
+                .filter_map(|tab| tab.content.root.as_ref())
+                .flat_map(pane_tails)
+                .collect()
+        })
+        .collect();
+    let want: Vec<Vec<Option<String>>> = [THREEWIN_C_FILE, THREEWIN_B_FILE, THREEWIN_A_FILE]
+        .iter()
+        .map(|file| vec![Some((*file).to_owned())])
+        .collect();
+    assert_eq!(
+        order,
+        want,
+        "{SMOKE}: the save at the quit lists the windows by their panes' files as {order:?}; want \
+         {want:?}, the planted order. Under `cage` every map is a focus, so any other order means \
+         the windows did not map backmost first, each after the one behind it: the restore's \
+         chain of presents is broken. [wsa, wsb, wsc] is what presenting every window at once \
+         gives, the windows mapping front to back, and [wsc, wsa, wsb] is what presenting the \
+         back windows in one burst ahead of C gives. Fewer than three windows means the restore \
+         lost one. Frozen copy: {}",
         frozen.display()
     );
 }

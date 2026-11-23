@@ -1,7 +1,7 @@
 //! Table-driven tests for the application-state seam of `wolf_gnome::state_seam`: the launch
 //! plans `restore_plans` makes of a saved `wolf_core::app_state::WindowState`
 //! (`specs/application-state.md` §5), and the entries the save side builds of the live windows
-//! and tabs (§2 and §4).
+//! and tabs (§2 and §4), and the schedule `present_after` gives a restore's presents.
 //!
 //! Pure: no display, no Neovim and no filesystem. `is_dir` answers from a fixed list, so a
 //! directory is "missing" by not being on it, and every expected value is written out by hand.
@@ -18,7 +18,7 @@ use wolf_core::app_state::{
 use wolf_gnome::coordinator::WindowId;
 use wolf_gnome::stacking::{StackingOrder, TabRecency};
 use wolf_gnome::state_seam::{
-    restore_plans, seeded_tab, tab_entry, window_entry, window_state, RestorePlan,
+    present_after, restore_plans, seeded_tab, tab_entry, window_entry, window_state, RestorePlan,
 };
 use wolf_gnome::tabs_ui::TabId;
 
@@ -622,5 +622,46 @@ fn a_restored_tab_contributes_its_saved_tab() {
         seeded_tab(None, true),
         None,
         "a tab with no saved tab has no seed"
+    );
+}
+
+/// G7a. Input and output are in build order, backmost first; `Some(j)` waits for window `j`.
+#[test]
+fn restored_windows_present_backmost_first_each_after_the_one_behind() {
+    assert_eq!(
+        present_after(&[]),
+        Vec::<Option<usize>>::new(),
+        "no window has nothing to schedule"
+    );
+    assert_eq!(
+        present_after(&[false]),
+        [None],
+        "a lone window must be presented at once; Some(0) waits on itself and never maps"
+    );
+    assert_eq!(
+        present_after(&[false, false, false]),
+        [None, Some(0), Some(1)],
+        "each window must wait for the one built just before it, so the three map backmost \
+         first. [None, None, Some(1)] is a burst of the back windows, which map in no promised \
+         order; [None, Some(0), Some(0)] lets window 2 map before window 1"
+    );
+}
+
+/// G7b.
+#[test]
+fn a_minimized_window_is_presented_at_once_and_nothing_waits_for_it() {
+    assert_eq!(
+        present_after(&[true, false, false]),
+        [None, None, Some(1)],
+        "a minimized backmost window must be presented at once, and window 1, the first not \
+         minimized, must too; Some(0) for window 1 waits on a minimized window that may never \
+         paint, which would keep every window in front of it unmapped"
+    );
+    assert_eq!(
+        present_after(&[false, true, false]),
+        [None, None, Some(0)],
+        "the minimized window 1 must be presented at once, and window 2 must wait for window 0, \
+         the nearest before it that is not minimized; Some(1) for window 2 waits on the \
+         minimized window, and Some(0) for window 1 chains a minimized window"
     );
 }
