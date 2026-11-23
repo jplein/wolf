@@ -430,18 +430,17 @@ Purpose: the pure, GTK-free n-ary pane-layout tree behind the split-panes UI, mi
 
 **Public API**
 
-- `PaneTree::split(target, new_pane, orientation)` is a no-op on a non-leaf target, and `remove(pane)` on the last pane, so the tree is never empty.
+- `PaneTree::split(target, new_pane, orientation)` is a no-op on a non-leaf target, and `remove(pane)` on the last pane, so the tree is never empty. `split_root_left(new_pane)` is the whole-tab split of [§5.2](../../../specs/cli-and-file-open.md#52-choosing-the-pane).
 - `PaneTree::leaves()` and `pane_rects(w, h)` — the same deterministic depth-first order; the rects tile the bounds exactly.
-- `PaneTree::neighbor(from, dir, w, h)` — the nearest pane in `dir` overlapping `from` on the cross axis.
-- `PaneTree::layout()` and `from_layout(&PaneLayout)` — a read-only mirror for the widget layer and its inverse; the frame type stays private.
+- `PaneTree::layout()` and `from_layout(&PaneLayout)` — a read-only mirror for the widget layer and its inverse.
 - `PaneTree::divider_fraction(path, boundary)` and `set_divider_fraction(path, boundary, f)` — one divider, addressed by its split's path and the child it follows; the fraction is that child's share of the whole remainder, per [Pane weights and dividers](../../../notes/wolf-gnome/pane-weights-and-dividers.md).
 - `Orientation` — `Vertical` divides width, `Horizontal` height, matching `wolf_core::SplitOrientation`.
 
 **Decisions**
 
-- A split whose orientation matches its containing frame inserts a flat sibling and re-equalizes the row; only a perpendicular split nests. A binary always-nest model turns a third same-orientation split into 25/25/50, starving the pre-existing pane.
+- A split matching its containing frame's orientation inserts a flat sibling and re-equalizes the row; only a perpendicular one nests. So `split_root_left` gives a `Vertical` root a flat first child and wraps any other at halves. Always nesting turns a third same-orientation split into 25/25/50, starving the older pane.
 - `remove` normalizes bottom-up — flatten same-orientation children, collapse a one-child split, re-equalize — so the tree stays canonical, matching Neovim's `equalalways`.
-- Cross-axis overlap must be strictly positive within `NEIGHBOR_EPS`, so a shared edge never counts and a 2x2 grid is unambiguous.
+- `PaneTree::neighbor`'s cross-axis overlap must be strictly positive within `NEIGHBOR_EPS`, so a shared edge never counts and a 2x2 grid is unambiguous.
 - `from_layout` rebuilds verbatim and validates rather than repairs, because the restore path zips Neovim window handles onto its leaves by index; a malformed split reaching the widget builder panics.
 
 #### `lib.rs`
@@ -666,7 +665,7 @@ Purpose: the pure, GTK-free Zoom Pane rules: which pane each event leaves zoomed
 
 **Gotchas**
 
-- `pane_view.rs` applies `Split` and `DrawerOpen` after the guards that drop a split of the drawer or a second drawer, so a dropped one keeps the zoom. `FocusMove` comes from a chord and from Neovim's own window change. A restart unzooms; a relaunch re-zooms.
+- `pane_view.rs` applies `Split` and `DrawerOpen` after the guards that drop a split of the drawer or a second drawer, so a dropped one keeps the zoom. `OpenFile`, which unzooms like them, it applies only when `wolf_core::choose_pane` answers `unzoom`. A restart unzooms; a relaunch re-zooms.
 
 #### `persistence.rs`
 
@@ -1012,23 +1011,22 @@ Purpose: the GTK glue for native tabs — an `adw::TabBar` over an `adw::TabView
 **Public API**
 
 - `build(TabsParts) -> TabsHandle` — no page exists until `open_tab`.
-- `TabsHandle::open_tab(TabParts) -> Option<TabHandle>` — starts its core and selects it; `None` after one message. `replace(old, parts)` does so at `old`'s position, then closes `old`; hold no core borrow across it.
-- `select`, `selected`, `selected_core`, `core_source`, `entries`, `len`, `focus_target`, `shutdown_all`, `view_widget`, `bar_widget`.
-- `seed_recency()`, `recency()`.
-- `connect_selected`, given the tab left, `connect_wake`, every drain's body, and `connect_closing`, before a closing tab's shutdown.
+- `TabsHandle::open_tab(TabParts) -> Option<TabHandle>` — starts its core and selects it, or logs once. `replace(old, parts)` does so in `old`'s place; hold no core borrow across it.
+- `select`, `selected`, `selected_core`, `core_source`, `entries`, `len`, `focus_target`, `shutdown_all`, `view_widget`, `bar_widget`, `seed_recency`, `recency`.
+- `connect_selected`, given the tab left; `connect_wake`; `connect_closing`, before a closing tab's shutdown.
 - `sync_ui_focus(window_active)`, the `:checktime` trigger; `active_terminal()` and `sync_terminal_focus(window_active)` ([how](../../../notes/wolf-gnome/terminal-panes.md)).
-- `TabHandle`'s `core`, `liveness`, `restart`, `wake`, `refresh`, `capture_viewports` and `shutdown`; its `set_empty`, `is_empty`, `wolf_tab_id`, `sidebar_shown`, `record_sidebar`, `sidebar_page`, `search_fields`, `launch_cwd` and `live_directory`; `CoreSource` and `with_core`.
+- `TabHandle`'s `core`, `liveness`, `restart`, `wake`, `refresh`, `capture_viewports`, `shutdown`, `set_empty`, `hide_empty_state`, `is_empty`, `wolf_tab_id`, `launch_cwd`, `live_directory` and sidebar accessors; `CoreSource` and `with_core`.
 
 **Decisions**
 
-- A tab's wake channel exists before its core starts, so the startup flush's wake is queued, not lost.
+- A tab's wake channel exists before its core starts, so the startup flush's wake is queued, not lost. The core's [tab ID](../../../specs/cli-and-file-open.md#3-tab-ids) is set first, so no terminal session lacks it.
 - Window-level widgets take a `CoreSource`, never a cell, stale after a switch.
 - `close-page` is a veto: every arm must answer `close_page_finish` and return `Propagation::Stop`, or the page never leaves. Closing the last page closes the window, so `replace` opens first, keeping `old` when that fails.
 - Both handlers and every drain hold only `Weak`s: a strong reference from one the view or the main loop owns leaks every tab's pane view.
 
 **Gotchas**
 
-- `entries` is insertion order, not page order; callers needing the user's arrangement pair each entry with `TabHandle::page_position`.
+- `entries` is insertion order, not page order; pair each with `TabHandle::page_position` for the user's arrangement.
 
 #### `tabs_ui.rs`
 

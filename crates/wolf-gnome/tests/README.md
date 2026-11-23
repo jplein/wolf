@@ -277,7 +277,7 @@ The other files below cover what a seam cannot reach: a real Neovim, a real wind
 **Covers**
 
 - The crate root and shared harness of the `smoke_headless` binary, whose smokes launch the built application under `cage` and assert on OCR, raw pixels, Neovim readbacks, files on disk or the exit status. Each feature's smokes are a module beside it. Its `RESIZE_OUTPUT_FRAGMENT` is how a smoke resizes the window, under [Smoke conventions](#smoke-conventions).
-- The harness guards: `cage` spawns only through `cage_command`, each cage is isolated from the host session, `WOLF_TAB_ID` included, the slots bound concurrency, every launch waits for readiness, the appearance pin holds, and the column cap cannot bind at the OCR geometry.
+- The harness guards: `cage` spawns only through `cage_command`, each cage is isolated from the host session, the slots bound concurrency, every launch waits for readiness, the appearance pin holds, and the column cap cannot bind at the OCR geometry.
 
 **Decisions**
 
