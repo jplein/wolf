@@ -585,8 +585,9 @@ const PS_WHEEL_DETENTS: usize = 10;
 /// never applied, or one clamped to an end, is told apart from the one saved.
 const PS_SCROLL_RANGE: std::ops::RangeInclusive<f64> = 0.05..=0.95;
 
-/// How far run 2's saved scroll may be from run 1's.
-const PS_SCROLL_TOLERANCE: f64 = 0.02;
+/// How many more detents run 2 wheels the restored page by: half of [`PS_WHEEL_DETENTS`], so a
+/// seed left in place, a page left at the top and a restored page each give a different reading.
+const PS_RESTORE_DETENTS: usize = 5;
 
 /// The body of [`PS_FILE`]: [`PS_PARAGRAPHS`] numbered paragraphs.
 fn ps_body() -> String {
@@ -603,8 +604,8 @@ const PS_EXITS: std::ops::RangeInclusive<i32> = 120..=129;
 const PS_CODES: &str = "Exit 120: Neovim did not answer after the wheel, so keys went to the \
      web view. 122: run 1 outlived `:WolfCloseWindow`. 123: run 1 exited non-zero. 124: no \
      wolf.sqlite after the close. 125: run 2 died before it was ready. 126: run 2's Neovim did \
-     not answer. 127: run 2 outlived `:qa`. 128: run 2 exited non-zero. 129: no wolf.sqlite \
-     after run 2's quit.";
+     not answer after the wheel. 127: run 2 outlived `:qa`. 128: run 2 exited non-zero. 129: \
+     no wolf.sqlite after run 2's quit.";
 
 /// Body of [`preview_scroll_survives_a_close_and_relaunch_under_cage`], appended to
 /// [`POINTER_PREAMBLE`] and [`EXTRAS_HELPERS`].
@@ -618,7 +619,7 @@ const PS_CODES: &str = "Exit 120: Neovim did not answer after the wheel, so keys
 /// | `123` | run 1 exited non-zero |
 /// | `124` | no `wolf.sqlite` to freeze after the close |
 /// | `125` | run 2 died before it was ready |
-/// | `126` | run 2's Neovim did not answer |
+/// | `126` | run 2's Neovim did not answer after the wheel |
 /// | `127` | run 2 was still alive after `:qa` |
 /// | `128` | run 2 exited non-zero |
 /// | `129` | no `wolf.sqlite` to freeze after run 2's quit |
@@ -627,7 +628,8 @@ const PS_BODY: &str = r#"
 PREVIEW_SETTLE=3.0
 # The wheel's scroll, smooth or not, and the page's report of it.
 SCROLL_SETTLE=2.0
-# Run 2's lazily built view, its load, and the saved scroll's application on load.
+# Run 2's lazily built view, its load, and the saved scroll's application on load. It must
+# precede the wheel: a load that finishes after it puts the page back at the saved scroll.
 PREVIEW_RESTORE_SETTLE=4.0
 
 # --- C: preview the source in place, wheel it down, then close the window ---------------
@@ -649,11 +651,18 @@ wtype -k Return
 reap_app 122 123
 freeze_or_exit "$STATE_C" 124
 
-# --- Q: relaunch, let the page load and scroll, then :qa ---------------------------------
+# --- Q: relaunch, let the page load and scroll, wheel it further, then :qa --------------
 "$WOLF_BIN" &
 app_pid=$!
 wait_ready "$app_pid" 125 "wolf-gnome preview scroll smoke, run 2"
 sleep "$PREVIEW_RESTORE_SETTLE"
+hsend motion "$PROBE_X" "$PROBE_Y"
+detents=0
+while [ "$detents" -lt "$PS_RESTORE_DETENTS" ]; do
+    hstep axis "$PS_AXIS_VALUE" 1
+    detents=$((detents + 1))
+done
+sleep "$SCROLL_SETTLE"
 wtype -- ":call writefile([bufname('%')], '$READ_Q')"
 wtype -k Return
 wait_file "$READ_Q" || exit 126
@@ -697,7 +706,13 @@ fn saved_preview_scroll(smoke: &str, frozen: &Path, what: &str) -> Option<f64> {
 /// detents at the probe point, reads Neovim's buffer name back so the keys still reach
 /// Neovim, and closes the window with `:WolfCloseWindow`. That is the close path's
 /// `KeepSubtree` arm, the last window, and C is frozen. Run 2 waits while the restored preview
-/// loads, reads the buffer name back, quits with `:qa`, the same arm, and Q is frozen.
+/// loads and scrolls, wheels it [`PS_RESTORE_DETENTS`] more detents at the probe point, reads
+/// the buffer name back so the keys still reach Neovim after the wheel, quits with `:qa`, the
+/// same arm, and Q is frozen.
+///
+/// Q is checked against run 1's per-detent fraction `δ = s1 / PS_WHEEL_DETENTS`: it must lie
+/// within `PS_RESTORE_DETENTS / 2 · δ` of `s1 + PS_RESTORE_DETENTS · δ`. A seed that was never
+/// applied keeps Q at s1, and a page left at the top gives `PS_RESTORE_DETENTS · δ`.
 ///
 /// ## Assertions
 ///
@@ -705,7 +720,9 @@ fn saved_preview_scroll(smoke: &str, frozen: &Path, what: &str) -> Option<f64> {
 /// | --- | --- | --- | --- |
 /// | E17a | C: a lone preview of [`PS_FILE`] with a scroll in [`PS_SCROLL_RANGE`] | in `sync_preview_view`, register no script message handler | C: scroll `None` |
 /// | E17b | the same | in `on_window_closing`'s `KeepSubtree` arm, delete the capture | C: scroll `None` |
-/// | E17c | Q: the scroll within [`PS_SCROLL_TOLERANCE`] of C's | in `on_preview_load_finished`, take `pending_scroll` and evaluate no script | Q: scroll about 0 |
+/// | E17c | Q: the scroll within half of run 2's wheel of C's plus that wheel | in `on_preview_load_finished`, take `pending_scroll` and evaluate no script | Q: about `PS_RESTORE_DETENTS · δ`, below the band |
+/// | E17d | the same | in `on_preview_load_finished`, return straight after the fragment branch | Q: s1, below the band |
+/// | E17e | the same | in `on_preview_load_finished`, evaluate `scroll_to_fraction_js(fraction * 2.0)` | Q: about `2·s1 + PS_RESTORE_DETENTS · δ`, above the band |
 ///
 /// ## Premises, measured by this smoke and by nothing else
 ///
@@ -716,6 +733,10 @@ fn saved_preview_scroll(smoke: &str, frozen: &Path, what: &str) -> Option<f64> {
 /// - A `load_html` document with a `file://` base reaches a registered script message
 ///   handler, and the page reports its scroll at `load` and on every `scroll` event.
 /// - Run 2's window has run 1's size, so one fraction is one position on both pages.
+/// - Run 2's wheel scrolls by run 1's per-detent fraction, since the window size, the page and
+///   the probe point are the same.
+/// - `PREVIEW_RESTORE_SETTLE` covers the restored page's load and its scroll's application, so
+///   run 2's wheel starts from the saved scroll.
 #[test]
 fn preview_scroll_survives_a_close_and_relaunch_under_cage() {
     const SMOKE: &str = "preview_scroll_survives_a_close_and_relaunch_under_cage";
@@ -738,6 +759,7 @@ fn preview_scroll_survives_a_close_and_relaunch_under_cage() {
     let status = pointer_command(&body, &cwd, &runtime_dir, &out_png)
         .env("PS_SOURCE", PS_FILE)
         .env("PS_DETENTS", PS_WHEEL_DETENTS.to_string())
+        .env("PS_RESTORE_DETENTS", PS_RESTORE_DETENTS.to_string())
         .env("PS_AXIS_VALUE", SCROLL_AXIS_VALUE)
         .env("STATE_SRC", smoke_state_dir(&cwd))
         .env("STATE_C", &state_c)
@@ -764,15 +786,29 @@ fn preview_scroll_survives_a_close_and_relaunch_under_cage() {
     );
     let s1 = s1.unwrap_or_default();
 
-    // --- E17c: the relaunch applied the saved scroll ------------------------------------
+    // --- E17c, E17d and E17e: the relaunch applied the saved scroll, and run 2 wheeled on ---
+    let per_detent = s1 / PS_WHEEL_DETENTS as f64;
+    let restore_wheel = PS_RESTORE_DETENTS as f64 * per_detent;
+    let want = s1 + restore_wheel;
+    let slack = restore_wheel / 2.0;
+    assert!(
+        PS_SCROLL_RANGE.contains(&want),
+        "{SMOKE}: precondition: run 1's {s1} plus run 2's wheel of {PS_RESTORE_DETENTS} detents \
+         at {per_detent} each is {want}, outside {PS_SCROLL_RANGE:?}, so the wheel may reach the \
+         page's end and Q could not tell a restored scroll from a clamped one. Lengthen \
+         {PS_FILE} or wheel fewer detents."
+    );
     require(SMOKE, status, &[&read_q, &state_q], "Q", PS_CODES);
     let s2 = saved_preview_scroll(SMOKE, &state_q, "Q, frozen after run 2's quit");
     assert!(
-        s2.is_some_and(|s| (s - s1).abs() <= PS_SCROLL_TOLERANCE),
-        "{SMOKE}: run 2 saved the preview's scroll as {s2:?}, against run 1's {s1}; want it \
-         within {PS_SCROLL_TOLERANCE}. About 0 means the restored page loaded at the top: the \
-         saved scroll was not applied once it rendered. None means run 2's page reported \
-         nothing and the seed was lost. File: {}",
+        s2.is_some_and(|s| (s - want).abs() <= slack),
+        "{SMOKE}: run 2 saved the preview's scroll as {s2:?}; want run 1's {s1} plus run 2's \
+         wheel, {want}, within {slack}. About {s1} means the saved scroll was never applied and \
+         every capture kept the seed (`pending_scroll` never taken), or run 2's wheel did not \
+         reach the page. About {restore_wheel} means the page loaded at the top and was wheeled \
+         from there: the saved scroll was not applied. Well above {want} means the restore \
+         overshot the saved scroll. None means run 2's page reported nothing and the seed was \
+         lost. File: {}",
         state_q.display()
     );
 }
