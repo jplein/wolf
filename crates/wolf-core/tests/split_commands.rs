@@ -6,6 +6,12 @@
 //! Split Horizontal is Vim's `:split` (panes stacked) and Split Vertical is `:vsplit` (side by
 //! side), so every case pins the orientation as well as the new window's kind.
 //!
+//! `WolfCore::open_split_left`, the whole-tab split of rule 4 in
+//! `specs/cli-and-file-open.md#52-choosing-the-pane`, is read back from Neovim itself through a
+//! file probe: its answer must be the new, current window, showing the path, as the first child
+//! of `winlayout()`'s root, and a missing path must split onto a buffer named for it without
+//! creating the file.
+//!
 //! ## Premises about the components
 //!
 //! Each is measured by these tests against the real component, not assumed:
@@ -27,9 +33,9 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use common::{
-    active_window, interactive_sh, open_session, poll_frame, poll_until, run_line, settle_for,
-    start_core_at, start_core_with_temp_md, wait_for_text, win_terminal, FlushWaiter,
-    FLUSH_TIMEOUT, POLL_INTERVAL,
+    active_window, interactive_sh, open_session, poll_frame, poll_until, probe_values, run_line,
+    send_ex, settle_for, start_core_at, start_core_with_temp_md, wait_for_text, win_terminal,
+    FlushWaiter, FLUSH_TIMEOUT, POLL_INTERVAL,
 };
 use wolf_core::{LayoutIntent, SplitOrientation, TerminalId, TerminalTarget, WolfCore};
 
@@ -392,6 +398,133 @@ fn split_commands_in_the_drawer_do_nothing() {
          Split intents) must stay ({windows_before}, [{id:?}], 0). A second session means the \
          router split the drawer's session; more windows or a Split intent mean Neovim split the \
          drawer window. Split intents: {splits:?}"
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// Probes, in Neovim, the current window, `winlayout()`'s root kind, child count and first child,
+/// and the full name of the buffer `win` shows.
+fn probe_split_left(core: &WolfCore, win: i64, probe: &std::path::Path) -> Vec<String> {
+    let name = format!("fnamemodify(bufname(winbufnr({win})), ':p')");
+    probe_values(
+        core,
+        &[
+            "win_getid()",
+            "winlayout()[0]",
+            "len(winlayout()[1])",
+            "string(winlayout()[1][0])",
+            &name,
+        ],
+        probe,
+    )
+}
+
+/// `open_split_left` from the right window of a vertical pair answers a new window that is
+/// current, shows the file, and is the first child of the root row.
+#[test]
+fn open_split_left_puts_the_file_in_a_new_leftmost_window() {
+    let (core, waiter, cwd) = start_core();
+    let file = cwd.join("split-left-target.md");
+    std::fs::write(&file, "split left target\n").expect("failed to write the target file");
+    let probe = cwd.join("split-left-probe.txt");
+
+    send_ex(&core, "vsplit");
+    send_ex(&core, "wincmd l");
+    let before = probe_values(
+        &core,
+        &[
+            "win_getid()",
+            "winlayout()[0]",
+            "len(winlayout()[1])",
+            "string(winlayout()[1][1])",
+        ],
+        &probe,
+    );
+    let origin = before[0].clone();
+    assert_eq!(
+        before[1..],
+        [
+            "row".to_owned(),
+            "2".to_owned(),
+            format!("['leaf', {origin}]")
+        ],
+        "premise: :vsplit then :wincmd l must leave a row of two windows with the right one, \
+         {origin}, current; the probe read {before:?}"
+    );
+
+    let new_win = core.open_split_left(&file);
+    assert_ne!(
+        new_win, 0,
+        "open_split_left must answer the new window's handle; 0 means the helper failed or the \
+         RPC timed out"
+    );
+    assert_ne!(
+        new_win.to_string(),
+        origin,
+        "open_split_left must answer a new window, not the window it was called from"
+    );
+    settle_for(&waiter, SPLIT_SETTLE);
+    let after = probe_split_left(&core, new_win, &probe);
+    assert_eq!(
+        after,
+        [
+            new_win.to_string(),
+            "row".to_owned(),
+            "3".to_owned(),
+            format!("['leaf', {new_win}]"),
+            file.display().to_string(),
+        ],
+        "after open_split_left, Neovim must read (current window, root kind, root children, \
+         first child, new window's file) as ({new_win}, row, 3, ['leaf', {new_win}], {}). \
+         Another first child means the split was not topleft, so the new window sits beside the \
+         origin rather than left of the whole tab; another current window means the new window \
+         was not focused; another file means the path was not opened in it.",
+        file.display()
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// `open_split_left` on a path that does not exist splits onto a buffer named for it and creates
+/// no file.
+#[test]
+fn open_split_left_on_a_missing_path_opens_a_new_buffer_for_it() {
+    let (core, waiter, cwd) = start_core();
+    let missing = cwd.join("not-yet-written.md");
+    let probe = cwd.join("split-left-missing-probe.txt");
+    assert!(
+        !missing.exists(),
+        "premise: {} must not exist",
+        missing.display()
+    );
+
+    let new_win = core.open_split_left(&missing);
+    assert_ne!(
+        new_win,
+        0,
+        "open_split_left on the missing {} must still split and answer the new window; 0 means \
+         it refused a path that does not exist, which §5 opens as a new buffer",
+        missing.display()
+    );
+    settle_for(&waiter, SPLIT_SETTLE);
+    let after = probe_split_left(&core, new_win, &probe);
+    assert_eq!(
+        (after[0].as_str(), after[2].as_str(), after[4].as_str()),
+        (
+            new_win.to_string().as_str(),
+            "2",
+            missing.display().to_string().as_str()
+        ),
+        "after open_split_left on a missing path, (current window, root children, its buffer's \
+         name) must be ({new_win}, 2, {}); the probe read {after:?}",
+        missing.display()
+    );
+    settle_for(&waiter, NEGATIVE_SETTLE);
+    assert!(
+        !missing.exists(),
+        "open_split_left must not create {}: a new buffer is written only when the user saves it",
+        missing.display()
     );
 
     core.shutdown().expect("shutdown should be Ok");

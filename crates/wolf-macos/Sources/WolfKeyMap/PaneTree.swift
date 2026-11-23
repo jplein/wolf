@@ -195,6 +195,23 @@ public final class PaneTree {
     _ = splitIn(&root, target, newPane, orientation)
   }
 
+  /// Splits the whole tree vertically with `newPane` on the left, the whole-tab split of
+  /// `specs/cli-and-file-open.md` §5.2 rule 4. A vertical root gains `newPane` as its first child
+  /// and re-equalizes, as a same-orientation split does; any other root becomes
+  /// `vertical[newPane, root]` at equal weights.
+  public func splitRootLeft(_ newPane: PaneId) {
+    if case .split(.vertical, let children, _) = root {
+      let all = [Frame.leaf(newPane)] + children
+      root = .split(
+        orientation: .vertical, children: all,
+        weights: Array(repeating: 1.0 / Double(all.count), count: all.count))
+      return
+    }
+    root = .split(
+      orientation: .vertical, children: [.leaf(newPane), root],
+      weights: [defaultRatio, defaultRatio])
+  }
+
   /// Removes the leaf `pane`, then NORMALIZES the tree (flatten same-orientation
   /// children, collapse a 1-child split into its child, re-equalize). Removing the
   /// last remaining pane is a no-op (the tree is never empty).

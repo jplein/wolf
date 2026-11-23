@@ -1883,6 +1883,13 @@ function _G.wolf_edit_in_other(target_win)
 	return 0
 end
 
+-- Opens `path` in a new window left of the whole tab, current, and returns its handle. No
+-- wolf_layout: the front-end binds the window itself. A missing path opens as a new buffer.
+function _G.wolf_open_split_left(path)
+	vim.cmd("topleft vsplit " .. vim.fn.fnameescape(path))
+	return vim.api.nvim_get_current_win()
+end
+
 -- See runtime/nvim/README.md#wolf_setup_previewchan.
 function _G.wolf_setup_preview(chan)
 	local group = vim.api.nvim_create_augroup("WolfPreview", { clear = true })

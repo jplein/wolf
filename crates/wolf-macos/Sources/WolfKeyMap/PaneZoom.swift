@@ -17,6 +17,8 @@ public enum PaneZoom {
     case split
     /// The view opens the drawer; a pane joins the layout, as with a split.
     case drawerOpen
+    /// A file opened from outside Wolf lands in the view; it unzooms first, so its pane shows.
+    case openFile
     /// The view's panes changed, as after a close.
     case panesChanged
     /// A focus move resolved, in the unzoomed layout, to `target`, or to `nil` when it
@@ -46,7 +48,7 @@ public enum PaneZoom {
       if zoomed != nil { return nil }
       guard let active, panes.contains(active), panes.count > 1 else { return nil }
       return active
-    case .split, .drawerOpen:
+    case .split, .drawerOpen, .openFile:
       return nil
     case .panesChanged:
       guard let zoomed, panes.contains(zoomed) else { return nil }

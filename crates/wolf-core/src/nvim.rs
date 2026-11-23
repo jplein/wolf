@@ -736,6 +736,35 @@ impl NvimProcess {
         }
     }
 
+    /// Splits the whole tab vertically with `path` in a new window on the left, current, and
+    /// returns that window's handle; see [`crate::api::WolfCore::open_split_left`].
+    ///
+    /// Runs the `_G.wolf_open_split_left` helper (defined in `runtime/nvim/init.lua`) over
+    /// `nvim_exec_lua`, passing `path` as a Lua vararg (never interpolated). RPC failure maps
+    /// to [`NvimError::Rpc`].
+    pub fn open_split_left(
+        &self,
+        path: &str,
+    ) -> impl std::future::Future<Output = Result<i64, NvimError>> + Send + 'static {
+        let nvim = self.nvim.clone();
+        let path = path.to_string();
+        async move {
+            let value = nvim
+                .call(
+                    "nvim_exec_lua",
+                    vec![
+                        Value::from("return wolf_open_split_left(...)"),
+                        Value::Array(vec![Value::from(path)]),
+                    ],
+                )
+                .await
+                .map_err(|e| NvimError::Rpc(e.to_string()))?
+                .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+
+            Ok(value.as_i64().unwrap_or_default())
+        }
+    }
+
     /// Binds the buffer for absolute `path` into window `win` (loading it if
     /// needed) and restores that pane's saved view, for a per-pane navigation-history
     /// move to an [`Edit`](crate::nav_history::NavTarget::Edit) target.

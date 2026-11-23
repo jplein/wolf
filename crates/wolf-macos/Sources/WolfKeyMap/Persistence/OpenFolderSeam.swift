@@ -67,6 +67,16 @@ public enum OpenFolderSeam {
     return current?.directory == "" ? .fill : .newWindow
   }
 
+  /// The directory a tab counts as being on: `""` without a folder, else its Neovim's reported
+  /// cwd, else, before the first report, the directory its Neovim was launched in. Without the
+  /// fallback, two files of one new project opened together would open the project twice.
+  public static func liveDirectory(hasFolder: Bool, reportedCwd: String, launchCwd: String)
+    -> String
+  {
+    guard hasFolder else { return "" }
+    return reportedCwd.isEmpty ? launchCwd : reportedCwd
+  }
+
   /// `path` as core's `apply_cwd` canonicalizes a directory, through `realpath(3)`, falling back
   /// to `path` as given when it does not resolve.
   ///

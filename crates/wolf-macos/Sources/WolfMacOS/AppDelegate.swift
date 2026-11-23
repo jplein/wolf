@@ -64,6 +64,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   /// commits nothing over the terminate commit (`closeCommit(for:)`).
   private var isTerminating = false
 
+  /// Set once the launch restore, or the fresh run's empty window, is in place. Requests from
+  /// the socket and from Finder wait in `openQueue` until then, so a cold launch restores the
+  /// session first (`specs/cli-and-file-open.md` §2).
+  private var isLaunched = false
+
+  /// The requests from the socket and from Finder not yet handled, in arrival order.
+  private var openQueue: [FileOpenSeam.Request] = []
+
   /// The saved windows, or the saved tabs of a window, that no live view took at
   /// launch (a failed core start). Never retried, but carried into
   /// every commit so the next launch can try them again.
@@ -106,6 +114,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     PickerWakeBridge.install()
     TreeWakeBridge.install()
     SearchWakeBridge.install()
+    OpenWakeBridge.install()
+
+    // Listen before the restore, so a launching `wolf` connects as soon as it can; its request
+    // waits in the queue until `isLaunched`.
+    let listening = wolf_ffi_open_listen("").toString()
+    if !listening.isEmpty {
+      NSLog("wolf: the open channel is not listening: \(listening)")
+    }
 
     // Keep all three dynamic submenus: Window rebuilds from lifecycle hooks, while Open Recent and
     // History rebuild lazily in `menuNeedsUpdate`, which dispatches on menu identity.
@@ -144,6 +160,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
       refreshTabFocus()
       rebuildWindowMenu()
       scheduleStateSnapshot()
+      isLaunched = true
+      handleOpenRequests()
       return
     }
 
@@ -165,6 +183,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     refreshTabFocus()
     rebuildWindowMenu()
     scheduleStateSnapshot()
+    isLaunched = true
+    handleOpenRequests()
   }
 
   /// PHASE A — starts a core and builds a controller for every planned tab
@@ -444,6 +464,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   func applicationWillTerminate(_ notification: Notification) {
     isTerminating = true
 
+    // Stop listening first, so no `wolf` hands a request to an app that is quitting.
+    wolf_ffi_open_stop()
+
     // Flush the final partial frame-stats interval. Best-effort: this does not
     // run on a force-quit. No-op unless WOLF_FRAME_STATS is set.
     FrameMetrics.emit()
@@ -609,8 +632,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   /// rule picks; a fill replaces the empty current tab with one from the folder's project state;
   /// otherwise a new window opens from it. The landed tab's core records the folder in the
   /// recent directories, since its Neovim starts there and core records no launch directory.
-  func openFolder(_ path: String, from current: WolfWindowController?) {
-    guard metrics != nil, config != nil else { return }
+  /// Returns the landed tab's view, `nil` when none landed.
+  @discardableResult
+  func openFolder(_ path: String, from current: WolfWindowController?) -> WolfWindowController? {
+    guard metrics != nil, config != nil else { return nil }
     let directory = OpenFolderSeam.canonicalDirectory(path)
     let windows = liveGroups().map { group in
       OpenFolderSeam.LiveWindow(
@@ -634,11 +659,134 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     case .newWindow:
       landed = openWindow(at: directory)
     }
-    guard let landed else { return }
+    guard let landed else { return nil }
     refreshTabFocus()
     rebuildWindowMenu()
     scheduleStateSnapshot()
     landed.tabCore.handle.record_recent_dir(directory)
+    return landed
+  }
+
+  // MARK: - Opening from outside Wolf (`specs/cli-and-file-open.md`)
+
+  /// Finder's "Open With" and a drop on the Dock icon: each file URL is handled as a request
+  /// with no `WOLF_TAB_ID` (§7), through the same queue as the socket's requests.
+  func application(_ application: NSApplication, open urls: [URL]) {
+    for url in urls where url.isFileURL {
+      openQueue.append(FileOpenSeam.Request(wolf_ffi_open_item(url.path)))
+    }
+    handleOpenRequests()
+  }
+
+  /// Takes the socket's requests into `openQueue`, then, once launched and while not quitting,
+  /// handles every queued request in order against the live windows.
+  func handleOpenRequests() {
+    for item in wolf_ffi_open_drain() {
+      openQueue.append(FileOpenSeam.Request(item))
+    }
+    guard isLaunched, !isTerminating else { return }
+    while !openQueue.isEmpty {
+      performOpenRequest(openQueue.removeFirst())
+    }
+  }
+
+  /// Routes `request` through `FileOpenSeam` over the live tabs, their tab IDs and the stacking
+  /// order, and acts on the route: raise, Open Folder, or a file into its tab.
+  private func performOpenRequest(_ request: FileOpenSeam.Request) {
+    let live = controllers.filter { !$0.isTornDown }
+    let windows = liveGroups().map { group in
+      OpenFolderSeam.LiveWindow(
+        tabs: group.members.map {
+          OpenFolderSeam.LiveTab(id: $0.tabId, directory: $0.persistedCwd)
+        },
+        selected: group.selected?.tabId)
+    }
+    var tabIds: [String: Int] = [:]
+    for controller in live where !controller.tabCore.wolfTabId.isEmpty {
+      tabIds[controller.tabCore.wolfTabId] = controller.tabId
+    }
+    func controller(_ tab: Int?) -> WolfWindowController? {
+      tab.flatMap { id in live.first { $0.tabId == id } }
+    }
+    switch FileOpenSeam.route(request, windows: windows, tabIds: tabIds, stacking: stacking) {
+    case .activate(let current):
+      if let view = controller(current) {
+        view.raise()
+      } else {
+        NSApp.activate(ignoringOtherApps: true)
+      }
+    case .openFolder(let directory, let current):
+      openFolder(directory, from: controller(current))?.raise()
+    case .openFile(let file, let tab):
+      controller(tab)?.openFile(file)
+    case .openFileInProject(let file, let project, let current):
+      openFolder(project, from: controller(current))?.openFile(file)
+    }
+  }
+
+  // MARK: - Install and Uninstall `wolf` Command (§1)
+
+  /// Where Install `wolf` Command puts the link.
+  private static let commandLinkPath = "/usr/local/bin/wolf"
+
+  /// Wolf > Install wolf Command: links `/usr/local/bin/wolf` to the bundled binary, asking for
+  /// administrator rights when needed, and reports the outcome in an alert.
+  @objc func installCommandMenuItem(_ sender: NSMenuItem) {
+    guard let resources = Bundle.main.resourcePath else {
+      showCommandAlert("The wolf command could not be found in Wolf.app.", detail: "")
+      return
+    }
+    let bundled = resources + "/bin/wolf"
+    guard FileManager.default.isExecutableFile(atPath: bundled) else {
+      showCommandAlert("The wolf command could not be found in Wolf.app.", detail: bundled)
+      return
+    }
+    showCommandOutcome(
+      CommandInstallSeam.install(
+        linkPath: Self.commandLinkPath, bundled: bundled, runPrivileged: Self.runPrivileged))
+  }
+
+  /// Wolf > Uninstall wolf Command: removes `/usr/local/bin/wolf` when it is Wolf's link, and
+  /// reports the outcome in an alert.
+  @objc func uninstallCommandMenuItem(_ sender: NSMenuItem) {
+    showCommandOutcome(
+      CommandInstallSeam.uninstall(
+        linkPath: Self.commandLinkPath, runPrivileged: Self.runPrivileged))
+  }
+
+  /// Runs `source` as an AppleScript, which prompts for an administrator's password; whether it
+  /// ran without error, a cancelled prompt included.
+  private static func runPrivileged(_ source: String) -> Bool {
+    guard let script = NSAppleScript(source: source) else { return false }
+    var error: NSDictionary?
+    script.executeAndReturnError(&error)
+    return error == nil
+  }
+
+  /// Reports an install or uninstall outcome in an alert.
+  private func showCommandOutcome(_ outcome: CommandInstallSeam.Outcome) {
+    switch outcome {
+    case .installed:
+      showCommandAlert(
+        "The wolf command is installed.", detail: "\(Self.commandLinkPath) runs Wolf's command.")
+    case .alreadyInstalled:
+      showCommandAlert("The wolf command is already installed.", detail: Self.commandLinkPath)
+    case .removed:
+      showCommandAlert("The wolf command is uninstalled.", detail: Self.commandLinkPath)
+    case .nothingToRemove:
+      showCommandAlert("The wolf command is not installed.", detail: Self.commandLinkPath)
+    case .refused(let what):
+      showCommandAlert("Wolf left \(Self.commandLinkPath) alone.", detail: what)
+    case .failed(let why):
+      showCommandAlert("The wolf command could not be changed.", detail: why)
+    }
+  }
+
+  private func showCommandAlert(_ message: String, detail: String) {
+    let alert = NSAlert()
+    alert.messageText = message
+    alert.informativeText = detail
+    alert.runModal()
   }
 
   /// §6 step 2: opens a tab on `directory` from its project state at `empty`'s position in its

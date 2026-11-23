@@ -1,6 +1,6 @@
 #!/bin/sh
-# sh_test asserting the pinned nvim tree, init.lua and vendored resources are in Wolf.app.
-# Inspects files only; rules_apple may deliver the app as a directory or a zip, so both work.
+# sh_test asserting Wolf.app's bundled resources, its wolf command and its Finder declarations.
+# Reads files and Info.plist and runs bin/wolf once; the app may come as a directory or a zip.
 
 set -eu
 
@@ -226,4 +226,92 @@ do
   echo "PASS check ($label): $FILE exists and is non-empty"
 done
 
-echo "PASS: Wolf.app bundles nvim/bin/nvim (executable), the markdown parser, the runtime tree, init.lua, the vendored orlando plugin, the vendored lighthouse colorscheme, the vendored nvim-treesitter + textobjects plugins, the curated compiled treesitter parsers, the JetBrains Mono fonts (4 TTFs + OFL.txt), the iA Writer Mono S fonts (4 TTFs + LICENSE.md), Symbols Nerd Font Mono (TTF + LICENSE + README.md), rg/rg (executable), and terminfo/78/xterm-ghostty"
+# (z) bin/wolf, the command Install wolf Command links, is executable and answers a refused
+# invocation with exit 2 and the usage, which it does before it looks for a running Wolf.
+WOLF_CLI="$RES/bin/wolf"
+[ -f "$WOLF_CLI" ] || fail "expected the bundled wolf command at $WOLF_CLI, but it is missing"
+[ -x "$WOLF_CLI" ] || fail "the bundled wolf command is not executable (exec bit lost?): $WOLF_CLI"
+cli_status=0
+cli_out=$("$WOLF_CLI" --wait 2>&1) || cli_status=$?
+[ "$cli_status" -eq 2 ] || fail "'wolf --wait' must exit 2 as a refused invocation; it exited $cli_status saying: $cli_out"
+case "$cli_out" in
+  *"usage: wolf"*) ;;
+  *) fail "'wolf --wait' must print the usage; it printed: $cli_out" ;;
+esac
+echo "PASS check (z): $WOLF_CLI exists, is executable, and refuses 'wolf --wait' with the usage"
+
+# The Finder declarations of specs/cli-and-file-open.md section 7, read from the built plist.
+# plutil key paths split on dots; a dot inside a key is escaped with a backslash.
+PLIST="$APP_DIR/Contents/Info.plist"
+[ -f "$PLIST" ] || fail "bundle has no Contents/Info.plist: $PLIST"
+MD_UTI="net.daringfireball.markdown"
+
+# plist_get <keypath>: the raw value, or an array's count; fails when the key path is absent.
+plist_get() {
+  /usr/bin/plutil -extract "$1" raw "$PLIST" 2>/dev/null
+}
+
+# plist_has <keypath> <value>: whether the string at <keypath>, or one in the array there, is
+# <value>.
+plist_has() {
+  kind=$(/usr/bin/plutil -type "$1" "$PLIST" 2>/dev/null) || return 1
+  if [ "$kind" = "array" ]; then
+    count=$(plist_get "$1") || return 1
+    k=0
+    while [ "$k" -lt "$count" ]; do
+      [ "$(plist_get "$1.$k")" = "$2" ] && return 0
+      k=$((k + 1))
+    done
+    return 1
+  fi
+  [ "$(plist_get "$1")" = "$2" ]
+}
+
+# index_of <array keypath> <field> <value>: the index of the entry whose <field> holds <value>,
+# or nothing.
+index_of() {
+  entries=$(plist_get "$1") || return 0
+  e=0
+  while [ "$e" -lt "$entries" ]; do
+    if plist_has "$1.$e.$2" "$3"; then
+      echo "$e"
+      return 0
+    fi
+    e=$((e + 1))
+  done
+}
+
+# (aa) A document type opens Markdown as an editor at Alternate rank, naming no icon.
+MD_DOC=$(index_of CFBundleDocumentTypes LSItemContentTypes "$MD_UTI")
+[ -n "$MD_DOC" ] || fail "no CFBundleDocumentTypes entry lists $MD_UTI in LSItemContentTypes"
+[ "$(plist_get "CFBundleDocumentTypes.$MD_DOC.LSHandlerRank")" = "Alternate" ] || fail "the Markdown document type must have LSHandlerRank Alternate, so Wolf is offered without claiming the default; it has '$(plist_get "CFBundleDocumentTypes.$MD_DOC.LSHandlerRank" || true)'"
+[ "$(plist_get "CFBundleDocumentTypes.$MD_DOC.CFBundleTypeRole")" = "Editor" ] || fail "the Markdown document type must have CFBundleTypeRole Editor"
+if plist_get "CFBundleDocumentTypes.$MD_DOC.CFBundleTypeIconFile" >/dev/null; then
+  fail "the Markdown document type must name no CFBundleTypeIconFile, so Finder draws its generic icon"
+fi
+echo "PASS check (aa): CFBundleDocumentTypes.$MD_DOC opens $MD_UTI as an Editor at Alternate, with no icon"
+
+# (ab) A document type opens folders at Alternate rank.
+DIR_DOC=$(index_of CFBundleDocumentTypes LSItemContentTypes "public.folder")
+[ -n "$DIR_DOC" ] || fail "no CFBundleDocumentTypes entry lists public.folder in LSItemContentTypes"
+[ "$(plist_get "CFBundleDocumentTypes.$DIR_DOC.LSHandlerRank")" = "Alternate" ] || fail "the folder document type must have LSHandlerRank Alternate"
+echo "PASS check (ab): CFBundleDocumentTypes.$DIR_DOC opens public.folder at Alternate"
+
+# (ac) Markdown is imported, conforming to public.plain-text with both extensions, never exported,
+# and names no icon.
+MD_TYPE=$(index_of UTImportedTypeDeclarations UTTypeIdentifier "$MD_UTI")
+[ -n "$MD_TYPE" ] || fail "UTImportedTypeDeclarations must declare $MD_UTI"
+DECL="UTImportedTypeDeclarations.$MD_TYPE"
+plist_has "$DECL.UTTypeConformsTo" "public.plain-text" || fail "the imported $MD_UTI must conform to public.plain-text"
+for ext in md markdown; do
+  plist_has "$DECL.UTTypeTagSpecification.public\\.filename-extension" "$ext" || fail "the imported $MD_UTI must list the filename extension $ext"
+done
+[ -z "$(index_of UTExportedTypeDeclarations UTTypeIdentifier "$MD_UTI")" ] || fail "$MD_UTI must be imported, not exported: Wolf does not own the type"
+for icon in UTTypeIconFile UTTypeIcons; do
+  if plist_get "$DECL.$icon" >/dev/null; then
+    fail "the imported $MD_UTI must name no icon, but it has $icon"
+  fi
+done
+echo "PASS check (ac): $MD_UTI is imported as public.plain-text with md and markdown, not exported, with no icon"
+
+echo "PASS: Wolf.app bundles nvim/bin/nvim (executable), the markdown parser, the runtime tree, init.lua, the vendored orlando plugin, the vendored lighthouse colorscheme, the vendored nvim-treesitter + textobjects plugins, the curated compiled treesitter parsers, the JetBrains Mono fonts (4 TTFs + OFL.txt), the iA Writer Mono S fonts (4 TTFs + LICENSE.md), Symbols Nerd Font Mono (TTF + LICENSE + README.md), rg/rg (executable), terminfo/78/xterm-ghostty, bin/wolf (executable), and the Markdown and folder document types"

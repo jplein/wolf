@@ -28,4 +28,9 @@ void wolf_ffi_set_tree_wake(void (*wake)(uint64_t token));
 // onto the AppKit main thread, routed by `token`. Passing NULL clears it.
 void wolf_ffi_set_search_wake(void (*wake)(uint64_t token));
 
+// The open channel's wake (see `wolf_ffi_set_open_wake`): Swift's `OpenWakeBridge`
+// registers a thunk that drains the taken open requests on the AppKit main thread.
+// The listener is process-wide, so `token` is always 0. Passing NULL clears it.
+void wolf_ffi_set_open_wake(void (*wake)(uint64_t token));
+
 #endif /* WOLF_FFI_WAKE_H */

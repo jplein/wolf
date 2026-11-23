@@ -237,6 +237,30 @@ void* __swift_bridge__$Vec_FfiProjectTab$get_mut(void* vec_ptr, uintptr_t index)
 uintptr_t __swift_bridge__$Vec_FfiProjectTab$len(void* vec_ptr);
 void* __swift_bridge__$Vec_FfiProjectTab$as_ptr(void* vec_ptr);
 
+typedef struct FfiPaneChoice FfiPaneChoice;
+void __swift_bridge__$FfiPaneChoice$_free(void* self);
+
+void* __swift_bridge__$Vec_FfiPaneChoice$new(void);
+void __swift_bridge__$Vec_FfiPaneChoice$drop(void* vec_ptr);
+void __swift_bridge__$Vec_FfiPaneChoice$push(void* vec_ptr, void* item_ptr);
+void* __swift_bridge__$Vec_FfiPaneChoice$pop(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiPaneChoice$get(void* vec_ptr, uintptr_t index);
+void* __swift_bridge__$Vec_FfiPaneChoice$get_mut(void* vec_ptr, uintptr_t index);
+uintptr_t __swift_bridge__$Vec_FfiPaneChoice$len(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiPaneChoice$as_ptr(void* vec_ptr);
+
+typedef struct FfiOpenItem FfiOpenItem;
+void __swift_bridge__$FfiOpenItem$_free(void* self);
+
+void* __swift_bridge__$Vec_FfiOpenItem$new(void);
+void __swift_bridge__$Vec_FfiOpenItem$drop(void* vec_ptr);
+void __swift_bridge__$Vec_FfiOpenItem$push(void* vec_ptr, void* item_ptr);
+void* __swift_bridge__$Vec_FfiOpenItem$pop(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiOpenItem$get(void* vec_ptr, uintptr_t index);
+void* __swift_bridge__$Vec_FfiOpenItem$get_mut(void* vec_ptr, uintptr_t index);
+uintptr_t __swift_bridge__$Vec_FfiOpenItem$len(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiOpenItem$as_ptr(void* vec_ptr);
+
 typedef struct FfiFrame FfiFrame;
 void __swift_bridge__$FfiFrame$_free(void* self);
 
@@ -521,6 +545,8 @@ int64_t __swift_bridge__$WolfCoreHandle$preview_file(void* self, int64_t win, vo
 int64_t __swift_bridge__$WolfCoreHandle$preview_buffer(void* self, int64_t win, int64_t bufnr);
 int64_t __swift_bridge__$WolfCoreHandle$preview_in_other(void* self, int64_t target_win);
 int64_t __swift_bridge__$WolfCoreHandle$edit_in_other(void* self, int64_t target_win);
+int64_t __swift_bridge__$WolfCoreHandle$open_split_left(void* self, void* path);
+void* __swift_bridge__$WolfCoreHandle$assign_tab_id(void* self);
 void* __swift_bridge__$WolfCoreHandle$previews(void* self);
 bool __swift_bridge__$WolfCoreHandle$history_can_back(void* self, int64_t win);
 bool __swift_bridge__$WolfCoreHandle$history_can_forward(void* self, int64_t win);
@@ -692,6 +718,18 @@ bool __swift_bridge__$wolf_ffi_app_state_flush(void);
 void* __swift_bridge__$wolf_ffi_app_state_window_state(void);
 void* __swift_bridge__$wolf_ffi_app_state_project_state(void* directory);
 void* __swift_bridge__$wolf_ffi_app_state_project_tab(void* directory);
+void* __swift_bridge__$wolf_ffi_app_state_choose_pane(void* file);
+void* __swift_bridge__$wolf_ffi_app_state_project_directory(void* file);
+bool __swift_bridge__$FfiPaneChoice$unzoom(void* self);
+uint8_t __swift_bridge__$FfiPaneChoice$placement(void* self);
+uint32_t __swift_bridge__$FfiPaneChoice$pane(void* self);
+uint8_t __swift_bridge__$FfiOpenItem$kind(void* self);
+void* __swift_bridge__$FfiOpenItem$path(void* self);
+void* __swift_bridge__$FfiOpenItem$tab_id(void* self);
+void* __swift_bridge__$wolf_ffi_open_listen(void* state_dir);
+void __swift_bridge__$wolf_ffi_open_stop(void);
+void* __swift_bridge__$wolf_ffi_open_drain(void);
+void* __swift_bridge__$wolf_ffi_open_item(void* path);
 uint16_t __swift_bridge__$FfiFrame$cols(void* self);
 uint16_t __swift_bridge__$FfiFrame$rows(void* self);
 uint16_t __swift_bridge__$FfiFrame$cursor_row(void* self);

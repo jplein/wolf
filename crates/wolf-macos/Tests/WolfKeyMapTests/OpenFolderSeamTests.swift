@@ -194,4 +194,21 @@ final class OpenFolderSeamTests: XCTestCase {
       OpenFolderSeam.fillFrame(stored: nil, windowTabs: 1, screenVisibleFrames: [screen]),
       "with no stored frame there is nothing to apply")
   }
+
+  // MARK: - The live directory a folder tab counts as being on
+
+  func testAFolderTabWithNoReportedCwdIsOnItsLaunchDirectory() {
+    XCTAssertEqual(
+      OpenFolderSeam.liveDirectory(hasFolder: true, reportedCwd: "", launchCwd: dirD), dirD,
+      "a folder tab whose Neovim has not reported its cwd yet is on its launch directory; \"\" "
+        + "means two files of one new project opened together open the project twice")
+    XCTAssertEqual(
+      OpenFolderSeam.liveDirectory(hasFolder: true, reportedCwd: dirE, launchCwd: dirD), dirE,
+      "a reported cwd wins over the launch directory; the launch directory means a `:cd` is "
+        + "ignored")
+    XCTAssertEqual(
+      OpenFolderSeam.liveDirectory(hasFolder: false, reportedCwd: dirE, launchCwd: dirD), "",
+      "an empty tab has no directory, whatever its Neovim reports; a path means an empty tab "
+        + "counts as open on it")
+  }
 }

@@ -135,6 +135,38 @@ public enum WindowStateCodec {
     return (Int(answer.window()), Int(answer.tab()))
   }
 
+  /// The project directory of `specs/cli-and-file-open.md` §5.1 step 2 for `file`, given the
+  /// tabs of `windows` as the directories open in tabs. Feeds the builder as `submit` does, minus
+  /// the commit, so it writes nothing.
+  public static func projectDirectory(_ file: String, windows: [Window]) -> String {
+    feed(windows)
+    return wolf_ffi_app_state_project_directory(file).toString()
+  }
+
+  /// Core's §5.2 pane choice for `file` in one tab laid out as `layout`, its zoomed leaf marked,
+  /// with leaf `focused` focused, `nil` for none, and the drawer zoomed when `drawerZoomed`.
+  /// Replaces the builder's scratch with that tab and pushes its root whatever its directory,
+  /// unlike `submitTab`.
+  static func choosePane(
+    _ file: String, layout: SavedPaneNode, focused: Int?, drawerZoomed: Bool
+  ) -> FfiPaneChoice {
+    wolf_ffi_app_state_begin()
+    wolf_ffi_app_state_add_window(false, 0, 0, 0, 0, 0)
+    let focus = reference(focused.map { .pane($0) })
+    let zoomed: (PaneRef, UInt32)
+    if let index = layout.zoomedLeafIndex {
+      zoomed = (.pane, UInt32(clamping: index))
+    } else if drawerZoomed {
+      zoomed = (.drawer, 0)
+    } else {
+      zoomed = (.none, 0)
+    }
+    wolf_ffi_app_state_add_tab(
+      "", true, focus.0.rawValue, focus.1, zoomed.0.rawValue, zoomed.1)
+    pushRoot(layout)
+    return wolf_ffi_app_state_choose_pane(file)
+  }
+
   /// Reads a directory's project state, `nil` when it has none.
   public static func loadProject(_ project: FfiProjectState) -> LoadedProject? {
     guard project.found() else { return nil }

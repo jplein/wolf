@@ -151,7 +151,7 @@ enum AppMenu {
     }
   }
 
-  /// The application menu (About / Hide `h` / Quit `q`).
+  /// The application menu (About / Install and Uninstall wolf Command / Hide `h` / Quit `q`).
   private static func appMenuItem(target: AppDelegate) -> NSMenuItem {
     let item = NSMenuItem()
     let menu = NSMenu(title: "Wolf")
@@ -162,6 +162,19 @@ enum AppMenu {
       keyEquivalent: "")
     about.target = target
     menu.addItem(about)
+    menu.addItem(.separator())
+    let install = NSMenuItem(
+      title: "Install wolf Command",
+      action: #selector(AppDelegate.installCommandMenuItem(_:)),
+      keyEquivalent: "")
+    install.target = target
+    menu.addItem(install)
+    let uninstall = NSMenuItem(
+      title: "Uninstall wolf Command",
+      action: #selector(AppDelegate.uninstallCommandMenuItem(_:)),
+      keyEquivalent: "")
+    uninstall.target = target
+    menu.addItem(uninstall)
     menu.addItem(.separator())
     menu.addItem(
       commandItem(

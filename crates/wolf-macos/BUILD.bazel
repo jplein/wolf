@@ -1,4 +1,5 @@
 # Bazel build for the macOS (AppKit) front-end; targets are in crates/wolf-macos/README.md.
+load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
 load("@build_bazel_rules_apple//apple:macos.bzl", "macos_application")
 load("@build_bazel_rules_swift//swift:swift.bzl", "swift_library", "swift_test")
@@ -40,6 +41,7 @@ swift_library(
         "Sources/WolfKeyMap/AppearanceSeam.swift",
         "Sources/WolfKeyMap/CellMetricsMath.swift",
         "Sources/WolfKeyMap/CmdlineSeam.swift",
+        "Sources/WolfKeyMap/CommandInstallSeam.swift",
         "Sources/WolfKeyMap/CommandSeam.swift",
         "Sources/WolfKeyMap/CwdTitleSeam.swift",
         "Sources/WolfKeyMap/DividerDragSeam.swift",
@@ -47,6 +49,7 @@ swift_library(
         "Sources/WolfKeyMap/DrawerFocusSeam.swift",
         "Sources/WolfKeyMap/DrawerLayout.swift",
         "Sources/WolfKeyMap/EditorInset.swift",
+        "Sources/WolfKeyMap/FileOpenSeam.swift",
         "Sources/WolfKeyMap/FontSizeSeam.swift",
         "Sources/WolfKeyMap/FrameStats.swift",
         "Sources/WolfKeyMap/GlyphStyle.swift",
@@ -147,6 +150,15 @@ copy_file(
     allow_symlink = False,
 )
 
+# The `wolf` command at `bin/wolf` under the tree, which lands at Contents/Resources/bin/wolf:
+# rules_apple strips a tree's own top-level name. copy_to_directory keeps the exec bit.
+copy_to_directory(
+    name = "wolf_cli_tree",
+    srcs = ["//crates/wolf-core:wolf"],
+    out = "wolf_cli_tree",
+    replace_prefixes = {"crates/wolf-core/wolf": "bin/wolf"},
+)
+
 macos_application(
     name = "Wolf",
     # actool compiles `Wolf.icon/` into Assets.car; at minimum_os_version 26.0 an `.icon` bundle
@@ -175,6 +187,7 @@ macos_application(
         "//bazel/rg:rg_tree",
         "//bazel/treesitter-parsers:parsers_tree",
         "//runtime/nvim:init.lua",
+        ":wolf_cli_tree",
     ],
     visibility = ["//visibility:public"],
     deps = [":wolf_macos_main"],
@@ -218,6 +231,7 @@ swift_test(
         "Tests/WolfKeyMapTests/AppearanceSeamTests.swift",
         "Tests/WolfKeyMapTests/CellMetricsMathTests.swift",
         "Tests/WolfKeyMapTests/CmdlineSeamTests.swift",
+        "Tests/WolfKeyMapTests/CommandInstallSeamTests.swift",
         "Tests/WolfKeyMapTests/CommandSeamTests.swift",
         "Tests/WolfKeyMapTests/CwdTitleSeamTests.swift",
         "Tests/WolfKeyMapTests/DividerDragSeamTests.swift",
@@ -225,6 +239,7 @@ swift_test(
         "Tests/WolfKeyMapTests/DrawerFocusSeamTests.swift",
         "Tests/WolfKeyMapTests/DrawerLayoutTests.swift",
         "Tests/WolfKeyMapTests/EditorInsetTests.swift",
+        "Tests/WolfKeyMapTests/FileOpenSeamTests.swift",
         "Tests/WolfKeyMapTests/FontSizeSeamTests.swift",
         "Tests/WolfKeyMapTests/FrameStatsTests.swift",
         "Tests/WolfKeyMapTests/GlyphStyleTests.swift",
@@ -283,12 +298,14 @@ swift_test(
     srcs = [
         "Tests/WolfMacOSTests/ExtrasRestoreTests.swift",
         "Tests/WolfMacOSTests/FileTreeViewTests.swift",
+        "Tests/WolfMacOSTests/InstallCommandMenuTests.swift",
         "Tests/WolfMacOSTests/LighthouseColours.swift",
         "Tests/WolfMacOSTests/LiveCore.swift",
         "Tests/WolfMacOSTests/NewWindowPlacementTests.swift",
         "Tests/WolfMacOSTests/OffscreenRenderer.swift",
         "Tests/WolfMacOSTests/OffscreenRendererTests.swift",
         "Tests/WolfMacOSTests/OpenFolderRestoreTests.swift",
+        "Tests/WolfMacOSTests/OpenRequestFlowTests.swift",
         "Tests/WolfMacOSTests/OtherPaneFlowTests.swift",
         "Tests/WolfMacOSTests/PreviewKeyEquivalentTests.swift",
         "Tests/WolfMacOSTests/PreviewViewFixture.swift",
@@ -298,6 +315,7 @@ swift_test(
         "Tests/WolfMacOSTests/StatusbarStripColourTests.swift",
         "Tests/WolfMacOSTests/SymbolsFallbackTests.swift",
         "Tests/WolfMacOSTests/TabCoreTests.swift",
+        "Tests/WolfMacOSTests/TabIdTests.swift",
         "Tests/WolfMacOSTests/TerminalClosePaneTests.swift",
         "Tests/WolfMacOSTests/TerminalCursorFocusTests.swift",
         "Tests/WolfMacOSTests/TerminalDrawerResizeTests.swift",
@@ -321,6 +339,7 @@ swift_test(
         "//bazel/lighthouse:lighthouse_tree",
         "//bazel/nerd-fonts-symbols:nerd_fonts_symbols_tree",
         "//bazel/nvim:nvim_tree",
+        "//crates/wolf-core:wolf",
         "//runtime/nvim:init.lua",
     ],
     # In its `.xctest/Contents/MacOS/` the binary counts as a bundled app, whose AppKit aborts with
@@ -333,6 +352,7 @@ swift_test(
         "WOLF_TEST_LIGHTHOUSE_DIR": "$(rootpath //bazel/lighthouse:lighthouse_tree)",
         "WOLF_TEST_NERD_FONTS_SYMBOLS_DIR": "$(rootpath //bazel/nerd-fonts-symbols:nerd_fonts_symbols_tree)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+        "WOLF_TEST_WOLF_BIN": "$(rootpath //crates/wolf-core:wolf)",
     },
     deps = [":wolf_macos_lib"],
 )

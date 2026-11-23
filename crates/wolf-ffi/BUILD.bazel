@@ -958,6 +958,21 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
+# Headless, but binds real Unix-domain sockets, which the macOS build sandbox does not allow.
+# wolf-core is a direct dep so the test can send through its OpenClient.
+rust_test(
+    name = "open_requests",
+    srcs = ["tests/open_requests.rs"],
+    crate_root = "tests/open_requests.rs",
+    tags = ["no-sandbox"],
+    size = "small",
+    edition = "2021",
+    deps = [
+        ":wolf_ffi",
+        "//crates/wolf-core:wolf_core",
+    ] + all_crate_deps(normal_dev = True),
+)
+
 # Headless (no nvim). wolf-core is a direct dep so the test can name FONT_LICENSE_NOTICES.
 rust_test(
     name = "font_license_notices",

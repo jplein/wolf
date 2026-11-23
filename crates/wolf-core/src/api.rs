@@ -881,6 +881,28 @@ impl WolfCore {
         }
     }
 
+    /// Splits the whole tab vertically, `path` in a new editor window on the left and
+    /// everything the tab held on the right, and returns the new window's handle, which is
+    /// current; `0` on error. This is rule 4 of
+    /// `specs/cli-and-file-open.md#52-choosing-the-pane`. A missing `path` opens as a new
+    /// buffer for it.
+    ///
+    /// Blocks briefly on the captive nvim through [`block_on_rpc`](Self::block_on_rpc). No
+    /// [`LayoutIntent::Split`] is emitted, so the front-end binds the window it is handed. An
+    /// RPC error, a timeout included, is logged and returns `0`.
+    #[must_use]
+    pub fn open_split_left(&self, path: &Path) -> i64 {
+        let nvim = self.nvim.borrow();
+        let text = path.to_string_lossy();
+        match self.block_on_rpc("open_split_left", nvim.open_split_left(&text)) {
+            Ok(win) => win,
+            Err(e) => {
+                tracing::warn!("open_split_left({}) failed: {e}", path.display());
+                0
+            }
+        }
+    }
+
     /// Whether pane `win` has an older entry to go Back to.
     ///
     /// A cheap, LOCK-FREE-of-the-snapshot read of the sibling navigation-history

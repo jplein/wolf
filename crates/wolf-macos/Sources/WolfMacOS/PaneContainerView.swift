@@ -200,6 +200,11 @@ final class PaneContainerView: NSView {
   /// `runPendingTerminalRestore`.
   private var pendingTerminalRestore: [LivenessSeam.TerminalRestoreStep]?
 
+  /// Files opened from outside Wolf (`openFile`), in arrival order, waiting for the view to be
+  /// ready: a bound first pane, and no layout rebuild, drawer restore or terminal restore
+  /// pending, any of which would replace the pane a file lands in. A restart reset keeps them.
+  private var pendingFileOpens: [String] = []
+
   /// Invoked whenever the pane layout changes in a way that must be persisted (a
   /// divider drag ends, or a restore rebuild completes). Set by the window
   /// controller to `coordinator.scheduleStateSnapshot()`.
@@ -1544,6 +1549,7 @@ final class PaneContainerView: NSView {
 
     ensureInitialPane()
     runPendingTerminalRestore()
+    runPendingFileOpens()
     applyIntents()
     detectCloses()
     zoomedPane = PaneZoom.zoomed(
@@ -2449,6 +2455,79 @@ final class PaneContainerView: NSView {
       case .drawer:
         handle.toggle_terminal()
       }
+    }
+  }
+
+  /// Opens `path`, a file opened from outside Wolf, in the pane `specs/cli-and-file-open.md`
+  /// §5.2 chooses: unzooming first, focusing an editor pane already on it, opening it in an
+  /// editor or preview pane, or splitting the whole tab with a new editor pane on the left. A
+  /// missing file opens as a new buffer. It waits in `pendingFileOpens` until the view is ready.
+  func openFile(_ path: String) {
+    pendingFileOpens.append(path)
+    runPendingFileOpens()
+  }
+
+  /// Opens every waiting file in order once the view is ready, each choosing its pane from the
+  /// live layout. A placement other than the split leaves the active pane to the next wake's
+  /// `updateActivePane`, as `applyFocus` does.
+  private func runPendingFileOpens() {
+    guard !pendingFileOpens.isEmpty, !panes.isEmpty, pendingLayoutRebuild == nil,
+      pendingDrawerRestore == nil, pendingTerminalRestore == nil
+    else { return }
+    let paths = pendingFileOpens
+    pendingFileOpens.removeAll()
+    for path in paths {
+      placeFile(path)
+    }
+    syncGridSizes()
+    needsDisplay = true
+    onLayoutChanged?()
+  }
+
+  /// Places one file by core's choice over the live layout.
+  private func placeFile(_ path: String) {
+    let leaves = tree.leaves()
+    var paths: [PaneId: String] = [:]
+    var previews = Set<PaneId>()
+    var terminals = Set<PaneId>()
+    for (id, content) in leafContents() {
+      switch content {
+      case .buffer(let file): paths[id] = file
+      case .preview(let source):
+        paths[id] = source
+        previews.insert(id)
+      case .terminal(let cwd):
+        paths[id] = cwd
+        terminals.insert(id)
+      case .unreported: paths[id] = ""
+      }
+    }
+    let layout = PaneLayoutCodec.encode(
+      tree.layout(), paths: paths, previews: previews, terminals: terminals, zoomed: zoomedPane)
+    let choice = FileOpenSeam.choosePane(
+      path, layout: layout, focused: activePane.flatMap { leaves.firstIndex(of: $0) },
+      drawerZoomed: zoomedPane != nil && zoomedPane == drawerPaneId)
+    if choice.unzoom {
+      pendingRestoreZoom = nil
+      applyZoom(.openFile)
+    }
+    func win(_ index: Int) -> Int64 {
+      leaves.indices.contains(index) ? panes[leaves[index]]?.win ?? 0 : 0
+    }
+    switch choice.placement {
+    case .focus(let index):
+      if win(index) != 0 { handle.focus_win(win(index)) }
+    case .open(let index), .convert(let index):
+      if win(index) != 0 { handle.focus_win(win(index)) }
+      handle.open(path)
+    case .splitLeft:
+      let newWin = handle.open_split_left(path)
+      guard newWin != 0, paneForWin(newWin) == nil else { return }
+      let newId = allocPaneId()
+      tree.splitRootLeft(newId)
+      let grid = handle.grid_for_win(newWin)
+      panes[newId] = PaneBinding(win: newWin, boundGrid: grid == 0 ? nil : grid)
+      setActivePane(newId)
     }
   }
 

@@ -524,6 +524,75 @@ final class PaneTreeTests: XCTestCase {
     XCTAssertEqual(first, tree.leaves(), "paneRects order matches leaves order")
   }
 
+  // MARK: - splitRootLeft: the whole-tab split a file opened from outside Wolf makes
+
+  /// The layout with every weight dropped, written as `v[…]`, `h[…]` and leaf ids.
+  private func shape(_ layout: PaneLayout) -> String {
+    switch layout {
+    case .leaf(let id):
+      return "\(id)"
+    case .split(let orientation, let children, _):
+      let kind = orientation == .vertical ? "v" : "h"
+      return kind + "[" + children.map(shape).joined(separator: ", ") + "]"
+    }
+  }
+
+  /// The root's weights, empty for a leaf root.
+  private func rootWeights(_ tree: PaneTree) -> [Double] {
+    if case .split(_, _, let weights) = tree.layout() { return weights }
+    return []
+  }
+
+  /// Asserts `got` holds `want`, element by element, within `eps`.
+  private func assertWeights(
+    _ got: [Double], _ want: [Double], _ message: String, file: StaticString = #filePath,
+    line: UInt = #line
+  ) {
+    XCTAssertTrue(
+      got.count == want.count && zip(got, want).allSatisfy { approx($0, $1) },
+      "\(message): weights \(got), want \(want)", file: file, line: line)
+  }
+
+  func testSplitRootLeftOfALeafPutsTheNewPaneFirst() {
+    let tree = PaneTree(root: p1)
+    tree.splitRootLeft(p2)
+    XCTAssertEqual(
+      shape(tree.layout()), "v[2, 1]",
+      "splitRootLeft on a lone leaf must give vertical[new, old]; v[1, 2] means the new pane "
+        + "went last, on the right")
+    assertWeights(rootWeights(tree), [0.5, 0.5], "the two panes must split the width equally")
+    assertRect(
+      rectFor(tree.paneRects(width: w, height: h), p2), 0.0, 0.0, halfW, h,
+      "the new pane is the left half, full height")
+  }
+
+  func testSplitRootLeftOfAHorizontalRootWrapsTheWholeRoot() {
+    let tree = PaneTree(root: p1)
+    tree.split(p1, p2, .horizontal)
+    tree.splitRootLeft(p3)
+    XCTAssertEqual(
+      shape(tree.layout()), "v[3, h[1, 2]]",
+      "splitRootLeft on a horizontal root must put the new pane left of the whole stack; "
+        + "h[v[3, 1], 2] means it split the first leaf instead of the root")
+    assertWeights(rootWeights(tree), [0.5, 0.5], "the new pane and the old root split equally")
+    assertRect(
+      rectFor(tree.paneRects(width: w, height: h), p3), 0.0, 0.0, halfW, h,
+      "the new pane spans the full height on the left")
+  }
+
+  func testSplitRootLeftOfAVerticalRootJoinsItFlat() {
+    let tree = PaneTree(root: p1)
+    tree.split(p1, p2, .vertical)
+    tree.splitRootLeft(p3)
+    XCTAssertEqual(
+      shape(tree.layout()), "v[3, 1, 2]",
+      "splitRootLeft on a vertical root must join it as the first of a flat row; v[3, v[1, 2]] "
+        + "means a same-orientation root was nested")
+    assertWeights(
+      rootWeights(tree), [1.0 / 3, 1.0 / 3, 1.0 / 3],
+      "the row must re-equalize to thirds, as a same-orientation split does")
+  }
+
   // MARK: - FFI discriminant contract (NOT in layout.rs)
   // Shared with wolf-ffi: orientation H=0 V=1, focus_dir L=0 R=1 U=2 D=3; out of range is nil.
 

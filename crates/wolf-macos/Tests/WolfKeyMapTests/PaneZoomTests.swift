@@ -85,6 +85,20 @@ final class PaneZoomTests: XCTestCase {
         + " opens hidden")
   }
 
+  /// A file opened from outside Wolf unzooms, whichever pane is zoomed and active.
+  func testOpeningAFileUnzooms() {
+    let cases: [(zoomed: PaneId, active: PaneId, panes: [PaneId])] = [
+      (p2, p2, [p1, p2]), (p2, p1, [p1, p2]), (drawer, drawer, [p1, p2, drawer]),
+    ]
+    for (zoomed, active, panes) in cases {
+      XCTAssertNil(
+        PaneZoom.zoomed(after: .openFile, zoomed: zoomed, active: active, panes: panes),
+        "opening a file with \(zoomed) zoomed and \(active) active must unzoom, so the pane it "
+          + "lands in shows; \(zoomed) means .openFile keeps a zoom whose pane is still there, "
+          + "as .panesChanged does")
+    }
+  }
+
   /// K5: a change of panes unzooms only when the zoomed pane is gone.
   func testOnlyClosingTheZoomedPaneUnzooms() {
     XCTAssertNil(

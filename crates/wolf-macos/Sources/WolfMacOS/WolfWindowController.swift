@@ -742,10 +742,24 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
     window?.toggleSidebar()
   }
 
-  /// The cwd this view surfaces, in tab titles, the Window menu and the palette: its
-  /// own Neovim's live cwd. An empty-state view answers `""`.
+  /// The cwd this view surfaces, in tab titles, the Window menu and the palette, and the
+  /// directory Open Folder and a file's project count it as open on: its own Neovim's live
+  /// cwd, or its launch directory before Neovim reports one. An empty-state view answers `""`.
   var persistedCwd: String {
-    hasFolder ? currentCwd : ""
+    OpenFolderSeam.liveDirectory(
+      hasFolder: hasFolder, reportedCwd: currentCwd, launchCwd: tabCore.launchCwd)
+  }
+
+  /// Opens `path`, a file opened from outside Wolf, in this tab's pane by
+  /// `specs/cli-and-file-open.md` §5.2, and raises the tab with the pane container focused.
+  /// An empty tab hides its empty state so the file shows, and stays a tab with no folder.
+  func openFile(_ path: String) {
+    if !hasFolder { emptyState?.isHidden = true }
+    paneContainer?.openFile(path)
+    raise()
+    if let paneContainer {
+      window?.makeFirstResponder(paneContainer)
+    }
   }
 
   /// This tab's top-level NSWindow (for tab grouping + the snapshot walk), or

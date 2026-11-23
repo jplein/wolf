@@ -31,9 +31,48 @@ const LAUNCH_TIMEOUT: Duration = Duration::from_secs(30);
 
 const USAGE: &str = "usage: wolf [--wait] [PATH]";
 
+/// The variable that moves the state directory, and with it the socket.
+const STATE_DIR_ENV: &str = "WOLF_STATE_DIR";
+
+/// The bundle identifier Launch Services starts Wolf by.
+// crates/wolf-macos/Info.plist's CFBundleIdentifier is the same string.
+#[cfg(target_os = "macos")]
+const BUNDLE_ID: &str = "org.wolf.WolfMacOS";
+
 /// The platform's way to start Wolf when nothing listens, `None` where there is none.
+///
+/// On macOS it launches `Wolf.app` through Launch Services. A launched app inherits no
+/// environment, so it listens in the default state directory only: under a non-empty
+/// `WOLF_STATE_DIR` there is no launcher. Linux has none.
 fn launcher() -> Option<fn() -> io::Result<()>> {
+    let overridden = std::env::var_os(STATE_DIR_ENV).is_some_and(|dir| !dir.is_empty());
+    if overridden {
+        return None;
+    }
+    platform_launcher()
+}
+
+#[cfg(target_os = "macos")]
+fn platform_launcher() -> Option<fn() -> io::Result<()>> {
+    Some(launch_app)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn platform_launcher() -> Option<fn() -> io::Result<()>> {
     None
+}
+
+/// Runs `open -b` on Wolf's bundle identifier; an `Err` when `open` fails or exits non-zero.
+#[cfg(target_os = "macos")]
+fn launch_app() -> io::Result<()> {
+    let status = std::process::Command::new("/usr/bin/open")
+        .args(["-b", BUNDLE_ID])
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!("open -b {BUNDLE_ID} {status}")))
+    }
 }
 
 /// The parsed command line.

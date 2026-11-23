@@ -76,6 +76,11 @@ final class TabCore {
   /// The directory the core was started in, where a restart respawns it.
   let launchCwd: String
 
+  /// The tab's ID (`specs/cli-and-file-open.md` §3), which every terminal session the core
+  /// starts sees as `WOLF_TAB_ID`. Assigned once at `start`, before any view can start a
+  /// session, and kept by a crash restart, since the tab is the same tab.
+  let wolfTabId: String
+
   /// The tab this core serves. Weak: the tab's controller holds the core strongly.
   weak var view: TabCoreView?
 
@@ -84,11 +89,13 @@ final class TabCore {
   weak var coordinator: AppDelegate?
 
   private init(
-    handle: WolfCoreHandle, wakeToken: UInt64, launchCwd: String, coordinator: AppDelegate?
+    handle: WolfCoreHandle, wakeToken: UInt64, launchCwd: String, wolfTabId: String,
+    coordinator: AppDelegate?
   ) {
     self.handle = handle
     self.wakeToken = wakeToken
     self.launchCwd = launchCwd
+    self.wolfTabId = wolfTabId
     self.coordinator = coordinator
   }
 
@@ -120,7 +127,8 @@ final class TabCore {
     }
     let token = handle.wake_token()
     let tabCore = TabCore(
-      handle: handle, wakeToken: token, launchCwd: launchCwd, coordinator: coordinator)
+      handle: handle, wakeToken: token, launchCwd: launchCwd,
+      wolfTabId: handle.assign_tab_id().toString(), coordinator: coordinator)
     WindowRegistry.shared.register(tabCore, token: token)
     return tabCore
   }

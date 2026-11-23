@@ -49,15 +49,16 @@ use std::time::Duration;
 
 use wolf_core::app_state as app;
 use wolf_core::{
-    rank_buffers, rank_matches_top_n, rank_palette, AppStateStore, Appearance, BufInfo, BufferRow,
-    Cmdline, Command, CommandMru, CoreConfig, CursorShape, FileSearch, FocusDir, Grid,
-    HighlightTable, InputEvent, Key, KeyEvent, LayoutIntent, Liveness, MarkdownCursor, MouseAction,
-    MouseButton, MouseEvent, PaletteRow, PaletteRowKind, PaletteWindow, PaneStatus, PreviewInfo,
+    choose_pane, project_directory, rank_buffers, rank_matches_top_n, rank_palette, AppStateStore,
+    Appearance, BufInfo, BufferRow, Cmdline, Command, CommandMru, CoreConfig, CursorShape,
+    FileSearch, FocusDir, Grid, HighlightTable, InputEvent, Key, KeyEvent, LayoutIntent, Liveness,
+    MarkdownCursor, MouseAction, MouseButton, MouseEvent, OpenListener, OpenRequest, OpenTarget,
+    PaletteRow, PaletteRowKind, PaletteWindow, PaneChoice, PanePlacement, PaneStatus, PreviewInfo,
     Pum, ResolvedStyle, Rgb, ScrollDirection, ScrollEvent, SearchMatch, SearchOptions,
-    SearchSession, SplitOrientation, TabFiles, TerminalCell, TerminalCellWidth, TerminalCommand,
-    TerminalCursor, TerminalCursorStyle, TerminalFrame, TerminalId, TerminalMouseEvent,
-    TerminalMouseKind, TerminalScrollEvent, TerminalTarget, TerminalUnderline, Toast, WakeFn,
-    WinInfo, WolfCore,
+    SearchSession, SplitOrientation, TabFiles, TabId, TerminalCell, TerminalCellWidth,
+    TerminalCommand, TerminalCursor, TerminalCursorStyle, TerminalFrame, TerminalId,
+    TerminalMouseEvent, TerminalMouseKind, TerminalScrollEvent, TerminalTarget, TerminalUnderline,
+    Toast, WakeFn, WinInfo, WolfCore,
 };
 
 // Re-export the bridge's transparent structs so rlib consumers (the Rust tests) can name them;
@@ -472,6 +473,30 @@ mod terminal_flag {
     pub const BLINK: u8 = 1 << 6;
 }
 
+/// The [`FfiOpenItem::kind`] discriminants, mirroring the variant order of
+/// [`wolf_core::OpenTarget`].
+mod open_kind {
+    /// No path: launch or activate Wolf.
+    pub const ACTIVATE: u8 = 0;
+    /// An existing directory, for Open Folder.
+    pub const DIRECTORY: u8 = 1;
+    /// A file, existing or not.
+    pub const FILE: u8 = 2;
+}
+
+/// The [`FfiPaneChoice::placement`] discriminants, mirroring the variant order of
+/// [`wolf_core::PanePlacement`].
+mod pane_placement {
+    /// Focus the editor pane already showing the file.
+    pub const FOCUS: u8 = 0;
+    /// Open the file in the editor pane.
+    pub const OPEN: u8 = 1;
+    /// Make the preview pane an editor pane showing the file.
+    pub const CONVERT: u8 = 2;
+    /// Split the whole tab, the file in a new editor pane on the left.
+    pub const SPLIT_LEFT: u8 = 3;
+}
+
 // swift-bridge's expansion fails this crate's stricter lints; the allow is scoped to the bridge
 // module so the hand-written glue below is held to the normal bar.
 #[allow(clippy::all, missing_docs, unused)]
@@ -729,6 +754,12 @@ mod ffi {
         // Edits the active preview's source in `target_win` if usable, else splits (source lands
         // left), and focuses that pane. Blocks briefly; returns the bound bufnr, 0 on failure.
         fn edit_in_other(&self, target_win: i64) -> i64;
+        // Splits the whole tab with `path` in a new current window on the left, and returns its
+        // handle. No Split intent follows. Blocks briefly; 0 on failure.
+        fn open_split_left(&self, path: String) -> i64;
+        // Mints a fresh tab ID, gives it to the core for the terminal sessions it starts, and
+        // returns it lowercase; "" once the core is gone.
+        fn assign_tab_id(&self) -> String;
         // One `FfiPreview` per window showing a preview scratch, joined to its source's live
         // changedtick. Empty when the core is gone.
         fn previews(&self) -> Vec<FfiPreview>;
@@ -1183,6 +1214,46 @@ mod ffi {
         // The tab Open Folder focuses for `directory`, by `app_state::project_tab` over the
         // scratch and its recency. Clears nothing and never opens the store.
         fn wolf_ffi_app_state_project_tab(directory: String) -> FfiProjectTab;
+        // Where `file` goes in the scratch's last window's last tab, by `file_open::choose_pane`.
+        // Reads the scratch only.
+        fn wolf_ffi_app_state_choose_pane(file: String) -> FfiPaneChoice;
+        // `file`'s project directory, by `file_open::project_directory` over the directories of
+        // every scratch tab. Reads the scratch only.
+        fn wolf_ffi_app_state_project_directory(file: String) -> String;
+    }
+
+    extern "Rust" {
+        type FfiPaneChoice;
+
+        // Whether the tab's zoom is undone first.
+        fn unzoom(&self) -> bool;
+        // A `pane_placement` discriminant.
+        fn placement(&self) -> u8;
+        // The depth-first pane index the placement names; 0 for `SPLIT_LEFT`.
+        fn pane(&self) -> u32;
+    }
+
+    extern "Rust" {
+        type FfiOpenItem;
+
+        // An `open_kind` discriminant.
+        fn kind(&self) -> u8;
+        // The resolved path; "" for an activate request.
+        fn path(&self) -> String;
+        // The request's tab ID, lowercase; "" when it carried none.
+        fn tab_id(&self) -> String;
+    }
+
+    extern "Rust" {
+        // Binds the process-wide open listener in `state_dir`, or core's state dir when it is "",
+        // dropping a listener already bound first. "" on success, else the error's message.
+        fn wolf_ffi_open_listen(state_dir: String) -> String;
+        // Drops the listener, which removes its socket. A no-op with none.
+        fn wolf_ffi_open_stop();
+        // The requests taken since the last drain, in arrival order; empty with no listener.
+        fn wolf_ffi_open_drain() -> Vec<FfiOpenItem>;
+        // `path` resolved as a request with no tab ID, which is Finder's route; "" activates.
+        fn wolf_ffi_open_item(path: String) -> FfiOpenItem;
     }
 
     extern "Rust" {
@@ -1629,6 +1700,147 @@ fn registered_search_wake(token: u64) -> WakeFn {
             f(token);
         }
     })
+}
+
+// --- The open channel (`specs/cli-and-file-open.md` §2) ---
+
+/// The globally-registered open-channel wake callback, or null when none is registered. A
+/// fifth sibling of [`WAKE_FN`], called with token `0`, since the listener is process-wide.
+static OPEN_WAKE_FN: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+
+/// The process-wide listener [`wolf_ffi_open_listen`] binds, `None` when nothing listens.
+static OPEN_LISTENER: Mutex<Option<OpenListener>> = Mutex::new(None);
+
+/// Locks [`OPEN_LISTENER`], surviving a panic that poisoned it.
+fn open_listener() -> std::sync::MutexGuard<'static, Option<OpenListener>> {
+    OPEN_LISTENER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Registers (or, with `None`, clears) the front-end's open-channel wake callback.
+///
+/// Swift's `OpenWakeBridge` calls this once at startup with a thunk that hops to the main
+/// queue and drains the taken requests. Declared in the hand-written
+/// `generated/wolf_ffi_wake.h`, like [`wolf_ffi_set_wake`].
+///
+/// # Safety
+///
+/// `wake`, if `Some`, must be a valid `extern "C" fn(u64)` that is safe to call from any
+/// thread: the listener calls it from a connection's thread.
+#[no_mangle]
+pub extern "C" fn wolf_ffi_set_open_wake(wake: Option<WakeCallback>) {
+    let ptr = wake.map_or(std::ptr::null_mut(), |f| f as *mut ());
+    OPEN_WAKE_FN.store(ptr, Ordering::Release);
+}
+
+/// The [`WakeFn`] the listener calls after queueing each request: the registered open wake
+/// with token `0`, or nothing when none is registered.
+fn registered_open_wake() -> WakeFn {
+    Arc::new(|| {
+        let ptr = OPEN_WAKE_FN.load(Ordering::Acquire);
+        if !ptr.is_null() {
+            // SAFETY: `ptr` was set from a valid `extern "C" fn(u64)` by
+            // `wolf_ffi_set_open_wake`; a non-null value is always such a pointer.
+            let f: WakeCallback = unsafe { std::mem::transmute::<*mut (), WakeCallback>(ptr) };
+            f(0);
+        }
+    })
+}
+
+/// Binds the process-wide [`OpenListener`] in `state_dir`, or in [`wolf_core::state_dir`]
+/// when `state_dir` is `""`, and returns `""`; on failure, the error's message, with nothing
+/// listening. A listener already bound is dropped first, so rebinding its own directory works.
+#[must_use]
+pub fn wolf_ffi_open_listen(state_dir: String) -> String {
+    let mut listener = open_listener();
+    drop(listener.take());
+    let dir = if state_dir.is_empty() {
+        match wolf_core::state_dir() {
+            Some(dir) => dir,
+            None => return "cannot find Wolf's state directory".to_owned(),
+        }
+    } else {
+        PathBuf::from(state_dir)
+    };
+    match OpenListener::bind(&dir, registered_open_wake()) {
+        Ok(bound) => {
+            *listener = Some(bound);
+            String::new()
+        }
+        Err(e) => e.to_string(),
+    }
+}
+
+/// Drops the listener, which removes its socket file. A no-op with none.
+pub fn wolf_ffi_open_stop() {
+    let stopped = open_listener().take();
+    drop(stopped);
+}
+
+/// The requests the listener took since the last drain, in arrival order, each resolved
+/// through [`OpenRequest::target`]. Empty with no listener.
+#[must_use]
+pub fn wolf_ffi_open_drain() -> Vec<FfiOpenItem> {
+    let requests = open_listener()
+        .as_ref()
+        .map(OpenListener::drain_requests)
+        .unwrap_or_default();
+    requests.iter().map(FfiOpenItem::of).collect()
+}
+
+/// `path` resolved as a request with no tab ID would be, which is how
+/// `specs/cli-and-file-open.md` §7 has Finder's opens handled; `""` is an activate.
+#[must_use]
+pub fn wolf_ffi_open_item(path: String) -> FfiOpenItem {
+    let request = OpenRequest {
+        path: (!path.is_empty()).then(|| PathBuf::from(path)),
+        wait: false,
+        tab_id: None,
+    };
+    FfiOpenItem::of(&request)
+}
+
+/// One open request, resolved (opaque to Swift).
+pub struct FfiOpenItem {
+    target: OpenTarget,
+    tab_id: Option<TabId>,
+}
+
+impl FfiOpenItem {
+    fn of(request: &OpenRequest) -> FfiOpenItem {
+        FfiOpenItem {
+            target: request.target(),
+            tab_id: request.tab_id,
+        }
+    }
+
+    /// The target's `open_kind` discriminant.
+    #[must_use]
+    pub fn kind(&self) -> u8 {
+        match self.target {
+            OpenTarget::Activate => open_kind::ACTIVATE,
+            OpenTarget::Directory(_) => open_kind::DIRECTORY,
+            OpenTarget::File(_) => open_kind::FILE,
+        }
+    }
+
+    /// The resolved path, `""` for an activate request.
+    #[must_use]
+    pub fn path(&self) -> String {
+        match &self.target {
+            OpenTarget::Activate => String::new(),
+            OpenTarget::Directory(path) | OpenTarget::File(path) => {
+                path.to_string_lossy().into_owned()
+            }
+        }
+    }
+
+    /// The request's tab ID in its lowercase form, `""` when it carried none.
+    #[must_use]
+    pub fn tab_id(&self) -> String {
+        self.tab_id.map(|id| id.to_string()).unwrap_or_default()
+    }
 }
 
 /// Returns the ancestor directory rel-paths of `rel_path`, from the cwd root down
@@ -2106,6 +2318,80 @@ impl FfiProjectTab {
     pub fn tab(&self) -> u32 {
         self.found
             .map_or(0, |(_, t)| u32::try_from(t).unwrap_or(u32::MAX))
+    }
+}
+
+/// Where `file` goes in the scratch's last window's last tab, by
+/// [`wolf_core::choose_pane`]: the front-end feeds the one tab it asks about. With no tab, a
+/// default tab answers [`PanePlacement::SplitLeft`].
+///
+/// Reads the scratch only, like [`wolf_ffi_app_state_project_tab`].
+#[must_use]
+pub fn wolf_ffi_app_state_choose_pane(file: String) -> FfiPaneChoice {
+    let scratch = app_scratch();
+    let tab = scratch
+        .state
+        .windows
+        .last()
+        .and_then(|window| window.tabs.last())
+        .map(|tab| tab.content.clone())
+        .unwrap_or_default();
+    FfiPaneChoice {
+        choice: choose_pane(&tab, std::path::Path::new(&file)),
+    }
+}
+
+/// `file`'s project directory, by [`wolf_core::project_directory`] over the non-empty
+/// directories of every scratch tab, which the front-end feeds as the live tabs' directories.
+///
+/// Reads the scratch only, like [`wolf_ffi_app_state_project_tab`].
+#[must_use]
+pub fn wolf_ffi_app_state_project_directory(file: String) -> String {
+    let open: Vec<PathBuf> = app_scratch()
+        .state
+        .windows
+        .iter()
+        .flat_map(|window| &window.tabs)
+        .filter(|tab| !tab.directory.is_empty())
+        .map(|tab| PathBuf::from(&tab.directory))
+        .collect();
+    project_directory(std::path::Path::new(&file), &open)
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// [`wolf_ffi_app_state_choose_pane`]'s answer (opaque to Swift).
+pub struct FfiPaneChoice {
+    choice: PaneChoice,
+}
+
+impl FfiPaneChoice {
+    /// Whether the tab's zoom, a pane's or the drawer's, is undone first.
+    #[must_use]
+    pub fn unzoom(&self) -> bool {
+        self.choice.unzoom
+    }
+
+    /// The placement's `pane_placement` discriminant.
+    #[must_use]
+    pub fn placement(&self) -> u8 {
+        match self.choice.placement {
+            PanePlacement::Focus(_) => pane_placement::FOCUS,
+            PanePlacement::Open(_) => pane_placement::OPEN,
+            PanePlacement::Convert(_) => pane_placement::CONVERT,
+            PanePlacement::SplitLeft => pane_placement::SPLIT_LEFT,
+        }
+    }
+
+    /// The depth-first pane index the placement names, `0` for a split.
+    #[must_use]
+    pub fn pane(&self) -> u32 {
+        match self.choice.placement {
+            PanePlacement::Focus(i) | PanePlacement::Open(i) | PanePlacement::Convert(i) => {
+                u32::try_from(i).unwrap_or(u32::MAX)
+            }
+            PanePlacement::SplitLeft => 0,
+        }
     }
 }
 
@@ -3469,6 +3755,31 @@ impl WolfCoreHandle {
             .borrow()
             .as_ref()
             .map_or(0, |c| c.edit_in_other(target_win))
+    }
+
+    /// Splits the whole tab vertically with `path` in a new, current window on the left, and
+    /// returns its handle, through [`WolfCore::open_split_left`]. No split intent follows, so
+    /// the caller binds the window itself. Blocks briefly; `0` on failure or once shut down.
+    #[must_use]
+    pub fn open_split_left(&self, path: String) -> i64 {
+        self.core
+            .borrow()
+            .as_ref()
+            .map_or(0, |c| c.open_split_left(std::path::Path::new(&path)))
+    }
+
+    /// Mints a fresh [`TabId`], gives it to the core through [`WolfCore::set_tab_id`], so the
+    /// terminal sessions it starts from now on carry it in `WOLF_TAB_ID`, and returns it
+    /// lowercase. `""` once shut down.
+    #[must_use]
+    pub fn assign_tab_id(&self) -> String {
+        let core = self.core.borrow();
+        let Some(core) = core.as_ref() else {
+            return String::new();
+        };
+        let id = TabId::random();
+        core.set_tab_id(id);
+        id.to_string()
     }
 
     /// A snapshot of the open preview panes: one [`FfiPreview`] per window showing a
