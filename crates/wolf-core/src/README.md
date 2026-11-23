@@ -8,7 +8,7 @@ The modules of [`wolf-core`](../README.md), one entry each. Everything the crate
 
 #### `lib.rs`
 
-Crate root. Declares every module and flattens the public surface into root re-exports, so consumers write `wolf_core::Snapshot` rather than `wolf_core::render::Snapshot`. The [`app_state`](#app_staters) model is the exception, reached as `wolf_core::app_state::…`, because its `WindowState` and `Cursor` would collide with the root's `state::WindowState` and `render::Cursor`.
+Crate root. Declares every module and flattens the public surface into root re-exports, so consumers write `wolf_core::Snapshot` rather than `wolf_core::render::Snapshot`. The [`app_state`](#app_staters) model is the exception, reached as `wolf_core::app_state::…`, because its `Cursor` would collide with the root's `render::Cursor`.
 
 #### `api.rs`
 
@@ -144,25 +144,12 @@ Reads the user-preferences file `wolf-config.yaml` and resolves the per-platform
 
 #### `state.rs`
 
-Persists the `state.json` tree and renders a saved layout into the spec Neovim's rebuild helper decodes.
+Resolves the platform state directory, which holds `wolf.sqlite`, and the directories Wolf keeps under it.
 
 **Public API**
 
 - `state_dir()` — `WOLF_STATE_DIR` overrides the platform default; `swap_dir_for(cwd)` derives a stable per-project swap dir under it, so a fresh nvim finds a dead one's swaps.
 - `spell_dir()` / `runtime_user_dir()` / `parsers_user_dir()` — global subdirs of `state_dir()`, not per-project, exported as matching `WOLF_*` env vars; `None` when unresolvable. `seed_runtime_user_dir(dir)` seeds the `INIT_USER_FILE_NAME` template into a missing or empty dir only; a non-empty dir is never touched, even without the template ([wolf-core-decisions.md](../../../notes/wolf-core-decisions.md)).
-- `load_state(dir)` — read-only and infallible: an absent file is a silent `None`; any other failure warns, leaving the bytes intact. An editor or preview leaf whose file is gone loads unzoomed ([why](../../../notes/wolf-core-decisions.md#the-persisted-zoom-mark)).
-- `StateStore::open/state/set_snapshot/flush` — an unchanged `set_snapshot` writes nothing.
-- `rebuild_layout_spec(&PaneNode) -> String` — the spec `WolfCore::rebuild_layout` takes; total: a non-finite weight renders `0.0`, a serialization error `"{}"`.
-
-**Decisions**
-
-- The spec is deliberately not `PaneNode`'s serde shape; leaves emit depth-first, through `app_state`'s builders, to zip onto `rebuild_layout`'s returned handles ([why](../../../notes/wolf-core-decisions.md#the-rebuild-layout-wire-format); shape in [`runtime/nvim/README.md`](../../../runtime/nvim/README.md)).
-- One `wolf-state-writer` thread owns every write: coalesce, sibling-tmp, rename — no partial file after a crash. A failed write still advances the generation; `flush` cannot hang.
-- `WindowState.tabs` has no `#[serde(default)]`: a file without it fails deserialization and is ignored rather than half-migrated.
-
-**Gotchas**
-
-- Opening one directory twice in-process races two writers on the tmp name — clone one store. Across processes, last writer wins. Geometry is front-end `f64` points; non-positive means unset.
 
 #### `app_state.rs`
 
@@ -179,7 +166,7 @@ Purpose: the model of [§2](../../../specs/application-state.md#2-the-state-mode
 **Decisions**
 
 - `PaneRef` is a depth-first index, not a per-leaf mark ([why](../../../notes/wolf-core-decisions.md#the-persisted-zoom-mark)).
-- The crate-private `leaf_spec` and `layout_spec` build the rebuild document for both models ([why](../../../notes/wolf-core-decisions.md#the-rebuild-layout-wire-format)).
+- The rebuild document is deliberately not the model's serde shape; `tab_rebuild_spec` emits leaves depth-first, to zip onto `rebuild_layout`'s returned handles ([why](../../../notes/wolf-core-decisions.md#the-rebuild-layout-wire-format); shape in [`runtime/nvim/README.md`](../../../runtime/nvim/README.md)).
 
 #### `app_state_store.rs`
 
@@ -190,7 +177,7 @@ Purpose: `AppStateStore`, over the `window_state` and `project_state` state tabl
 - `open(dir)` — infallible. Clones share the writer.
 - `window_state()` for launch, and `project_state(directory)` for Open Folder, which marks the row most recently used. Each reads `None` for no row, a row that does not parse (left as it is), or a table from a newer build.
 - `submit(state, recency)` — the whole window state plus each window's tab recency, which feeds `project_tab` and is never stored. Only a changed tree wakes the writer; a changed recency alone waits for the next write.
-- `flush(timeout)` — as `StateStore::flush`. `PROJECT_STATE_LIMIT` is the spec's 200.
+- `flush(timeout)` — `false` when `timeout` passed first. A failed write counts as attempted, so a broken database cannot hang it. `PROJECT_STATE_LIMIT` is the spec's 200.
 
 **Decisions**
 
@@ -413,7 +400,7 @@ Purpose: the crate-private open, versioning and recovery of `wolf.sqlite`, by [�
 - `TableSpec::version` is the only shape check: bump it with `columns`, plus a state table's migration (`version` is `migrations.len() + 1`). A table with no `schema` row is recreated.
 - A newer state table's flag is sticky across reopens and heals ([why](../../../notes/wolf-core-decisions.md#the-application-state-store)).
 - Only `SQLITE_CORRUPT` or `SQLITE_NOTADB` deletes the file and its sidecars, destroying every table's rows; a busy, locked or schema error never may.
-- The legacy files are removed on every `Table::open_all`.
+- Every `Table::open_all` deletes the files [§1 removes](../../../specs/application-state.md#files-wolf-removes), `state.json` among them.
 
 **Gotchas**
 

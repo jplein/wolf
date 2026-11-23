@@ -72,7 +72,7 @@ Headless (`//crates/wolf-core:app_state_rules`: real temp files for the existenc
 **Covers**
 
 - `project_tab` and `project_states`: [the three branches](../../../specs/application-state.md#which-tab-becomes-a-directorys-project-state), an active tab anywhere beating a recent one in a front window, unlisted tabs ranking after listed ones, and `""` choosing nothing.
-- `restored_tab`'s pane, zoom and focus rules, and the kind, cursor and zoom marks of the document `tab_rebuild_spec` renders.
+- `restored_tab`'s pane, zoom and focus rules, and the kind, cursor and zoom marks of the document `tab_rebuild_spec` renders: its leaves numbered depth-first through a nested layout, as a `PaneRef` counts them, and a non-finite weight rendered as `0.0` with the split's shape kept.
 
 #### `app_state_store.rs`
 
@@ -202,7 +202,7 @@ Headless (`//crates/wolf-core:db`: real SQLite files in tempdirs, no nvim, no `W
 
 **Covers**
 
-- The cache half of [the storage rules](../../../specs/application-state.md#1-storage), through the three stores' public API plus raw `rusqlite` connections: one `wolf.sqlite` with a `schema` row per table; a cache table at a newer or older version recreated while the other tables keep their rows; a file that is not a database replaced; the legacy `*-mru.sqlite` files and their sidecars removed at open with nothing imported; and concurrent opens of all three stores losing no row.
+- The cache half of [the storage rules](../../../specs/application-state.md#1-storage), through the three stores' public API plus raw `rusqlite` connections: one `wolf.sqlite` with a `schema` row per table; a cache table at a newer or older version recreated while the other tables keep their rows; a file that is not a database replaced; the legacy `*-mru.sqlite` files and their sidecars removed at open with nothing imported; a well-formed old `state.json` and `state.json.tmp` deleted when `AppStateStore` opens, its window absent from `window_state()`; and concurrent opens of all three stores losing no row.
 - The busy-database rule is in [`mru.rs`](#mrurs), and each store's table with no `schema` row is in its own file.
 
 **Gotchas**
@@ -515,7 +515,7 @@ Real Neovim: needs `WOLF_NVIM_BIN`, the staged nvim runfiles, and `tags = ["no-s
 
 **Covers**
 
-- `WolfCore::rebuild_layout(spec_json)` realizing a saved pane-split tree: one handle per spec leaf, distinct, in DFS/leaf order, each bound to the requested buffer — across nested splits, lone leaves, empty-path leaves, and `preview: true` leaves reopened as previews, not `:edit`ed.
+- `WolfCore::rebuild_layout(spec_json)` realizing `tab_rebuild_spec`'s document: one handle per spec leaf, distinct, in DFS/leaf order, each bound to the requested buffer — across nested splits, lone leaves, empty-path leaves, and `preview: true` leaves reopened as previews, not `:edit`ed.
 - `rebuild_reports_every_leaf_window_on_return`: when the rebuild returns, `win_buffers` already reports every returned window with its leaf's file, and Neovim lists all three files, which rules out the `:edit`s themselves racing startup. It repeats on `BARRIER_ROUNDS` fresh cores.
 - A terminal leaf's session, bound into its window and started in the leaf's directory, else the tabpage cwd.
 - `rebuild_ends_on_the_zoomed_leaf`: `active_win` on return is the zoomed middle leaf's window, where an unzoomed control rebuild ends on the last leaf.
@@ -686,27 +686,13 @@ Real Neovim and real `/bin/sh` sessions in ptys (`//crates/wolf-core:split_comma
 
 **Gotchas** — The `Split` intent is sent from inside the split, ahead of the new window's notifications, so the editor and preview cases read the new window only after a blocking request and `SPLIT_SETTLE`. The drawer case's barrier is a `focus_win` queued behind both splits: its landing proves Neovim handled them, and the negative settle follows it.
 
-#### `state_layout.rs`
-
-Headless — driven through `tempfile` dirs handed to `StateStore::open` / `load_state`, so its target needs no runfiles and no `no-sandbox` tag.
-
-**Covers** — the per-tab pane tree: `TabState.layout: Option<PaneNode>` round-tripping through `set_snapshot` -> `flush` -> `load_state` for leaf, two-child, n-ary, perpendicular-nested and empty-path shapes; the on-disk serde tags and orientation strings; and that a v1 file missing `layout`, or a leaf missing `preview`, `terminal` or `zoomed`, loads with the `serde(default)` value. Only a terminal or zoomed leaf writes that key.
-
-The zoom mark round-trips. `load_state` clears it from an editor or preview leaf whose path is gone, changing nothing else, in the tree or the file, and keeps it on an existing file, a terminal leaf whose directory is gone, and an unnamed leaf.
-
-It also covers `rebuild_layout_spec`, the document `wolf_rebuild_layout` decodes: the `Vertical` to `"v"` orientation row, leaf order matching the depth-first order `WolfCore::rebuild_layout` returns handles in, each leaf's `zoomed` key, a path carrying a quote, a backslash and a newline surviving intact, and a non-finite weight emitted as `0.0`.
-
-**Gotchas** — `STATE_VERSION` stays 1, so a new field means a new `serde(default)` back-compat case here, not a version bump. A zoomed editor leaf that must keep its mark names a real `tempfile` file, not a `/proj/…` path. The spec cases parse the rendered string back into a `serde_json::Value` instead of comparing text, because key order is not part of the contract; one target asserting both the wire shape and the unrelated serde shape is deliberate.
-
 #### `state_unit.rs`
 
-Headless — explicit `tempfile` dirs passed to `StateStore::open` / `load_state`; no nvim, no runfiles, no `no-sandbox` tag.
+Headless — explicit `tempfile` dirs; no nvim, no runfiles, no `no-sandbox` tag.
 
-**Covers** — the whole-tree `state` API: the `set_snapshot` -> `flush` -> `load_state` round-trip, an unchanged snapshot skipping a rewrite, a later snapshot fully replacing the prior tree, the silently-ignore matrix (absent, corrupt, wrong-shape, flat pre-tabs and unsupported-version files all load as `None` with the bytes left untouched), and `swap_dir_for` stability per canonical cwd.
+**Covers** — the directory surface of `state`: `state_dir` under a `WOLF_STATE_DIR` override, `swap_dir_for` stability per canonical cwd, the `spell_dir`/`runtime_user_dir`/`parsers_user_dir` resolvers, `seed_runtime_user_dir`'s one-time-seed contract (missing and empty dirs seeded, any non-empty dir left byte-identical even when `init_user.lua` is absent), and `NvimConfig::from_env` falling back to ephemeral `state_root` swap/spell dirs on an empty `DurableDirs`.
 
-Also the durable user-directory surface: the `spell_dir`/`runtime_user_dir`/`parsers_user_dir` resolvers under a `WOLF_STATE_DIR` override, `seed_runtime_user_dir`'s one-time-seed contract (missing and empty dirs seeded, any non-empty dir left byte-identical even when `init_user.lua` is absent), and `NvimConfig::from_env` falling back to ephemeral `state_root` swap/spell dirs on an empty `DurableDirs`.
-
-**Gotchas** — Env-mutating cases take the file-local `ENV_LOCK`, since cargo runs this binary's tests concurrently in one process. `REWRITE_OBSERVE_DELAY` outlasts coarse filesystem mtime resolution — mtime is how the no-rewrite claim is observed.
+**Gotchas** — Env-mutating cases take the file-local `ENV_LOCK`, since cargo runs this binary's tests concurrently in one process.
 
 #### `swap_recovery.rs`
 

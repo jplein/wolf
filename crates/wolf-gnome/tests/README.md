@@ -8,7 +8,9 @@ nix develop --command cargo test -p wolf-gnome
 
 The devShell is not optional: it supplies GTK, exports `WOLF_NVIM_BIN` and `WOLF_RG_BIN`, and pins the font stack, which is what makes Pango measurement and Cairo rasterization reproducible enough to assert on pixels.
 
-Rules that are decidable from their arguments are pinned in each seam's own `#[cfg(test)] mod tests`, which is the point of the seam split in [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md); the drawer share's, the key seam's, the terminal seams', the other-pane seam's, the zoom rules', the sidebar toggles', the titlebar seam's, the restore caps' and the tab focus rule's tables are files here instead, [`drawer_share.rs`](#drawer_sharers), [`gdk_key.rs`](#gdk_keyrs), [`terminal_seams.rs`](#terminal_seamsrs), [`other_pane_seam.rs`](#other_pane_seamrs), [`pane_zoom.rs`](#pane_zoomrs), [`sidebar_toggles.rs`](#sidebar_togglesrs), [`titlebar_background.rs`](#titlebar_backgroundrs), [`restore_caps.rs`](#restore_capsrs) and [`tab_focus.rs`](#tab_focusrs).
+Rules that are decidable from their arguments are pinned in each seam's own `#[cfg(test)] mod tests`, which is the point of the seam split in [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md).
+
+The drawer share's, the key seam's, the terminal seams', the other-pane seam's, the zoom rules', the sidebar toggles', the titlebar seam's, the restore caps', the application-state seam's, the stacking order's and the tab focus rule's tables are files here instead, [`drawer_share.rs`](#drawer_sharers), [`gdk_key.rs`](#gdk_keyrs), [`terminal_seams.rs`](#terminal_seamsrs), [`other_pane_seam.rs`](#other_pane_seamrs), [`pane_zoom.rs`](#pane_zoomrs), [`sidebar_toggles.rs`](#sidebar_togglesrs), [`titlebar_background.rs`](#titlebar_backgroundrs), [`restore_caps.rs`](#restore_capsrs), [`app_state_seam.rs`](#app_state_seamrs), [`stacking.rs`](#stackingrs) and [`tab_focus.rs`](#tab_focusrs).
 
 The other files below cover what a seam cannot reach: a real Neovim, a real window, the built binary together with the manifest that shaped it, and the store output `nix build .#wolf-gnome` installs — a different artifact from the checkout build, making different claims.
 
@@ -23,6 +25,17 @@ The other files below cover what a seam cannot reach: a real Neovim, a real wind
 **Gotchas**
 
 - Pure: no display, no Neovim and no compositor.
+
+#### `app_state_seam.rs`
+
+**Covers**
+
+- `state_seam::restore_plans` over a saved `app_state::WindowState`: each tab planned at its own directory, a missing one as an empty tab that keeps its saved tab, the saved active tab and an out-of-range one, each window's order, size and minimized flag, the extra window a terminal launch from an unheld directory puts in front and none from a held one, and a saved window with no tabs dropped.
+- The write side: `window_entry`'s `active_tab`, its fallback to the most recent contributing tab and its recency indices, a frame with no position, and no entry with no tab; `window_state`'s stacking order and minimized flag, and nothing with no window; `tab_entry`'s root rule for an empty tab, a folder tab and a lone empty pane; and `seeded_tab` with the live sidebar preference.
+
+**Gotchas**
+
+- Pure: no display, no Neovim and no filesystem; `is_dir` answers from a fixed list. Whether the coordinator feeds these functions the live windows is [`smoke_headless/restore.rs`](#smoke_headlessrestorers)'s question.
 
 #### `drawer_share.rs`
 
@@ -139,7 +152,7 @@ The other files below cover what a seam cannot reach: a real Neovim, a real wind
 **Covers**
 
 - `pane_zoom`'s rules, K1 to K5 and K7 to K14, with the ids of [`PaneZoomTests.swift`](../../wolf-macos/Tests/WolfKeyMapTests/README.md#panezoomtestsswift). K6 is absent, since it tests the frozen dividers and no divider exists while a view here is zoomed, and K10 tests `shown_alone` over bound ids where the Swift tests `visibleRects`. K11 to K13 compose `focus_origin`, `drawer::focus_target` and `zoomed_after` as `apply_focus` does, over a plus-shaped tree above the drawer.
-- The zoom mark through `pane_layout`: P1 and P2, with the ids of [`PaneLayoutCodecTests.swift`](../../wolf-macos/Tests/WolfKeyMapTests/README.md#panelayoutcodectestsswift), pin `encode`'s mark and `zoomed_leaf_index`. P3 is this file's own, the `encode` and `decode` round trip a relaunch makes, since this front-end has no FFI push-builder for the Swift P3 to cover.
+- The saved zoom through `pane_layout`: G6a pins `leaf_index`, the depth-first index a saved tab's `zoomed` names, and the drawer's `None`. P3 is this file's own, the `leaf_index`, `encode` and `decode` round trip a relaunch makes, since this front-end has no FFI push-builder for the Swift P3 to cover.
 
 **Gotchas**
 
@@ -168,12 +181,12 @@ The other files below cover what a seam cannot reach: a real Neovim, a real wind
 
 **Covers**
 
-- `state_seam::restore_plans`' two caps: a session restores at most `MAX_RESTORE_NEOVIMS` tabs across every window, in saved order, each window at most `MAX_RESTORE_TABS`; a window that only partly fits keeps its first tabs, and a session exactly at the budget restores whole.
+- `state_seam::restore_plans`' two caps: a session restores at most `MAX_RESTORE_NEOVIMS` tabs across every window, frontmost first, each window at most `MAX_RESTORE_TABS`; a window that only partly fits keeps its first tabs, and a session exactly at the budget restores whole.
 
 **Gotchas**
 
 - Pure: no display, no Neovim and no filesystem, since `is_dir` answers `true`. Each test pins both caps as premises first, and every expected count is written out by hand.
-- Every window sits on a directory of its own and every tab carries a layout, so nothing but the caps can shorten a plan.
+- Every window sits on a directory of its own and every tab carries a root, so nothing but the caps can shorten a plan.
 
 #### `roundtrip_nvim.rs`
 
@@ -218,7 +231,7 @@ The other files below cover what a seam cannot reach: a real Neovim, a real wind
 **Decisions**
 
 - `CAGE_SLOTS` is per process, so a cage smoke belongs in this binary, where the slot bound counts it.
-- `leaf_fields` holds the smokes' only `PaneNode::Leaf` pattern, so a new leaf field touches that function alone.
+- `leaf_fields` holds the smokes' only `Node::Pane` destructuring, so a new pane kind or field touches that function alone.
 
 **Gotchas**
 
@@ -291,7 +304,7 @@ Recovery smokes: a crashed Neovim restarted with its file, a stalled one raising
 
 #### `smoke_headless/restore.rs`
 
-Session-restore smokes, each two launches in one cage, the second reading what the first saved: the pane layout, a lone file, tabs, each restored with a Neovim of its own that holds its own file, two windows, and dragged divider weights.
+Session-restore smokes, each two launches in one cage, the second reading what the first saved: the pane layout, a lone file, tabs, each restored with a Neovim of its own that holds its own file, dragged divider weights, and two windows, saved in stacking order with their tabs, active tabs and a zoom, and restored with the frontmost in front on its saved active tab. One more launches once over a stale `state.json` and `state.json.tmp`, which must be gone once the app is ready, with nothing of them restored.
 
 #### `smoke_headless/scrub_lists.rs`
 
@@ -315,7 +328,7 @@ The click targets are derived from libadwaita 1.9.3's header metrics, not from a
 
 #### `smoke_headless/split_commands.rs`
 
-The split-command smokes: from an editor, a terminal and a preview pane, the palette's Split Vertical and then, in the new pane, Split Horizontal must freeze a `state.json` layout of `vertical[leaf, horizontal[leaf, leaf]]` whose every leaf is of the first pane's kind. `state.json` carries no session id, so a new session is wolf-core's `split_commands.rs` question, and so is the drawer, whose split the front-end drops.
+The split-command smokes: from an editor, a terminal and a preview pane, the palette's Split Vertical and then, in the new pane, Split Horizontal must save a root of `vertical[pane, horizontal[pane, pane]]` whose every pane is of the first pane's kind. A saved pane carries no session id, so a new session is wolf-core's `split_commands.rs` question, and so is the drawer, whose split the front-end drops.
 
 #### `smoke_headless/symbols.rs`
 
@@ -343,11 +356,21 @@ The dialog is the route to backdrop: `cage` activates every toplevel it maps and
 
 The Zoom Pane smokes. One launch builds `vertical[A, horizontal[B, C]]` over the drawer, drags the tree divider and the drawer handle, then zooms B from the palette. B must fill the pane area while the others keep their size, and each unzoom must restore every pane, both drags included. Zoom Pane again, `<C-w>h`, Neovim's own `<C-w>w`, Toggle Terminal with the drawer open and hidden or closed, a split and Preview in Another Pane must each unzoom, and a focus move must land on the pane it names in the unzoomed layout.
 
-A second test, `a_zoomed_pane_survives_relaunch_under_cage`, quits with a pane zoomed and relaunches. Run 1's `state.json` must mark that leaf alone, asserted before run 2 so a lost save is told apart from an ignored restore, and run 2 must start zoomed on it.
+A second test, `a_zoomed_pane_survives_relaunch_under_cage`, quits with a pane zoomed and relaunches. Run 1's save must zoom that pane, asserted before run 2 so a lost save is told apart from an ignored restore, and run 2 must start zoomed on it.
 
 A third, `an_unzoom_after_a_window_resize_fits_the_new_size_under_cage`, zooms B over the same dragged layout and resizes the window. B must fit the new size while the hidden panes keep theirs, the unzoom must match a plain resize to that size, and both drags must survive the return to the launch size. It assumes the sidebar returns to its launch width with the window.
 
-Every observable is a Neovim readback of `winwidth` and `winheight` per recorded window id, the grid size the front-end drives, or the saved file; no assertion reads a pixel. The tree handle's x is modelled from `geometry::divider_position`, as `drawer_strip_edges` models the drawer handle's y, rather than found by bisection; a missed press fails the drag precondition.
+Every observable is a Neovim readback of `winwidth` and `winheight` per recorded window id, the grid size the front-end drives, or the save; no assertion reads a pixel. The tree handle's x is modelled from `geometry::divider_position`, as `drawer_strip_edges` models the drawer handle's y, rather than found by bisection; a missed press fails the drag precondition.
+
+#### `stacking.rs`
+
+**Covers**
+
+- `StackingOrder`: a focused window moving to the front, a minimized one behind every window that is not, focus unmarking it, the seed keeping the saved order and minimized marks, and unranked windows following the ranked ones in registry order. `TabRecency`: the seed's active tab first, and a selected tab becoming the most recent.
+
+**Gotchas**
+
+- Pure: no display, no Neovim and no compositor. Whether the `is-active` handler feeds `focus` is [`smoke_headless/restore.rs`](#smoke_headlessrestorers)'s two-window smoke's question.
 
 #### `state_isolation.rs`
 
@@ -409,7 +432,7 @@ Every observable is a Neovim readback of `winwidth` and `winheight` per recorded
 
 **Covers**
 
-- Table-driven cases for the pure seams under [`src/terminal/`](../src/terminal/README.md) (`style`, `damage`, `geometry`, `input`), the `WOLF_SMOKE_TERMINAL` parse, `scrollbar::terminal_viewport`, `clipboard_ui::copy_decision`'s terminal arm, `liveness_ui::terminal_restore`, and `pane_layout`'s terminal leaf.
+- Table-driven cases for the pure seams under [`src/terminal/`](../src/terminal/README.md) (`style`, `damage`, `geometry`, `input`), the `WOLF_SMOKE_TERMINAL` parse, `scrollbar::terminal_viewport`, `clipboard_ui::copy_decision`'s terminal arm, `liveness_ui::terminal_restore`, and `pane_layout::encode`'s terminal pane.
 
 **Gotchas**
 
@@ -609,7 +632,7 @@ Being scrupulous about this is the point of the section.
 - **The drawer's own status bar reaches no assertion.** Its OCR band is sampled below the statusbar deliberately, the region measured byte-identical across runs, so nothing here reads the shell's name the statusbar shows; `wolf-ffi`'s [`pane_status.rs`](../../wolf-ffi/tests/README.md#pane_statusrs) asserts that string. The same shape as the per-pane status-bar entry above.
 - **The snapshot gate.** Its whole domain is table-tested, but no smoke arranges a wake in which Neovim is dead, or no pane is bound, and then checks that the layout saved before it survived. Inducing that race under a compositor would be timing-dependent rather than deterministic.
 - **The Switch to Window raise.** `Coordinator::raise` calls `present()`, which `cage` declines: it shows one toplevel at a time and keeps the newest on top, so no capture can show two windows and nothing can bring a backgrounded one forward. The palette's rows are proven as values by `palette.rs`'s tables and the raise is executed by no test at all. Closing the gap needs a `wlr-foreign-toplevel` client, which is a `tools/` deliverable of its own.
-- **`close_commit`'s `DropSubtree` arm.** No smoke closes one of two windows — and on the last window the arm is not merely unobserved but indistinguishable from a no-op, because an empty contribution set means "commit nothing" rather than "commit an empty tree" and so cannot produce a `windows: []` file. The rule is covered by its table in `state_seam.rs`.
+- **`close_commit`'s `DropSubtree` arm.** No smoke closes one of two windows — and on the last window the arm is not merely unobserved but indistinguishable from a no-op, because an empty contribution set means "commit nothing" rather than "commit an empty state" and so cannot write `windows: []`. The rule is covered by its table in `state_seam.rs`.
 - **`close_commit`'s `Skip` arm.** The store no-ops on an identical tree, so a redundant commit on the quit path writes nothing and no observable a smoke has can tell it apart from the correct answer. Same table.
 - **That the close path is what saved the session, rather than the last per-wake commit.** Measured: by the time `:qa` reaches the drain a per-wake commit has already written an identical tree, so the close path's commit and flush are redundant on every existing scenario and no smoke discriminates them. The redundancy is pre-existing rather than introduced. What did establish the routing is a two-step falsifier: disabling the per-wake commit alone leaves both relaunch smokes green, and adding the close-path revert on top reddens both.
 - **The single-instance second `activate`.** It is reachable: a second `wolf-gnome` launched inside a cage while the first is alive hands off to it on that cage's private bus. No smoke does that, so a desktop's "launch it again, get a window" path is unexercised; the two-window smoke's subject is New Window, which a hand-off would bypass.
@@ -618,7 +641,9 @@ Being scrupulous about this is the point of the section.
 - **Two crash assertions have no isolated red run.** The overlay-present assertion cannot be reached by a revert that hides the overlay, because the button lives inside it. The unsaved-edit assertion goes red alongside everything else on a broken restart; what it independently discriminates is that the reopened buffer came from the swap file rather than a clean re-read from disk.
 - **Forward is never driven end to end**; only Back is. `nav_press` and `nav_buttons` treat the two symmetrically and core's `history_forward` mirrors `history_back`, so what stays undiscriminated is the widget wiring for Forward alone.
 - **Nothing asserts that the navigation buttons follow the focused pane at the widget level.** The rule is table-tested in the seam, and OCR cannot read a sensitivity state in any case. Related and equally unmeasured: `refresh_nav_buttons`' deadlock hazard — a read guard held across the nav mutex would hang on a wake, indistinguishable from a slow machine.
-- **The restored `sidebar_visible` reaches no pixel.** No relaunch smoke hides the sidebar, quits and relaunches. The seam is table-tested and the applier demonstrably reads it; the write side is the half that could regress silently, since persisting the live visibility rather than the preference would hide the sidebar after any project-less session.
+- **The restored `sidebar.visible` reaches no pixel.** No relaunch smoke hides the sidebar, quits and relaunches. The seam is table-tested and the applier demonstrably reads it; the write side is the half that could regress silently, since persisting the live visibility rather than the preference would hide the sidebar after any project-less session.
+- **The per-tab sidebar preference and empty state follow the selection in no smoke.** None toggles the sidebar in one tab and selects another, and none selects an empty tab beside a folder tab, so `apply_selected_tab` on a switch and `settle_reroot`'s empty-tab guard rest on the code alone.
+- **Minimize, in either direction.** `cage` ignores a minimize request, so no smoke reaches `on_window_minimized`, the `minimize()` before `present()` of a window saved minimized, or a minimized window saved last; the minimized class is [`stacking.rs`](#stackingrs)'s and [`app_state_seam.rs`](#app_state_seamrs)'s tables alone.
 - **Neither the current-file bold nor manual expansion reaches a pixel.** OCR reads no font weight and no expansion state, so the bound-label registry — the only thing keeping the highlight on the file being edited while the version gate suppresses the rebuild — is unverified in both suites, and every assertion about the current file reads a revealed row's presence rather than its weight. The user-visible payoff of the version gate goes the same way, as does its inverse, a collapse on a version advance, which is recorded as a limitation in [Present limitations](../../../notes/wolf-gnome/present-limitations.md) instead.
 - **The visibility gate's deferral and its one catch-up.** No smoke hides the sidebar mid-traversal and re-shows it, so nothing observes a batch that landed while hidden reaching the widgets. The gate's own table pins the rule; the relay from the shell's single visibility site is the untested half.
 - **That the coalescer arms a real `glib` source.** Only the pure state machine is tested, and every smoke asserts on a settled end state, so a coalescer that performed its refresh on every request — arming nothing at all — would pass every one of them.
@@ -660,8 +685,8 @@ Being scrupulous about this is the point of the section.
 - **The external link's browser open.** Measured 2026-08-06 under `cage` through temporary `eprintln!`s in `preview_in_browser` and `launch_uri` that were **never committed**: `open_in_browser` answered `http://127.0.0.1:33393/alpha.md`, `launch_uri` was called with it, and its callback answered `Ok(())`. No failure line was printed because there is no failure to print, which is why no smoke asserts one. A stub `x-scheme-handler/http` handler logged only the `gio open` control probe and never the launcher's call. **Nothing prints any of this on the shipped path**, so a silent stderr is correct rather than a regression.
 - **No smoke may trigger Preview in Browser.** `gio mime x-scheme-handler/http` answers `google-chrome.desktop` inside the devShell, because `XDG_DATA_DIRS` reaches the system applications directory even under the harness's `HOME` redirect, so on any host where the launcher works a smoke would open a tab in the developer's real browser. The server half is proved headlessly by `crates/wolf-core/tests/browser_preview.rs`.
 - **`pane_layout::resolve_leaves`' refusal reaches no smoke.** Arranging a leaf whose Neovim window has left both snapshot maps while its pane survives is timing-dependent under a compositor. Its table is the whole of the coverage, and the same holds for the restore caps past [`restore_caps.rs`](#restore_capsrs), which need a hand-edited file rather than a session.
-- **The restore seed is table-tested only.** A restored tab contributes its seed to a commit made before its own first gather, which another tab's wake can make, and the next commit replaces it with the live gather, so no smoke's frozen file tells the two apart.
-- **The glue that pairs a tab's cache with its page position.** `state_seam::ordered_tab_states` is table-tested, but nothing executes `WindowHandle::cached_subtree`'s pairing of each live cache with `TabHandle::page_position`. A glue bug pairing each cache with its `enumerate()` index instead would satisfy every headless row and persist insertion order again, and `three_tabs_survive_a_relaunch_under_cage` cannot discriminate it: in a window nobody has rearranged, position and index coincide. Closing it needs `a_dragged_tab_is_persisted_in_its_new_position_under_cage` and a capability no smoke has — dragging a bar entry under `cage` — so the next unit that touches the tab bar owes that one.
+- **The restore seed is table-tested only.** A restored tab contributes its seed to a commit made before its own first gather, which another tab's wake can make, and the next commit replaces it with the live gather, so no smoke's frozen save tells the two apart.
+- **The glue that pairs a tab's cache with its page position.** `state_seam::ordered_tab_states` is table-tested, but nothing executes `WindowHandle::cached_window`'s pairing of each live cache with `TabHandle::page_position`. A glue bug pairing each cache with its `enumerate()` index instead would satisfy every headless row and persist insertion order again, and `three_tabs_survive_a_relaunch_under_cage` cannot discriminate it: in a window nobody has rearranged, position and index coincide. Closing it needs `a_dragged_tab_is_persisted_in_its_new_position_under_cage` and a capability no smoke has — dragging a bar entry under `cage` — so the next unit that touches the tab bar owes that one.
 - **Only the drag reorder route is established.** `AdwTabBar` reorders by drag with no property that turns it off, and `AdwTabView:shortcuts` sits at a default that carries `Ctrl+Shift+Page_Up` / `Ctrl+Shift+Page_Down` — but `window::wire_keys`' bubble-phase controller maps `Page_Up` and `Page_Down` whatever the modifiers hold and answers `Propagation::Stop`, so the chord very likely reaches Neovim instead of `AdwTabView`. No test drives either route; the page-order rules rest on the drag, and nothing may claim the chord until someone measures it.
 - **Three tab-lifecycle arms are unreachable from the shipped UI.** `close_outcome`'s `CloseWindow` arm is reached only through `close-page`, which just the bar's close button and a middle-click raise, and the bar allocates nothing at one page; `TabsHandle::open_tab`'s `None` return needs a core that fails to start or a window already closing; and the close handler's dropped-`Weak` arm needs the tab layer gone while its view still emits. The first is covered by its own table in `tabs_ui.rs`; the other two are one message and one refused veto.
 - **A tab's title reaches no pixel.** It is the current file's name, which the per-pane statusbar strip and `:e`'s own echo also draw, so no OCR term could discriminate it — and a calibration probe read one of two tab titles and not the other at the default page-segmentation mode, so the reading would be flaky as well as vacuous. `tabs_ui::tab_title` is table-tested.
@@ -703,7 +728,7 @@ Behavior this front-end has that is deliberately not smoked, with what covers it
 
   [`smoke_headless/sidebar_toggles.rs`](#smoke_headlesssidebar_togglesrs) does click the sidebar's toggle group from such an inset, because the group's state shows in its own pixels and its effect in the sidebar band, so a wrong target fails instead of passing.
 
-- **The toggle group's insensitivity in the empty state.** No smoke clicks the group in a project-less window. A Search click there would be refused by `search_panel::show_decision` either way, and a Files click would leave the sidebar hidden, but would set the preference a later folder shows; only `set_empty_state` desensitizing the group stops that, and nothing asserts it.
+- **The toggle group's insensitivity in the empty state.** No smoke clicks the group in a project-less window. A Search click there would be refused by `search_panel::show_decision` either way, and a Files click would leave the sidebar hidden, but would set the preference a later folder shows; only `apply_selected_tab` desensitizing the group stops that, and nothing asserts it.
 - **Open File and Open Folder, including Open Folder's own path into a re-root.** Neither is driven: their callback bodies are trivial and the empty state's presentation is smoked. The re-root is not a gap either — an Open Recent palette row records the same pending re-root through the same `chdir_to`, and `open_recent_palette_row_reroots_the_window_under_cage` drives that settle into a re-rooted sidebar end to end. The save dialog is driven, under the in-process fallback [Smoke conventions](#smoke-conventions) requires.
 - **The search panel's other routes**: a result activated over a preview pane, a mouse click on a row, and a file row's collapse toggle. `activation_route`'s table covers the preview route, and `row_activation` and `panel_rows` cover the toggle. No smoke clicks a result row.
 - **Unsaved-edit recovery as a separate scenario.** `crates/wolf-core/tests/swap_recovery.rs` covers the mechanism headlessly and deterministically. Rather than duplicate it with a flakier compositor version, the crash smoke — which already makes an unsaved edit and kills Neovim — asserts the marker on a pixel after recovery and its absence in the pre-crash control, which adds the one thing a core test structurally cannot have: the front-end driving the reopen itself.

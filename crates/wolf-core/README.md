@@ -19,30 +19,30 @@ For workspace context see [`architecture.md`](../../specs/architecture.md) and [
 
 Everything below is re-exported from the crate root as `wolf_core::…`. The owning module's entry in [`src/README.md`](src/README.md) has the detail.
 
-| Area               | Entry points                                                                                             |
-| ------------------ | -------------------------------------------------------------------------------------------------------- |
-| Lifecycle          | `WolfCore`, `CoreConfig`, `CoreError`, `SnapshotReadGuard`                                               |
-| Render state       | `Snapshot`, `SharedSnapshot`, `Grid`, `Cell`, `Cursor`, `WinInfo`, `Viewport`                            |
-| Wake               | `WakeFn`                                                                                                 |
-| Input              | `InputEvent`, `KeyEvent`, `MouseEvent`, `ScrollEvent`, `key_to_notation`                                 |
-| Layout intents     | `LayoutIntent`, `SplitOrientation`, `FocusDir`                                                           |
-| Terminal sessions  | `Terminal*` types, `TERMINAL_*`, `terminfo_dir_from_env`, `TERMINFO_DIR_ENV`                             |
-| Commands           | `Command`, `CommandSpec`, `COMMAND_SPECS`, `MenuGroup`                                                   |
-| File picker        | `FileSearch`, `FileEntry`, `FileSearchReadGuard`, `rank_matches`, `MruStore`                             |
-| Content search     | `SearchSession`, `SearchOptions`, `SearchMatch`, `project`, `context_window`                             |
-| Buffer picker      | `rank_buffers`, `BufInfo`, `BufferRow`                                                                   |
-| Command palette    | `rank_palette`, `PaletteRow`, `CommandMru`                                                               |
-| File tree          | `children_of`, `ancestors_to_reveal`, `rel_path_for`, `TreeIndex`                                        |
-| Navigation history | `NavHistory`, `PaneHistory`, `NavTarget`, `MenuRow`                                                      |
-| Markdown preview   | `render_html`, `theme_css`, `PreviewTheme`, `WidthMode`, `BrowserPreview`                                |
-| Font licences      | `FontLicense`, `FONT_LICENSES`, `FONT_LICENSE_NOTICES`                                                   |
-| Library licences   | `LibraryLicense`, `LIBRARY_LICENSES`, `LIBRARY_LICENSE_NOTICES`                                          |
-| Liveness           | `Liveness`                                                                                               |
-| Preferences        | `WolfConfig`, `load_or_create`, `preferences_dir`, `Appearance`                                          |
-| Persisted state    | `StateStore`, `WolfState`, `WindowState`, `TabState`, `PaneNode`, `AppStateStore`, `PROJECT_STATE_LIMIT` |
-| Logging            | `init_tracing`                                                                                           |
+| Area               | Entry points                                                                  |
+| ------------------ | ----------------------------------------------------------------------------- |
+| Lifecycle          | `WolfCore`, `CoreConfig`, `CoreError`, `SnapshotReadGuard`                    |
+| Render state       | `Snapshot`, `SharedSnapshot`, `Grid`, `Cell`, `Cursor`, `WinInfo`, `Viewport` |
+| Wake               | `WakeFn`                                                                      |
+| Input              | `InputEvent`, `KeyEvent`, `MouseEvent`, `ScrollEvent`, `key_to_notation`      |
+| Layout intents     | `LayoutIntent`, `SplitOrientation`, `FocusDir`                                |
+| Terminal sessions  | `Terminal*` types, `TERMINAL_*`, `terminfo_dir_from_env`, `TERMINFO_DIR_ENV`  |
+| Commands           | `Command`, `CommandSpec`, `COMMAND_SPECS`, `MenuGroup`                        |
+| File picker        | `FileSearch`, `FileEntry`, `FileSearchReadGuard`, `rank_matches`, `MruStore`  |
+| Content search     | `SearchSession`, `SearchOptions`, `SearchMatch`, `project`, `context_window`  |
+| Buffer picker      | `rank_buffers`, `BufInfo`, `BufferRow`                                        |
+| Command palette    | `rank_palette`, `PaletteRow`, `CommandMru`                                    |
+| File tree          | `children_of`, `ancestors_to_reveal`, `rel_path_for`, `TreeIndex`             |
+| Navigation history | `NavHistory`, `PaneHistory`, `NavTarget`, `MenuRow`                           |
+| Markdown preview   | `render_html`, `theme_css`, `PreviewTheme`, `WidthMode`, `BrowserPreview`     |
+| Font licences      | `FontLicense`, `FONT_LICENSES`, `FONT_LICENSE_NOTICES`                        |
+| Library licences   | `LibraryLicense`, `LIBRARY_LICENSES`, `LIBRARY_LICENSE_NOTICES`               |
+| Liveness           | `Liveness`                                                                    |
+| Preferences        | `WolfConfig`, `load_or_create`, `preferences_dir`, `Appearance`               |
+| Persisted state    | `AppStateStore`, `PROJECT_STATE_LIMIT`, `state_dir`                           |
+| Logging            | `init_tracing`                                                                |
 
-Two public surfaces are reached through their modules rather than the root. `state::rebuild_layout_spec` renders a saved `PaneNode` into the JSON `WolfCore::rebuild_layout` takes, so a front-end restoring a pane layout never hand-rolls that document ([entry](src/README.md#staters)). `app_state::…` is the model `AppStateStore` saves, with the rule that picks a directory's project state and the restore helpers, among them `tab_rebuild_spec`, which renders the same document for a saved tab ([entry](src/README.md#app_staters)). [wolf-core-decisions.md](../../notes/wolf-core-decisions.md#the-rebuild-layout-wire-format) has the contract both renderers share with `init.lua`.
+`app_state::…` is reached through its module rather than the root: the model `AppStateStore` saves, with the rule that picks a directory's project state and the restore helpers, among them `tab_rebuild_spec`, which renders a saved tab into the JSON `WolfCore::rebuild_layout` takes, so a front-end restoring a pane layout never hand-rolls that document ([entry](src/README.md#app_staters)). [wolf-core-decisions.md](../../notes/wolf-core-decisions.md#the-rebuild-layout-wire-format) has the contract it shares with `init.lua`.
 
 ## Building and testing
 

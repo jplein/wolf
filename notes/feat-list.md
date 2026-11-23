@@ -52,7 +52,7 @@ A packaged smoke launches the store binary under `cage` with every devShell expo
 | Editor padding / insets                                    | `feat/ui-tweaks-2` (`eadf266`, not the branch tip)                            | [x]   | [x]   |
 | macOS Option key composes accents (option-as-option)       | `feat/macos-alt-key-handling` / `linux-feat/input-method`                     | [x]   | [x]   |
 
-Divider drag on GTK is the stock `gtk::Paned` handle drag, and the position it lands on is written back into the pure tree's weights, which is what makes it survive a re-layout and reach `state.json`. One divergence from macOS is real and deliberate: GTK renders an n-ary split as a right-leaning paned chain, so a divider governs its head child against the whole remainder, which is rescaled proportionally, where macOS's `setPairFraction` reweights only the adjacent pair.
+Divider drag on GTK is the stock `gtk::Paned` handle drag, and the position it lands on is written back into the pure tree's weights, which is what makes it survive a re-layout and reach the saved window state. One divergence from macOS is real and deliberate: GTK renders an n-ary split as a right-leaning paned chain, so a divider governs its head child against the whole remainder, which is rescaled proportionally, where macOS's `setPairFraction` reweights only the adjacent pair.
 
 The per-pane status bar diverges from macOS in one visible way: a path too long for its pane is clipped rather than ellipsized, since ellipsizing needs a second Pango layout builder in the widget layer, which is what the one-glyph-path rule exists to prevent.
 
@@ -139,7 +139,7 @@ The GTK sidebar re-roots from one settle point, on the working directory Neovim 
 
 `wolf-gnome` calls `WolfCore::drain_commands()` on every render wake, behind a total `Command` to `UiAction` mapping in `command_action.rs` with no catch-all arm, so a new core command fails to compile until it is classified. Every command dispatches except `HideApplication`, which has no GNOME equivalent since the shell owns window visibility, and the font-size commands (`ResetFontSize`, `IncreaseFontSize`, `DecreaseFontSize`), which are deferred with a distinct printed reason.
 
-The Linux multiple-windows box means N windows in one process: a coordinator owns the single state store, the one config read and the one cell measurement, while each window carries its own tabs, each with its own captive Neovim and its own wake, and its own subtree of `state.json`. New Window opens a fresh empty window and inherits nothing from the window it was asked from — not the working directory, not the layout, not the size — which is macOS's behaviour for the same row.
+The Linux multiple-windows box means N windows in one process: a coordinator owns the single state store, the one config read and the one cell measurement, while each window carries its own tabs, each with its own captive Neovim and its own wake, and its own entry in the saved window state. New Window opens a fresh empty window and inherits nothing from the window it was asked from — not the working directory, not the layout, not the size — which is macOS's behaviour for the same row.
 
 A GTK window carries an `adw::TabBar` over N live `adw::TabPage`s, each running its own captive Neovim: `Ctrl+Shift+T`, the New Tab menu item and `:WolfNewTab` open a tab with a Neovim of its own, rooted at the selected tab's folder, and closing a tab shuts its Neovim down. Closing the last tab closes the window, because a window with no tab holds no editor.
 
@@ -149,7 +149,7 @@ The GNOME counterpart to the macOS menu bar is a header-bar primary menu driven 
 
 That header bar is also the unified toolbar: Back and Forward and the sidebar's Files and Search toggles at the start, the primary menu at the end, and the window title between them.
 
-The `state` module is read and written. `wolf-gnome` snapshots on every wake without a timer or debounce, which is affordable because `StateStore::set_snapshot` ignores an unchanged tree and the writer thread coalesces; the tree carries every open window and every tab of it, and a launch restores each saved window's working directory, size, sidebar preference and per-tab pane layouts in saved order.
+The application-state store is read and written. `wolf-gnome` submits on every wake without a timer or debounce, which is affordable because `AppStateStore::submit` ignores an unchanged tree and the writer thread coalesces; the window state carries every open window and every tab of it in stacking order, and a launch restores each saved window's size, active tab and minimized flag, and each tab's directory, sidebar preference, pane layout and zoom, mapping the frontmost window last.
 
 The single-pane fix is structural: the layout is suppressed by a content predicate, never by leaf arity, which is what made the original bug swallow the commonest shape of all — one window, one tab, one pane, one file.
 

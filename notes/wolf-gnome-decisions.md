@@ -98,7 +98,7 @@ The trailing edge is undroppable, and the cases that could drop it are answered 
 
 ## The coordinator and its windows
 
-Six things are process-scoped, each because a second copy would be wrong rather than wasteful: the one `StateStore`, the config read, the `CellMetrics`, the `app.` actions, the launch plans and the readiness probe. [The coordinator and its windows](wolf-gnome/the-coordinator-and-its-windows.md) gives each reason, and why restore is positional.
+Seven things are process-scoped, each because a second copy would be wrong rather than wasteful: the one `AppStateStore`, the window stacking order, the config read, the `CellMetrics`, the `app.` actions, the launch plans and the readiness probe. [The coordinator and its windows](wolf-gnome/the-coordinator-and-its-windows.md) gives each reason, why restore is positional, and why it maps the frontmost window last.
 
 ## Window structure
 
@@ -162,7 +162,7 @@ Every link clicked in a preview is cancelled and acted on out of band, and every
 
 ## Application state
 
-Every tab is gathered from its own Neovim on every render wake behind a gate that prevents data loss, in page order, and neither window position nor the content-width toggle is persisted. [Application state](wolf-gnome/application-state.md) gives the reasons.
+Every tab is gathered from its own Neovim on every render wake behind a gate that prevents data loss, in page order, and restores at its own directory with its own sidebar preference and empty state. The window stacking order is kept from focus events and Wolf's own Minimize, and neither window position nor the content-width toggle is persisted. [Application state](wolf-gnome/application-state.md) gives the reasons.
 
 ## Crash and stall recovery
 
