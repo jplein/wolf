@@ -127,6 +127,8 @@ The new tab opens first because closing the last window quits; when its core fai
 
 Otherwise a new window opens holding the folder's tab, at the stored frame when it intersects a screen, else as [New windows](#new-windows) places it. A tab Open Folder opens is a folder tab whatever `StateSeam.launchDecision` would say of the folder, because opening a folder is an explicit act, as a typed `:cd /` is. Only a fill and a new window read the project state, which marks it used.
 
+**A fill of New Tab's tab takes the sidebar its origin showed.** `makeNewTab(from:)` reads `key.sidebarVisible` at once, since the origin may close or change before a folder opens, and `fill(_:from:)` hands it to the folder's tab for `OpenFolderSeam.sidebarVisible`. It lives in memory only, so no other empty tab carries one. A typed `:cd` ignores it: `didOpenFolder()` reveals the sidebar.
+
 Every Open Folder, a focus included, records the folder through `record_recent_dir` on the core of the tab that lands on it. That tab's Neovim starts in the folder, and core never records a launch directory.
 
 The palette lists every recent directory. The invoking tab's own folder focuses that tab, which is harmless, and a Switch to Window row raises a window as it stands, while an Open Recent row for a folder open elsewhere focuses §4's tab, which can be a background tab.
@@ -155,7 +157,7 @@ The palette lists every recent directory. The invoking tab's own folder focuses 
 
 ## New windows
 
-[§7](../specs/application-state.md#7-new-windows-and-tabs) is the rule. New Window, and an Open Folder new window with no stored frame that intersects a screen, take the active window's normal size and cascade from it, through `AppDelegate.newWindowPlacement(stored:)`. With no window open, a new window keeps the default size and AppKit's placement.
+[§7](../specs/application-state.md#7-new-windows-and-tabs) is the rule. New Window, and an Open Folder new window with no stored frame that intersects a screen, take the active window's normal size and cascade from it, through `AppDelegate.newWindowPlacement(stored:)`. With no window open, a new window keeps the default size and AppKit's placement. New Tab's empty tab is tabbed into the key window's group instead.
 
 **The active window is the stacking order's first, never the key window**, as §2 defines it. [`StateSeam.newWindowFrame`](../crates/wolf-macos/Sources/WolfKeyMap/Persistence/README.md#stateseamswift) takes its size through `normalFrame`, so a zoomed or full-screen window lends its earlier size, and starts the cascade from the top-left of its live frame, so the new window cascades from where that window is on screen.
 

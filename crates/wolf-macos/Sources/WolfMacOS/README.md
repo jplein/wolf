@@ -20,7 +20,7 @@ Purpose: The application coordinator: launch, the live `WolfWindowController`s, 
 **Public API**
 
 - `makeNewWindow(originatingCwd:)` — an empty-state tab in a window [sized and cascaded](../../../../notes/wolf-macos-decisions.md#new-windows) from the active one.
-- `makeNewTab(from:)` — a tab in `key`'s group, on its folder or home.
+- `makeNewTab(from:)` — New Window's tab in `key`'s group, carrying its sidebar visibility ([why](../../../../notes/wolf-macos-decisions.md#opening-a-folder)).
 - `refreshTabFocus()` — sends each [`TabFocusSeam`](../WolfKeyMap/README.md#tabfocusseamswift) edge to its core and focuses the main window's tab in the `StackingOrder`, capturing the tab it leaves ([capture](../../../../notes/wolf-macos-decisions.md#the-per-tab-extras)).
 - `windowMinimizedChanged(_:minimized:)` — marks or unmarks the controller's tab group.
 - `scheduleStateSnapshot()` / `snapshotNow()` — throttled and immediate whole-tree commits ([write model](../../../../notes/wolf-macos-decisions.md#state-is-a-tree-and-the-front-end-owns-every-write)).

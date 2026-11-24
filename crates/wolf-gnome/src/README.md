@@ -256,13 +256,13 @@ Purpose: the terminal drawer's pure rulebook — the drawer's share of the pane 
 
 **Public API**
 
-- `DRAWER_WEIGHT`, a new window's share, and `DrawerShare` — `new()`, `restored(share)`, `get()`, `position(min, max, span)`, `drag_to(position, span)` — the drawer's fraction of its divider's paned span, whose position is the editor tree's height.
+- `DRAWER_WEIGHT`, every new tab's share, and `DrawerShare` — `new()`, `restored(share)`, `get()`, `position(min, max, span)`, `drag_to(position, span)` — the drawer's fraction of its divider's paned span, whose position is the editor tree's height.
 - `focus_target(tree, origin, dir, state, width, height)` — the whole editor-to-drawer bridge as one value. Neovim emits a focus move as a pure intent and declines to act on it, so with no answer here a user who opens the drawer cannot leave it. `bottom_most_leaf` and `drawer_up_target` are its `<C-w>k` half.
 - `DrawerState` — `Copy`, so [`pane_view.rs`](#pane_viewrs) holds it in a `Cell`; `clear()` empties both the bound drawer and the remembered editor pane, which is what a restart needs.
 
 **Decisions**
 
-- `DrawerShare` is a value apart from `DrawerState`, so `clear()` — a drawer closing, a restart — keeps the size the user dragged to. There is one per tab, held by its pane view: New Tab takes the selected tab's, and `restored` refuses a saved share outside `(0, 1)` ([why no fraction floor](../../../notes/wolf-gnome/pane-weights-and-dividers.md)).
+- `DrawerShare` is a value apart from `DrawerState`, so `clear()` — a drawer closing, a restart — keeps the size the user dragged to. There is one per tab, held by its pane view, and `restored` refuses a saved share outside `(0, 1)` ([why no fraction floor](../../../notes/wolf-gnome/pane-weights-and-dividers.md)).
 - `focus_target` takes the raw pane-area size, not the editor height the [macOS front-end passes](../../wolf-macos/Sources/WolfMacOS/README.md#panecontainerviewswift), since `PaneTree::pane_rects` feeds only ordering and both its consumers are scale-invariant. A table pins it rather than only stating it.
 
 #### `editor_inset.rs`
@@ -520,7 +520,7 @@ Purpose: the pure, GTK-free seam of Open Folder ([§6](../../../specs/applicatio
 **Public API**
 
 - `step(directory, windows, stacking, current_empty) -> Step` — `Focus { window, tab }` for the tab §4's rule picks, else `FillCurrent` when the invoking tab is empty, else `NewWindow`. `directory` is already canonical; a `LiveWindow`'s tabs are in page order, `""` for an empty one.
-- `plan(directory, project) -> RestorePlan` — one tab on `directory`, from `project`'s saved tab and stored size, or a fresh tab with no size.
+- `plan(directory, project, new_tab_sidebar) -> RestorePlan` — one tab on `directory`, from `project`'s saved tab and stored size, its sidebar setting included, or a fresh tab with no size. A fresh tab shows its sidebar by `new_tab_sidebar` when it is `Some`, the visibility New Tab captured for the empty tab being filled, and otherwise shows it.
 - `fill_size(plan, window_tabs)` — the plan's size only when the filled tab is its window's only one.
 
 **Decisions**
@@ -629,7 +629,7 @@ Purpose: one tab's GTK glue: `layout`'s pane tree as nested `gtk::Paned`, a `gtk
 
 - `build(core, metrics, drawer_share) -> PaneHandle` — panes appear with the first grid.
 - `cmdline_widget()`, the focus-return target; `toast_widget()`, `pum_widget()`.
-- `reset_after_restart()`, `drawer_is_open()`, `drawer_share()`, `request_terminal_restore(steps)`, `request_layout_rebuild(restored)`, `layout_snapshot() -> LayoutGather`, `capture_viewports()`, `snapshot_readiness()`, `readiness()`.
+- `reset_after_restart()`, `drawer_is_open()`, `request_terminal_restore(steps)`, `request_layout_rebuild(restored)`, `layout_snapshot() -> LayoutGather`, `capture_viewports()`, `snapshot_readiness()`, `readiness()`.
 - `active_terminal()`, `sync_terminal_focus(focused)`, `request_terminal(command)`, `open_file(path, wait)`, `open_picked(path, at)`, `drawer_is_active()`.
 - `other_pane_target(prefer)` — [`other_pane_seam.rs`](#other_pane_seamrs)'s window: `Some(0)` splits, `None` no-ops.
 - `toggle_zoom()`, `toggle_terminal()` — [`pane_zoom.rs`](#pane_zoomrs)'s rules.
@@ -835,7 +835,7 @@ Purpose: the pure, GTK-free rulebook for Save and Save As — whether a press wr
 **Decisions**
 
 - A named buffer is written, never prompted for, a never-written `Untitled N.md` included: `runtime/nvim/init.lua` has already chosen and claimed that name, which is on screen in the tab title. Only a buffer with no file name takes the dialog. An existence probe would make `Ctrl+Shift+S` disagree with a typed `:w`, and would leave the buffer unwritten whenever the dialog failed to present.
-- The proposal opens in the buffer's own parent, falling back to the window's cwd — deliberately not [`tabs_ui.rs`](#tabs_uirs)'s `new_tab_cwd`, which refuses the empty state. A dialog's folder is a starting point, not a claim that a directory is a project.
+- The proposal opens in the buffer's own parent, falling back to the window's cwd, the empty state's home directory included, which no tab persists as its project. A dialog's folder is a starting point, not a claim that a directory is a project.
 - A chosen path is used verbatim, with no extension appended: rewriting it would mean the dialog confirmed an overwrite of a different file. `force` is `true` because that confirmation has already happened.
 
 **Gotchas**
@@ -906,8 +906,8 @@ Purpose: the glue for the action namespace — `gio` actions, the primary menu, 
 - The controller lives on the window, ahead of any overlay's, and needs no open-overlay guard: no overlay key is a bound chord.
 - One settle point, over [`workspace.rs`](#workspacers)'s `reroot_decision`, moves the sidebar's root for a typed `:cd`, a switch and a filled tab alike.
 - Each Markdown-preview press reads one `preview_shape` pass, since two would describe no window that existed, and is a blocking RPC gated by [`preview_ui.rs`](#preview_uirs).
-- Save and Save As read one `save_shape` pass each for the same reason and issue no blocking call; the dialog carries out [`save_ui.rs`](#save_uirs)'s proposal.
-- `sidebar.set_visible` has one caller, over [`state_seam.rs`](#state_seamrs)'s `sidebar_is_shown`, or a tab switch would undo a user toggle. The search chord and a [toggle click](#sidebar_togglesrs) reveal it through that preference.
+- Save and Save As read one `save_shape` pass each for the same reason and issue no blocking call.
+- `sidebar.set_visible` has one caller, over [`state_seam.rs`](#state_seamrs)'s `sidebar_is_shown`, or a tab switch would undo a user toggle. The search chord and a [toggle click](#sidebar_togglesrs) reveal it through that preference. New Tab captures what it shows ([why](../../../notes/wolf-gnome/application-state.md#new-tab)).
 - A switch first records the sidebar into, and captures, the tab it leaves ([why](../../../notes/wolf-gnome/application-state.md#the-extras)).
 - Actions resolve the selected tab's core per use, and commands drain from it alone ([why](../../../notes/wolf-gnome/window-structure.md)).
 
@@ -1015,7 +1015,7 @@ Purpose: the GTK glue for native tabs, where every tab owns its `WolfCore`, wake
 - `select`, `selected`, `selected_core`, `core_source`, `entries`, `len`, `focus_target`, `shutdown_all`, `view_widget`, `bar_widget`, `seed_recency`, `recency`, `drawer_opener`.
 - `connect_selected`, given the tab left; `connect_wake`; `connect_closing`, before a closing tab's shutdown.
 - `sync_ui_focus(window_active)`, the `:checktime` trigger; `active_terminal()` and `sync_terminal_focus(window_active)` ([how](../../../notes/wolf-gnome/terminal-panes.md)).
-- `TabHandle`'s `core`, `liveness`, `restart`, `wake`, `refresh`, `capture_viewports`, `shutdown`, `set_empty`, `hide_empty_state`, `is_empty`, `wolf_tab_id`, `launch_cwd`, `live_directory` and sidebar accessors; `CoreSource` and `with_core`.
+- `TabHandle`'s `core`, `liveness`, `restart`, `wake`, `refresh`, `capture_viewports`, `shutdown`, `set_empty`, `hide_empty_state`, `is_empty`, `wolf_tab_id`, `launch_cwd`, `live_directory`, `new_tab_sidebar` and sidebar accessors; `CoreSource` and `with_core`.
 
 **Decisions**
 
@@ -1030,19 +1030,18 @@ Purpose: the GTK glue for native tabs, where every tab owns its `WolfCore`, wake
 
 #### `tabs_ui.rs`
 
-Purpose: the pure, GTK-free rulebook for a window's native tabs: what closing one does, the directory a new tab's Neovim starts in, the string a tab draws, and which tab's Neovim holds the UI focus. [`tab_view.rs`](#tab_viewrs) carries the answers out.
+Purpose: the pure, GTK-free rulebook for a window's native tabs: what closing one does, the string a tab draws, and which tab's Neovim holds the UI focus. [`tab_view.rs`](#tab_viewrs) carries the answers out.
 
 **Public API**
 
 - `close_outcome(live_pages) -> TabClose` — `CloseTab` or `CloseWindow`; `live_pages` counts the page being closed.
-- `new_tab_cwd`, `tab_title` and `TAB_TITLE_FALLBACK`.
+- `tab_title(empty, current_file) -> String` — the file's name, never a path; with no file, `title::WINDOW_TITLE_FALLBACK` for an empty tab, so tab and window agree no folder is open, and `TAB_TITLE_FALLBACK` for a folder tab.
 - `TabId`, `FocusEdge`, `focused_tab(window_active, selected)` and `focus_edges(previous, next)` — the focus trigger.
 
 **Decisions**
 
 - `close_outcome` routes the last tab's close into the window's: a window with no tab holds a tab bar and no editor, with no way to reach one.
 - `focus_edges` is computed against the last focus sent, because Neovim fires `FocusGained` on every `set_ui_focus` with no de-duplication. An unchanged focus sends nothing, and a switch sends the loss before the gain, so two Neovims never both hold it.
-- `new_tab_cwd` answers `None` in the empty state always, so a new tab never takes `$HOME` for a project; it must agree with [`state_seam.rs`](#state_seamrs)'s `snapshot_cwd`.
 
 #### `terminal.rs`
 
@@ -1140,7 +1139,7 @@ Purpose: one window and everything scoped to it — an `adw::ApplicationWindow` 
 
 - `build(parts) -> Option<WindowHandle>` — `None` when no planned tab's core starts; a launch whose only window fails exits.
 - `WindowHandle::id`, `present`, `raise`, `show_after(others)`, `cancel_present`, `refresh_subtree`, recording the selected tab's sidebar first, `capture_viewports`, `cached_window`, `normal_size`, `display_cwd` and `readiness`, of the selected tab.
-- `live_window`, `selected_tab`, `tab_is_empty`, `focus_tab`, `fill_tab`, `wolf_tab_ids`, `open_file` — [Open Folder](#open_folderrs)'s and [a request's](#open_requestrs).
+- `live_window`, `selected_tab`, `tab_is_empty`, `new_tab_sidebar`, `focus_tab`, `fill_tab`, `wolf_tab_ids`, `open_file` — [Open Folder](#open_folderrs)'s and [a request's](#open_requestrs).
 
 **Decisions**
 

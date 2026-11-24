@@ -141,7 +141,7 @@ The GTK sidebar re-roots from one settle point, on the working directory Neovim 
 
 The Linux multiple-windows box means N windows in one process: a coordinator owns the single state store, the one config read and the one cell measurement, while each window carries its own tabs, each with its own captive Neovim and its own wake, and its own entry in the saved window state. New Window opens a fresh empty window at the active window's normal size and inherits nothing else — not the working directory, not the layout — which is macOS's behaviour for the same row.
 
-A GTK window carries an `adw::TabBar` over N live `adw::TabPage`s, each running its own captive Neovim: `Ctrl+Shift+T`, the New Tab menu item and `:WolfNewTab` open a tab with a Neovim of its own, rooted at the selected tab's folder, and closing a tab shuts its Neovim down. Closing the last tab closes the window, because a window with no tab holds no editor.
+A GTK window carries an `adw::TabBar` over N live `adw::TabPage`s, each running its own captive Neovim: `Ctrl+Shift+T`, the New Tab menu item and `:WolfNewTab` open in that window the empty tab New Window opens, with a Neovim of its own, and closing a tab shuts its Neovim down. Closing the last tab closes the window, because a window with no tab holds no editor.
 
 A window persists every tab, in tab order, and a launch restores each saved window's tabs with their layouts. A background tab's leaves are resolved from its own Neovim's window-keyed snapshot maps by each pane's window handle, at no RPC cost, which is what lets a tab nobody has selected save what it actually holds. [Application state](wolf-gnome/application-state.md) owns the two refusal rules.
 

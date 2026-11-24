@@ -14,7 +14,7 @@ The window is an `adw::ApplicationWindow` whose content is a vertical box: an `a
 
 **The paned's handle is the drawer's divider, and its position lives in the tab's own `DrawerShare`**, held by its pane view beside its `DrawerState`. A drag writes that tab's share alone, and every `max-position` notify, rebuild and wake re-derives the position from it. A background tab's divider is not allocated, so a switch wakes the tab coming on screen, and its drain re-derives the divider from the share that tab kept.
 
-Closing and reopening the drawer, a tab switch and a Neovim restart keep the share. New Tab takes the selected tab's share, a new window starts at `DRAWER_WEIGHT`, and a relaunch restores each tab's saved share ([Application state](application-state.md#the-extras)). With no drawer bound there is no paned, so the pane origin `PANE_ORIGIN_Y_EXPECTED` pins and every pointer smoke's targets hold.
+Closing and reopening the drawer, a tab switch and a Neovim restart keep the share. A new tab starts at `DRAWER_WEIGHT`, New Tab's and a new window's alike, and a relaunch restores each tab's saved share ([Application state](application-state.md#the-extras)). With no drawer bound there is no paned, so the pane origin `PANE_ORIGIN_Y_EXPECTED` pins and every pointer smoke's targets hold.
 
 **While a tab is zoomed, the pane area holds the zoomed pane's host alone**, with no tree paned and no drawer paned, so no `notify::position` can write a weight or the share. The other hosts are unparented, as on every rebuild, but stay bound: their drawing areas are not allocated while hidden, so the sizing sends nothing for them, and their Neovim windows and terminal sessions live on at their last size.
 

@@ -8,7 +8,7 @@ Coverage lives in [`Tests/WolfKeyMapTests/`](../../../Tests/WolfKeyMapTests/READ
 
 #### `OpenFolderSeam.swift`
 
-Purpose: The pure decision behind Open Folder ([§6](../../../../../specs/application-state.md#6-opening-a-folder)): which step a directory takes, its canonical form, and the frame a fill applies. The AppKit glue is `AppDelegate.openFolder(_:from:)` ([why](../../../../../notes/wolf-macos-decisions.md#opening-a-folder)).
+Purpose: The pure decision behind Open Folder ([§6](../../../../../specs/application-state.md#6-opening-a-folder)): which step a directory takes, its canonical form, the frame a fill applies, and whether the folder's tab shows its sidebar. The AppKit glue is `AppDelegate.openFolder(_:from:)` ([why](../../../../../notes/wolf-macos-decisions.md#opening-a-folder)).
 
 **Public API**
 
@@ -16,6 +16,7 @@ Purpose: The pure decision behind Open Folder ([§6](../../../../../specs/applic
 - `canonicalDirectory(_:)` — `realpath(3)`, falling back to the path as given.
 - `liveDirectory(hasFolder:reportedCwd:launchCwd:)` — the directory a tab counts as being on: `""` without a folder, else the reported cwd, else the launch directory ([why](../../../../../notes/wolf-macos-decisions.md#opening-files-from-outside-wolf)).
 - `fillFrame(stored:windowTabs:screenVisibleFrames:) -> CGRect?` — `stored`, validated by `StateSeam.restoredWindowFrame`, only when the filled tab is its window's only tab; `nil` keeps the window's frame.
+- `sidebarVisible(stored:newTab:) -> Bool` — `stored`, the project state's setting, else `newTab`, the visibility New Tab captured for the tab being filled, else shown.
 
 **Decisions**
 

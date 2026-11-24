@@ -182,7 +182,9 @@ It also covers `terminalRestore(splits:drawerOpen:live:)`: live splits once, asc
 
 **Covers** — `OpenFolderSeam.step`: a tab on the directory focused by id, in a background tab of a back window and with no current tab; of two windows whose selected tab is on it, the frontmost by stacking; of two background tabs on it, the more recent. With none on it, an empty current tab fills, and a current tab with a directory, or no current tab, opens a new window. `canonicalDirectory` resolving a symlink, keeping `/private/tmp`, and returning a missing path as given. `fillFrame` applying an on-screen stored frame to a lone tab only. `liveDirectory` answering the launch directory for a folder tab with no reported cwd, the reported cwd once there is one, and `""` without a folder.
 
-**Gotchas** — the live windows are passed out of stacking order, and tab ids never equal a tab index, so only the stacking puts the answer right and an index answer names no tab. The lookup runs through wolf-ffi's builder scratch, never the store, so the file needs no `StateDirFence`.
+`sidebarVisible` taking the captured value with no stored one, a stored value winning over a captured one, and showing with neither.
+
+**Gotchas** — the live windows are passed out of stacking order, and tab ids never equal a tab index, so only the stacking puts the answer right and an index answer names no tab. The lookup runs through wolf-ffi's builder scratch, never the store, so the file needs no `StateDirFence`. Capturing the origin's sidebar in `makeNewTab(from:)`, carrying it through a fill and applying it in `build()` are manual-smoke.
 
 #### `OtherPaneSeamTests.swift`
 

@@ -10,7 +10,7 @@ The devShell is not optional: it supplies GTK, exports `WOLF_NVIM_BIN` and `WOLF
 
 Rules that are decidable from their arguments are pinned in each seam's own `#[cfg(test)] mod tests`, which is the point of the seam split in [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md).
 
-Some seams' tables are files here instead: [`drawer_share.rs`](#drawer_sharers), [`gdk_key.rs`](#gdk_keyrs), [`terminal_seams.rs`](#terminal_seamsrs), [`other_pane_seam.rs`](#other_pane_seamrs), [`open_request.rs`](#open_requestrs), [`pane_zoom.rs`](#pane_zoomrs), [`pane_views.rs`](#pane_viewsrs), [`sidebar_toggles.rs`](#sidebar_togglesrs), [`titlebar_background.rs`](#titlebar_backgroundrs), [`restore_caps.rs`](#restore_capsrs), [`app_state_seam.rs`](#app_state_seamrs), [`stacking.rs`](#stackingrs) and [`tab_focus.rs`](#tab_focusrs).
+Some seams' tables are files here instead: [`drawer_share.rs`](#drawer_sharers), [`gdk_key.rs`](#gdk_keyrs), [`terminal_seams.rs`](#terminal_seamsrs), [`other_pane_seam.rs`](#other_pane_seamrs), [`open_request.rs`](#open_requestrs), [`pane_zoom.rs`](#pane_zoomrs), [`pane_views.rs`](#pane_viewsrs), [`sidebar_toggles.rs`](#sidebar_togglesrs), [`titlebar_background.rs`](#titlebar_backgroundrs), [`restore_caps.rs`](#restore_capsrs), [`app_state_seam.rs`](#app_state_seamrs), [`stacking.rs`](#stackingrs), [`tab_focus.rs`](#tab_focusrs) and [`tab_titles.rs`](#tab_titlesrs).
 
 The other files below cover what a seam cannot reach: a real Neovim, a real window, the built binary together with the manifest that shaped it, and the store output `nix build .#wolf-gnome` installs — a different artifact from the checkout build, making different claims.
 
@@ -129,6 +129,7 @@ The other files below cover what a seam cannot reach: a real Neovim, a real wind
 
 - `open_folder::step`, `plan` and `fill_size` against [§6](../../../specs/application-state.md#6-opening-a-folder), in the cases [`OpenFolderSeamTests.swift`](../../wolf-macos/Tests/WolfKeyMapTests/README.md#openfolderseamtestsswift) runs: a background tab of a back window focused; the frontmost of two windows whose selected tab is on the directory; the more recent of two background tabs; an empty current tab filled; a current tab with a directory opening a window.
 - A project state planned as one folder tab with its saved tab, sidebar, fields, drawer share and size; none planned as a fresh folder tab with no size; a fill's size applied to a lone tab only.
+- `plan`'s `new_tab_sidebar`: with no project state, a captured hidden sidebar planned hidden and nothing captured planned shown; a project state's stored setting winning over a captured one.
 
 **Gotchas**
 
@@ -302,7 +303,7 @@ Configuration smokes: `wolf-config.yaml`'s font size and appearance reaching the
 
 #### `smoke_headless/drawer_divider.rs`
 
-The drawer divider's smokes. One launch drags the handle between the editor tree and the drawer through [Pointer injection](#pointer-injection), reading back Neovim's window heights and the drawer shell's `stty size`. The drag must grow the drawer's window and its session, survive the drawer closing and reopening, give the editor back its launch height while the drawer is closed, stop at the editor's floor when released above the pane area, and carry into a second tab New Tab opens, which takes the selected tab's share.
+The drawer divider's smokes. One launch drags the handle between the editor tree and the drawer through [Pointer injection](#pointer-injection), reading back Neovim's window heights and the drawer shell's `stty size`. The drag must grow the drawer's window and its session, survive the drawer closing and reopening, give the editor back its launch height while the drawer is closed, stop at the editor's floor when released above the pane area, and stay out of a second tab New Tab opens, whose drawer opens at a new share.
 
 A second test, `a_dragged_share_survives_a_window_shrink_and_grow_under_cage`, drags the share to just above the editor's floor, shrinks the window until that share's position clamps to the floor, and grows it back. The editor's and drawer's heights must return to the drag's, so the shrink's clamp was not taken for a drag. Its premises derive through `terminal.rs`'s `drawer_paned_at`.
 
@@ -350,6 +351,12 @@ A terminal pane's shell sees its tab's `WOLF_TAB_ID`, distinct per tab, and its 
 
 Every request lands in the window that holds the keyboard, and no smoke asserts a raise, since `cage` raises no background window. Each request is followed by a polled Neovim readback, because `wolf` exits `0` once the request is taken, not handled.
 
+#### `smoke_headless/new_tab.rs`
+
+The New Tab smokes, each launching on a folder tab and opening a folder `D` with no project state through its Open Recent row, then reading the save the quit leaves. New Tab from the folder tab must open an empty tab beside it: a live Neovim at `HOME`, the empty-state page, no sidebar, and `wolf` in its bar entry and in the header once it is the window's only tab. `D` opened into that tab must show the sidebar exactly when the origin showed it at New Tab, after the origin has closed too. A stored sidebar setting must win over the captured one, and New Window's empty tab must show the sidebar whatever its origin showed.
+
+`wolf` is in no fixture name, but `TEMP_CWD_PREFIX` spells it, so the term is not in `ASSERTED_OCR_TERMS`; this file's own guards check what its smokes put on screen. No Ex command is typed before a capture in the tab it shows, since the cmdline strip would draw the runtime dir's path.
+
 #### `smoke_headless/open_folder.rs`
 
 Open Folder and New Window smokes over a state each plants in its own store, by submitting a tree holding `D` and then one without it: an Open Recent row for `D` open in a background tab of the back window selects that tab and opens nothing; from an empty tab, fills it with `D`'s two-pane split; from a folder tab, opens a new window restored to that split and its stored size, leaving the launch tab alone.
@@ -362,7 +369,7 @@ The `#[ignore]`d packaged smokes, which drive the store binary `nix build .#wolf
 
 #### `smoke_headless/panes.rs`
 
-Pane and layout smokes: splits, focus moves, closing panes, `:q` and `:qa`, the per-pane status bar, and native tabs, where each tab must run a Neovim process of its own and closing one must shut that Neovim down. A file saved in one tab must reload in another when it is selected, through the focus trigger's `:checktime` alone.
+Pane and layout smokes: splits, focus moves, closing panes, `:q` and `:qa`, the per-pane status bar, and native tabs, where each tab must run a Neovim process of its own, New Tab's must not start in the selected tab's directory, and closing one must shut that Neovim down. A file saved in one tab must reload in another when it is selected, through the focus trigger's `:checktime` alone.
 
 #### `smoke_headless/pointer.rs`
 
@@ -498,6 +505,16 @@ Every observable is a Neovim readback of `winwidth` and `winheight` per recorded
 
 - Pure: no display, no Neovim and no compositor. Whether the edges reach the right tab's core is the reload smoke's question, in [`smoke_headless/panes.rs`](#smoke_headlesspanesrs).
 - The activation and deactivation rows are this file's alone. Under `cage` a window turns active as it maps and resigns only when another toplevel maps, such as a dialog or a later window, and no smoke checks what either edge does.
+
+#### `tab_titles.rs`
+
+**Covers**
+
+- `tabs_ui::tab_title`'s empty-tab fallback: an empty tab with no file is titled `WINDOW_TITLE_FALLBACK` while a folder tab keeps `TAB_TITLE_FALLBACK`, and either tab showing a file is titled by its name.
+
+**Gotchas**
+
+- Pure: no display, no Neovim and no compositor. Whether `TabHandle::refresh` passes the tab's emptiness is [`smoke_headless/new_tab.rs`](#smoke_headlessnew_tabrs)'s question.
 
 #### `terminal_paint.rs`
 
@@ -776,7 +793,7 @@ Being scrupulous about this is the point of the section.
 - **The glue that pairs a tab's cache with its page position.** `state_seam::ordered_tab_states` is table-tested, but nothing executes `WindowHandle::cached_window`'s pairing of each live cache with `TabHandle::page_position`. A glue bug pairing each cache with its `enumerate()` index instead would satisfy every headless row and persist insertion order again, and `three_tabs_survive_a_relaunch_under_cage` cannot discriminate it: in a window nobody has rearranged, position and index coincide. Closing it needs `a_dragged_tab_is_persisted_in_its_new_position_under_cage` and a capability no smoke has — dragging a bar entry under `cage` — so the next unit that touches the tab bar owes that one.
 - **Only the drag reorder route is established.** `AdwTabBar` reorders by drag with no property that turns it off, and `AdwTabView:shortcuts` sits at a default that carries `Ctrl+Shift+Page_Up` / `Ctrl+Shift+Page_Down` — but `window::wire_keys`' bubble-phase controller maps `Page_Up` and `Page_Down` whatever the modifiers hold and answers `Propagation::Stop`, so the chord very likely reaches Neovim instead of `AdwTabView`. No test drives either route; the page-order rules rest on the drag, and nothing may claim the chord until someone measures it.
 - **Three tab-lifecycle arms are unreachable from the shipped UI.** `close_outcome`'s `CloseWindow` arm is reached only through `close-page`, which just the bar's close button and a middle-click raise, and the bar allocates nothing at one page; `TabsHandle::open_tab`'s `None` return needs a core that fails to start or a window already closing; and the close handler's dropped-`Weak` arm needs the tab layer gone while its view still emits. The first is covered by its own table in `tabs_ui.rs`; the other two are one message and one refused veto.
-- **A tab's title reaches no pixel.** It is the current file's name, which the per-pane statusbar strip and `:e`'s own echo also draw, so no OCR term could discriminate it — and a calibration probe read one of two tab titles and not the other at the default page-segmentation mode, so the reading would be flaky as well as vacuous. `tabs_ui::tab_title` is table-tested.
+- **A file's name in a tab's title reaches no pixel.** The per-pane statusbar strip and `:e`'s own echo draw it too, so no OCR term could discriminate it — and a calibration probe read one of two tab titles and not the other at the default page-segmentation mode, so the reading would be flaky as well as vacuous. `tabs_ui::tab_title` is table-tested, and only an empty tab's `wolf` is read, by [`smoke_headless/new_tab.rs`](#smoke_headlessnew_tabrs), on a capture where nothing else draws it.
 - **The sidebar's release of a closing tab's core.** No smoke closes the tab whose core the tree's search or a running project search is on, so `TreeHandle::release_core`'s owed restart and `SearchPanelHandle::release_core`'s positive branch run in no test: the native-tabs smoke closes the second tab, while the tree's search started on the first.
 - **The crash overlay following a switch.** The crash smoke kills a background tab's Neovim and never selects it, so no test switches to a tab whose Neovim is dead or wedged.
 - **No smoke checks what the window's activation and deactivation edges do in a real Neovim.** `notify::is-active` drives them, and under `cage` a window turns active as it maps and resigns only when another toplevel maps, such as a dialog or a later window, so [`tab_focus.rs`](#tab_focusrs) covers the rule alone; a person must switch away from the window and back after another tab saved a file.

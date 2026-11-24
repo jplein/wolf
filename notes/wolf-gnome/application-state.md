@@ -30,9 +30,11 @@ That is affordable because two coalescers already sit beneath it: the store is a
 
 **The sidebar preference and the empty state are each tab's own.** `sidebar.visible` carries the tab's preference and never what is on screen: the empty state hides the sidebar without changing what the user asked for, so persisting the visible flag would make one project-less session hide the sidebar of every later one. `state_seam::sidebar_is_shown` combines the two at apply time, and a restored `false` is always reversible — from the header bar's toggle group or from `Ctrl+Shift+B`.
 
-The window's one sidebar, its toggle group and the `win.` actions the empty state disables follow the selected tab, re-applied on every real selection change. A toggle changes the selected tab's preference alone, and New Tab inherits the selected tab's preference, empty state, directory and drawer share. The sidebar's root stays per window and follows the selected tab through the one settle point.
+The window's one sidebar, its toggle group and the `win.` actions the empty state disables follow the selected tab, re-applied on every real selection change. A toggle changes the selected tab's preference alone. The sidebar's root stays per window and follows the selected tab through the one settle point.
 
-An empty selected tab whose live cwd is still its own canonical launch cwd neither re-roots nor leaves the empty state, or selecting it beside a folder tab would un-empty it. A typed `:cd` moves its cwd and un-empties that tab alone; Open Folder replaces the empty tab with a folder tab instead ([why](the-coordinator-and-its-windows.md#opening-a-folder)).
+An empty selected tab whose live cwd is still its own canonical launch cwd neither re-roots nor leaves the empty state, or selecting it beside a folder tab would un-empty it. A typed `:cd` moves its cwd and un-empties that tab alone, even into the folder the sidebar is already rooted at; Open Folder replaces the empty tab with a folder tab instead ([why](the-coordinator-and-its-windows.md#opening-a-folder)).
+
+An empty tab and its window are titled "Wolf", `title::WINDOW_TITLE_FALLBACK`, never by its Neovim's cwd: that is home, which is no folder. While the empty-state page shows, `TabHandle::refresh` reads no current file, since every Neovim names its anonymous buffer `Untitled.md`; a file opened into the tab from outside hides the page and titles the tab.
 
 **The stacking order is kept from events, because Wayland lets a client query neither which window is in front nor which is minimized.** The coordinator's `stacking::StackingOrder` moves a window to the front when its `is-active` turns true. GTK 4 never sets `GDK_TOPLEVEL_STATE_MINIMIZED` on Wayland, and `xdg_toplevel`'s `suspended` state also means occluded or on another workspace (GTK merge request 6013), so only Wolf's own Minimize marks a window minimized, and any focus unmarks it. A window not yet ranked, such as a New Window before it gains focus, ranks after every ranked window of its class, in registry order.
 
@@ -40,13 +42,19 @@ A focus or a minimize during a quit updates the order and commits nothing, since
 
 Each window's tab recency lives in `tab_view`'s `TabsInner`: a real selection change moves the tab to the front, a closed tab is forgotten, and a restore reseeds it with the active tab first and the rest in page order, since opening each planned tab selects it in turn. A window's `active_tab` is the selected tab's index among the tabs that contributed, or, when the selected tab contributed nothing, the most recently selected contributing tab's.
 
+## New Tab
+
+**New Tab captures what the sidebar shows, not the preference.** It opens New Window's empty tab, planned by the same `restore_plans` call so the two cannot diverge, and takes one value from the selected tab: `state_seam::sidebar_is_shown` of its preference and emptiness, so a New Tab from an empty tab captures hidden. The value is taken at New Tab, because the origin may close or change before a folder opens into the new tab, and it is kept in that tab's `TabInner`, in memory only. `open_folder::plan` applies it only to a fill whose folder has no project state; a stored tab keeps its own setting.
+
+A typed `:cd` out of that empty tab is not Open Folder and ignores the captured value: the tab shows the sidebar by its own preference, which New Window's plan sets to shown.
+
 ## The extras
 
 A folder tab also writes [§2](../../specs/application-state.md#tab)'s extras: its `focused` pane, its sidebar's page, query and toggles, and its drawer, open or closed and always with its share, plus each edit pane's `cursor` and `top_line` and each preview's `scroll`. `focused` and `zoomed` are written through `pane_layout::pane_ref`, as a tree leaf's depth-first index or `"drawer"` for the bound drawer, so a zoomed or focused drawer is saved as one. An empty tab writes its whole sidebar and no root, zoom, focus or drawer, since nothing it holds names a pane.
 
 **Each tab keeps its own drawer share**, and a relaunch restores it through `DrawerShare::restored`, which refuses a share that is not finite and strictly between 0 and 1. How the divider follows it is [Window structure](window-structure.md)'s.
 
-**The sidebar's page and the search panel's fields are recorded per tab, while the widgets stay per window.** The selected tab's record follows the widgets: the shell records it before every gather of the window and into the tab a switch leaves, and New Tab records the window's live page and fields, so nothing on screen changes. A switch shows the selected tab's recorded page and leaves the panel's query, toggles and rows alone, since the panel is per window ([Window structure](window-structure.md)).
+**The sidebar's page and the search panel's fields are recorded per tab, while the widgets stay per window.** The selected tab's record follows the widgets: the shell records it before every gather of the window and into the tab a switch leaves. A new tab records the Files page, an empty query and the initial toggles, as New Window's does. A switch shows the selected tab's recorded page and leaves the panel's query, toggles and rows alone, since the panel is per window ([Window structure](window-structure.md)).
 
 At launch, and when Open Folder fills a tab, the panel takes the selected tab's record, and runs its search only on the Search page, in a tab with a project, for a query that is not blank. An empty tab's search would be rooted at its Neovim's home directory. A background tab's saved query and toggles therefore give way to the panel's once that tab is selected, which is the price of one panel per window.
 
