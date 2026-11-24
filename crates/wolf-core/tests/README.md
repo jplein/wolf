@@ -220,7 +220,7 @@ Real Neovim and the default shell, pinned to `/bin/sh`, in the drawer's pty (`//
 
 **Covers** — the tab's last pane beside the drawer, which [`runtime/nvim/README.md`](../../../runtime/nvim/README.md#decisions) defines with the drawer not counting:
 
-- `:bd` and `:bw` in the only editor window keeping it, current, on the file shown before, or on a new unnamed listed buffer when no other is listed; two windows on the buffer keeping one; a modified buffer refused with `E89` in the toast and nothing switched.
+- `:bd` and `:bw` in the only editor window keeping it, current, on the file shown before, or on a new unnamed listed buffer when no other is listed; `:bd %` deleting the shown buffer, not the replacement; the replacement being Neovim's own jumplist pick with the drawer closed; two windows on the buffer keeping one; a modified buffer refused with `E89` in the toast and nothing switched.
 - With the drawer closed, `:bd` keeping the window on the earlier file, and `:bd <n>` deleting only that hidden buffer.
 - `:q`, `:wq`, `:x`, `ZZ` and `ZQ` draining `CloseWindow` with the editor window open; `:close`, `<C-w>c`, `<C-w>q` and `InputEvent::ClosePane` refused.
 - `<C-w>q` from the drawer's session and `ClosePane` on the drawer closing only the drawer, its session live; `<C-w>c` refused in a lone terminal pane beside the drawer.

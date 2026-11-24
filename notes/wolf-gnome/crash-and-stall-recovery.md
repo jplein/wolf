@@ -26,7 +26,7 @@ Starting a tab's core stays outside the inventory, at restore, on New Tab, on Ne
 
 A running window reaches these: the buffer picker's candidate snapshot on Ctrl+Shift+E; a per-pane navigation move on Alt+Left or Alt+Right; the Copy yank on Ctrl+Shift+C; opening a Markdown preview and returning from one to its source, both reached from the command palette or from `:WolfPreview` / `:WolfEdit`; repointing a bound preview at a file, from a link clicked in it or a search result activated over it; rendering that document for the loopback server behind Preview in Browser; an edit pane's cursor and top line through `WolfCore::window_cursor`, read at a pane focus change, a tab switch, a window's close and quit ([Application state](application-state.md#capture-moments)); and the preview render, which a burst of typing reaches, coalesced rather than issued per keystroke.
 
-A file from the `wolf` command adds `WolfCore::open_split_left`, the whole-tab split it takes when no pane suits it.
+A file from the `wolf` command, or one the picker, the sidebar or the Open dialog opens while the drawer is the active pane, adds `WolfCore::open_split_left`, the whole-tab split it takes when no pane suits it.
 
 [The preview render's budget](../wolf-gnome-decisions.md#the-preview-renders-budget) describes that coalescing.
 

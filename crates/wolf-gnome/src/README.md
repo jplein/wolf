@@ -877,10 +877,10 @@ Purpose: [`sidebar.rs`](#sidebarrs)'s Search page — a field and three toggles 
 
 **Decisions**
 
-- Typing and toggling run nothing, and a toggle stales the status. Enter runs a changed query or toggles, activating on unchanged ones; an empty query clears, since `rg` would match every line.
+- Typing and toggling run nothing; a toggle stales the status. Enter runs a changed query or toggles, activating on unchanged ones; an empty query clears, since `rg` would match every line.
 - The list never takes focus, since each batch replaces every row; Up and Down move the selection from the field.
 - `activation_route` reads liveness first, as nothing covers the rows on a crash, keeping the blocking `preview_file` on `Alive`; a declined repoint falls back to `open_at`, and an admitted route tries `opener` first.
-- Regex on and `All` off match the counterpart; case starts off, since `ignorecase()` blocks.
+- Regex on and `All` off (Markdown-only) match the counterpart; case starts off, since `ignorecase()` blocks.
 - A toggle never takes focus on click: it would take Enter and flip back.
 - `focus_entry` grabs synchronously: the palette closes before dispatching, so nothing retakes focus.
 - The list's `navigation-sidebar` class keeps the selection tint neutral, for OCR of the preselected row.

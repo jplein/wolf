@@ -418,7 +418,7 @@ The symbols-face smoke: one launch at the smoke config shows `M` and the icons U
 
 #### `smoke_headless/terminal.rs`
 
-Terminal smokes: the terminal drawer, terminals across a Neovim restart, terminal panes beside Neovim panes, typed keys reaching a pane's shell, Ctrl+` from an editor focusing the open drawer, which a second Ctrl+` then hides, Ctrl+`hiding a showing message toast as it opens the drawer, and Ctrl+Shift+W closing the drawer with its session kept and a terminal split with its session hung up. Two more cover the tab's last pane beside the drawer:`:bd` in the only editor pane keeping it, current, on the earlier file, and able to take focus again after the drawer has had it; and a file the picker or a search result opens while the drawer is focused landing in an editor pane, the search result at its line, with the drawer kept.
+Terminal smokes: the terminal drawer, terminals across a Neovim restart, terminal panes beside Neovim panes, typed keys reaching a pane's shell, Ctrl+`` ` `` from an editor focusing the open drawer, which a second Ctrl+`` ` `` then hides, Ctrl+`` ` `` hiding a showing message toast as it opens the drawer, and Ctrl+Shift+W closing the drawer with its session kept and a terminal split with its session hung up. Two more cover the tab's last pane beside the drawer: `:bd` in the only editor pane keeping it, current, on the earlier file, and able to take focus again after the drawer has had it; and a file the picker or a search result opens while the drawer is focused landing in an editor pane, the search result at its line, with the drawer kept.
 
 #### `smoke_headless/terminal_colours.rs`
 
