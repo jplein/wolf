@@ -242,6 +242,8 @@ Builds `:WolfRelease` and installs it to `~/Applications/Wolf.app`, replacing an
 
 The installer extracts the archive, not the `<name>_archive-root/Wolf.app` directory beside it, since that directory is untracked and cannot be carried in runfiles. It extracts with `ditto`, which preserves the symlinks, exec bits and code signature that make the bundle launchable, and it extracts to a staging directory next to the destination before removing the installed app, so an interrupted run leaves the existing installation intact.
 
+Once the bundle is in place, the installer registers it with Launch Services through `lsregister -f`, so Finder's Open With and drops on the Dock icon see its document types. A missing or failing `lsregister` prints a warning and does not fail the install.
+
 Like `:WolfRelease` itself the target is tagged `manual`, so it never sweeps into a wildcard build.
 
 ### The measured penalty
@@ -316,15 +318,16 @@ Bazel does not discover test files. A new `tests/*.rs` or Swift test file runs o
 
 What each target covers belongs with the code it tests:
 
-| Suite                                                                                    | Covers                                                                       |
-| ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| [`//crates/wolf-core:*`](crates/wolf-core/tests/README.md)                               | Core against a real pinned Neovim, plus the headless pure modules.           |
-| [`//crates/wolf-ffi:*`](crates/wolf-ffi/tests/README.md)                                 | The bridge surface, most of it live across the FFI boundary.                 |
-| [`//crates/wolf-vt:*`](crates/wolf-vt/tests/README.md)                                   | The libghostty-vt binding, headless.                                         |
-| [`//crates/wolf-macos:WolfKeyMapTests`](crates/wolf-macos/README.md)                     | The AppKit-free Swift seams, through XCTest.                                 |
-| [`//crates/wolf-macos:WolfMacOSTests`](crates/wolf-macos/Tests/WolfMacOSTests/README.md) | What AppKit views from `WolfMacOS` draw, rendered offscreen, through XCTest. |
-| `//crates/wolf-macos:bundle_layout_test`                                                 | The built `.app`'s resource layout, `wolf` command and document types.       |
-| [`//bazel/...`](#repinning-a-vendored-asset)                                             | One test per vendored asset, asserting the assembled tree.                   |
+| Suite                                                                                    | Covers                                                                                   |
+| ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| [`//crates/wolf-core:*`](crates/wolf-core/tests/README.md)                               | Core against a real pinned Neovim, plus the headless pure modules.                       |
+| [`//crates/wolf-ffi:*`](crates/wolf-ffi/tests/README.md)                                 | The bridge surface, most of it live across the FFI boundary.                             |
+| [`//crates/wolf-vt:*`](crates/wolf-vt/tests/README.md)                                   | The libghostty-vt binding, headless.                                                     |
+| [`//crates/wolf-macos:WolfKeyMapTests`](crates/wolf-macos/README.md)                     | The AppKit-free Swift seams, through XCTest.                                             |
+| [`//crates/wolf-macos:WolfMacOSTests`](crates/wolf-macos/Tests/WolfMacOSTests/README.md) | What AppKit views from `WolfMacOS` draw, rendered offscreen, through XCTest.             |
+| `//crates/wolf-macos:bundle_layout_test`                                                 | The built `.app`'s resource layout, `wolf` command, document types and version.          |
+| `//crates/wolf-macos:install_wolf_test`                                                  | The installer, run on a synthetic archive with a temporary home and a fake `lsregister`. |
+| [`//bazel/...`](#repinning-a-vendored-asset)                                             | One test per vendored asset, asserting the assembled tree.                               |
 
 ### The app-launch smoke
 

@@ -27,6 +27,14 @@ The installer is handed its input as `$(rootpath :wolf_release_archive)`, a file
 
 It carries `manual` for the same reason `:WolfRelease` does. It depends on the transitioned bundle, so without the tag every wildcard build would rebuild the whole Rust, Swift and treesitter graph a second time at `-c opt`.
 
+### Why the bundle version is raised by hand
+
+Raise `CFBundleShortVersionString` and `CFBundleVersion` in `Info.plist` whenever it gains or changes a declaration Launch Services reads: document types, imported or exported types, URL schemes. Launch Services prefers the highest version among the copies that share `org.wolf.WolfMacOS`, and stale copies stay registered: Bazel's temporary bundles, the app-launch smoke's copies and workers' build outputs. With the versions tied, Finder can take an old copy, without the new declarations, for Wolf.
+
+The version is a literal kept by hand. Deriving it from git or stamping it at build time would change an input of the bundle on every commit and defeat Bazel's caching of it. `bundle_layout_test` pins the exact values, so a bump edits the test in the same change.
+
+The version alone does not refresh the installed copy's record, which Launch Services can keep across a reinstall; `:InstallWolf` force-registers it ([why](crates/wolf-macos/install_wolf.sh.md#launch-services-registration)).
+
 ## The pure seam
 
 Swift here is split in two, and the split is the single most important structural fact about the crate.

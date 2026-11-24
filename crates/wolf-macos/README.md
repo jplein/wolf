@@ -30,7 +30,7 @@ bazel run   //crates/wolf-macos:InstallWolf        # install the optimized .app 
 
 `:Wolf` is the fast-iteration development build (fastbuild, Swift `-Onone`, Rust unoptimized) and is what the test targets and the Xcode project build against; it is substantially slower at runtime. `:WolfRelease` is the one to build for real use, for installing, and for any performance measurement.
 
-`:InstallWolf` builds `:WolfRelease` and installs it to `~/Applications/Wolf.app`, replacing any bundle already there. It depends on `:WolfRelease`, so it can only ever install the optimized build.
+`:InstallWolf` builds `:WolfRelease` and installs it to `~/Applications/Wolf.app`, replacing any bundle already there. It depends on `:WolfRelease`, so it can only ever install the optimized build. It then registers the installed bundle with Launch Services through `lsregister -f` ([why](../../notes/crates/wolf-macos/install_wolf.sh.md#launch-services-registration)); a missing or failing `lsregister` prints a warning and the install still succeeds. `WOLF_LSREGISTER` overrides the tool's path, which is how `install_wolf_test` stays off the real Launch Services database.
 
 Resolve the release `.app` path from `bazel cquery --output=files //crates/wolf-macos:WolfRelease`, never from `bazel-bin`. See [Building Wolf](../../build.md) for the measured penalty and the exact recipe.
 
@@ -39,7 +39,8 @@ Resolve the release `.app` path from `bazel cquery --output=files //crates/wolf-
 ```sh
 bazel test //crates/wolf-macos:WolfKeyMapTests     # the pure WolfKeyMap seams
 bazel test //crates/wolf-macos:WolfMacOSTests      # what WolfMacOS views draw, offscreen
-bazel test //crates/wolf-macos:bundle_layout_test  # asserts the .app layout and Info.plist types
+bazel test //crates/wolf-macos:bundle_layout_test  # asserts the .app layout, Info.plist types and version
+bazel test //crates/wolf-macos:install_wolf_test   # runs the installer with a temporary HOME and a fake lsregister
 ./tools/wolf-macos-app-smoke.sh                    # on demand, in the GUI session
 ```
 
@@ -82,4 +83,4 @@ The `WOLF_NVIM_BIN`, `WOLF_RG_BIN`, `WOLF_TERMINFO_DIR` and `WOLF_INIT_LUA` deve
 
 The app listens on the [`wolf` command](../../specs/cli-and-file-open.md)'s channel from launch. Wolf > Install `wolf` Command links `/usr/local/bin/wolf` to the bundled `bin/wolf`, asking for administrator rights when the directory is not writable or missing, and Uninstall `wolf` Command removes that link only. Both leave alone anything at that path that is not Wolf's link ([why](../../notes/wolf-macos-decisions.md#opening-files-from-outside-wolf)).
 
-`Info.plist` declares Markdown and folders as document types at `Alternate` rank, so Finder's Open With lists Wolf without making it the default. The Markdown type is imported and names no icon, so Finder keeps its generic document icon.
+`Info.plist` declares Markdown and folders as document types at `Alternate` rank, so Finder's Open With lists Wolf without making it the default. The Markdown type is imported and names no icon, so Finder keeps its generic document icon. A change to any declaration Launch Services reads also raises the bundle version ([why](../../notes/wolf-macos-decisions.md#why-the-bundle-version-is-raised-by-hand)).

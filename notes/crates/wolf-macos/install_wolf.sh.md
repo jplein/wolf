@@ -1,6 +1,6 @@
 # `crates/wolf-macos/install_wolf.sh`
 
-Last verified at commit `cc60afb1257ee0c5474105e363d0d452ba050afb`.
+Last verified at commit `9826f311e244004a192c46b629db305f0d6b283d`.
 
 ## Archive and staging
 
