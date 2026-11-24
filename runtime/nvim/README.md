@@ -58,7 +58,7 @@ It also notifies **`wolf_active_win`** with `nvim_get_current_win()` on `WinEnte
 
 `_G.wolf_split_pane(orient)` is the split commands' entry. In a terminal placeholder it notifies **`wolf_terminal_split`** with the session id and `orient`, because core starts the new session; anywhere else it is `wolf_do_split`.
 
-Bindings: normal-mode `<C-w>` with `s`/`v`/`c`/`q` and `h`/`j`/`k`/`l` plus arrows; `cnoreabbrev` for `split`, `sp`, `new`, `vsplit`, `vs`, `vnew`, `close`; and the quit families routed through the internal `:WolfQuit`, `:WolfWriteQuit`, `:WolfQuitAll`, and `:WolfWriteQuitAll` user commands.
+Bindings: normal-mode `<C-w>` with `s`/`v`/`c`/`q` and `h`/`j`/`k`/`l` plus arrows; normal-mode `ZZ` and `ZQ` onto `do_quit`; `cnoreabbrev` for `split`, `sp`, `new`, `vsplit`, `vs`, `vnew`, `close`; and the quit families routed through the internal `:WolfQuit`, `:WolfWriteQuit`, `:WolfQuitAll`, and `:WolfWriteQuitAll` user commands.
 
 It also installs the `wolf --wait` tracking and `:cq`, which [`wolf_wait_register`](#wolf_wait_registerpath-id) describes.
 
@@ -347,6 +347,8 @@ The durable dictionary is the global `'spellfile'` at `WOLF_SPELL_DIR/en.utf-8.a
 **Split, close, and focus are deliberately asymmetric.** A split performs the real window operation and also reports an intent, so the shell learns the orientation and handles. A close performs a guarded `nvim_win_close` that refuses the last window and reports nothing, because the shell already observes `win_close`. A focus move performs nothing and is a pure intent, because the shell resolves the neighbour in its own layout.
 
 **The `:q` family routes through internal user commands, not registry commands.** A write variant that fails aborts the quit, matching native `:wq`. A plain `:q` on the last pane with a modified buffer is refused with a native-style E37 echo; `:q!` overrides. The `:qa` family passes `all = true`, which skips the pane-count check so the whole window closes regardless of how many panes are open, with the modified guard still scoped to the current buffer.
+
+**Normal-mode `ZZ` and `ZQ` are mapped onto `do_quit`, as `:x` and `:q!`.** The native keys bypass the command-line abbreviations and quit Neovim on a tab's last pane, which is a crash that ends every wait in the tab with `1` ([§6](../../specs/cli-and-file-open.md#6-waiting)). `ZZ` writes only a modified buffer, as native `ZZ` does and unlike Wolf's `:x`, which always writes, so leaving an unchanged buffer never writes its file.
 
 **A quit that closes the tab ends the closing buffers' waits before it notifies `close_window`.** The front-end shuts the tab's core down on that command, which ends every wait still held with `1`, and the `0` must reach the command first ([mechanism](../../notes/runtime/nvim/init.lua.md#waits-end-before-close_window)).
 

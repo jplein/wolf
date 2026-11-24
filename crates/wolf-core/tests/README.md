@@ -171,7 +171,7 @@ Real Neovim (`//crates/wolf-core:commands`: staged nvim runfiles, `WOLF_NVIM_BIN
 
 **Covers**
 
-- The Neovim-to-shell command channel: the `:Wolf<Pascal>` Ex face and the `require('wolf').<snake>()` Lua face both enqueue the matching `Command`; the `:q`/`:q!`/`:wq`/`:qa`/`:qa!`/`:wqa` overrides and their modified-buffer refusals; and the registry invariants (`from_id` round-trip, unique ids and ex-commands, the `Wolf` prefix, menu groups).
+- The Neovim-to-shell command channel: the `:Wolf<Pascal>` Ex face and the `require('wolf').<snake>()` Lua face both enqueue the matching `Command`; the `:q`/`:q!`/`:wq`/`:qa`/`:qa!`/`:wqa` overrides and their modified-buffer refusals; `ZZ` and `ZQ` on the last pane closing the window with Neovim alive, `ZZ` writing only a modified buffer and `ZQ` nothing; and the registry invariants (`from_id` round-trip, unique ids and ex-commands, the `Wolf` prefix, menu groups).
 
 **Gotchas**
 
@@ -304,7 +304,7 @@ Real Neovim (`WOLF_NVIM_BIN`, `no-sandbox` target with staged nvim runfiles).
 
 **Covers**
 
-- The Neovim-to-shell layout intent channel with the init.lua overrides installed: `<C-w>` chords and the `cnoreabbrev` ex-command path emit `Split`, `FocusDir`, and close intents; `focus_win` moves `active_win` and `current_file`; `<C-w>c` on the last window is a no-op.
+- The Neovim-to-shell layout intent channel with the init.lua overrides installed: `<C-w>` chords and the `cnoreabbrev` ex-command path emit `Split`, `FocusDir`, and close intents; `focus_win` moves `active_win` and `current_file`; `<C-w>c` on the last window is a no-op; `:q`, `ZZ` and `ZQ` with several panes close only the current one.
 
 **Gotchas**
 
@@ -909,7 +909,7 @@ The real `wolf` binary, against a real `OpenListener` or a raw `UnixListener` th
 
 `wolf --wait` end to end, [§6](../../../specs/cli-and-file-open.md#6-waiting): the real `wolf` over a real `OpenListener`, with a real core and Neovim behind it (`//crates/wolf-core:wolf_wait`: the real-nvim runfiles and env, plus `:wolf` as `WOLF_TEST_WOLF_BIN`, `no-sandbox`, `size = "medium"`).
 
-**Covers** — exit `0` after `:q` on the waited split, `:wq` on the tab's last pane, `:bd` and `:bw`; exit `1` after `:cq` in the waited window, which keeps Neovim alive, while `:cq` elsewhere still quits Neovim; a hide by `:e other` still waiting, with the toast; exit `1` when the tab closes, Neovim crashes or a stalled Neovim restarts, and for a path no buffer shows; a file already shown waited on its buffer; a hung-up command leaving no toast and other waits alone; and `git commit` with `wolf --wait` as its editor, committing the typed message, or nothing after `:cq`.
+**Covers** — exit `0` after `:q` on the waited split, `:wq`, `ZZ` or `ZQ` on the tab's last pane, `:bd` and `:bw`; exit `1` after `:cq` in the waited window, which keeps Neovim alive, while `:cq` elsewhere still quits Neovim; a hide by `:e other` still waiting, with the toast; exit `1` when the tab closes, Neovim crashes or a stalled Neovim restarts, and for a path no buffer shows; a file already shown waited on its buffer; a hung-up command leaving no toast and other waits alone; and `git commit` with `wolf --wait` as its editor, committing the typed message, or nothing after `:cq`.
 
 **Gotchas**
 
