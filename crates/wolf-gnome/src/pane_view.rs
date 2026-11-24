@@ -673,7 +673,8 @@ struct PaneInner {
     /// ([`PaneHandle::request_terminal_restore`]), run once by the first wake with a pane
     /// ([`Self::run_pending_terminal_restore`]).
     pending_terminal_restore: RefCell<Option<Vec<TerminalRestore>>>,
-    /// Files opened from outside Wolf ([`PaneHandle::open_file`]), in arrival order, placed by
+    /// Files opened from outside Wolf ([`PaneHandle::open_file`]) and files picked while the
+    /// drawer is the active pane ([`PaneHandle::open_picked`]), in arrival order, placed by
     /// [`Self::run_pending_file_opens`]. A restart reset keeps them, so they land after it.
     /// Each keeps its `wolf --wait`, if any, for the core once the file is placed, and the
     /// `(line, col)` it opens at, if any.

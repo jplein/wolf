@@ -1,7 +1,9 @@
-//! Integration tests of the tab's last pane beside the terminal drawer: `:bd`, `:bw`, the quit
-//! family, the close chords, `InputEvent::ClosePane` and core's terminal router, each run on the
-//! tab's only editor window while the drawer is open, and `:bd` with the drawer closed. A real,
-//! hermetic Neovim holds the windows, and a real `/bin/sh` runs in the drawer's pty.
+//! Integration tests of the tab's last pane beside the terminal drawer: `:bd`, `:bd %`, `:bw`,
+//! the quit family, the close chords, `InputEvent::ClosePane` and core's terminal router, each
+//! run on the tab's only editor window while the drawer is open, and `:bd` with the drawer
+//! closed. A differential case checks that the buffer `:bd` shows beside the drawer is the one
+//! Neovim's own `:bd` picks from the jumplist with the drawer closed. A real, hermetic Neovim
+//! holds the windows, and a real `/bin/sh` runs in the drawer's pty.
 //!
 //! The drawer is a Neovim window (`w:wolf_drawer`) that neither front-end's pane tree holds
 //! (`specs/terminal-panes.md`, "The drawer"), so a close that counts Neovim's windows sees two
@@ -20,6 +22,13 @@
 //!   other listed buffer exists (the drawer-closed cases and the startup-buffer case).
 //! - The startup buffer is `Untitled.md`, named but not on disk, so Neovim does not reuse it in
 //!   place when `:bd` needs an empty buffer, and the deleted buffer is left unlisted.
+//! - Neovim's default `'jumpoptions'` holds `clean`, under which its own `:bd` removes the
+//!   deleted buffer's entries from the window's jumplist, moves the index back by one for each
+//!   removed entry before it, and shows the listed buffer it then finds at the index. C28
+//!   compares the helper's pick with that one rather than naming a buffer, and checks the
+//!   option and the jumplist it starts from in both cores.
+//! - Two fresh cores given the same keys read the same `getjumplist()`, and opening the drawer
+//!   then refocusing the editor window leaves that window's jumplist as it was (C28's premise).
 //! - `probe_values` types its command behind every earlier key, so it reads Neovim's state
 //!   after them. The drawer placeholder is `nofile` and not in terminal mode, so a probe typed
 //!   while the drawer is current still reaches Neovim's command line.
@@ -53,6 +62,15 @@ const SECOND: &str = "beta.md";
 
 /// The line typed into a buffer to make it modified.
 const MARKER: &str = "typed beside the drawer";
+
+/// The lines C28 jumps to inside [`SECOND`], in order, each leaving a jumplist entry behind.
+const JUMP_LINES: [usize; 3] = [3, 6, 9];
+
+/// How many lines C28 writes into [`SECOND`]: enough for every one of [`JUMP_LINES`].
+const SECOND_LINES: usize = 12;
+
+/// The files C28 edits after its jumps inside [`SECOND`], in order.
+const LATER: [&str; 2] = ["gamma.md", "delta.md"];
 
 /// A core running `/bin/sh` as its default shell, in a fresh canonical cwd holding [`FIRST`]
 /// and [`SECOND`].
@@ -339,6 +357,164 @@ fn bw_beside_the_drawer_keeps_the_last_pane_on_the_previous_file() {
          command at all."
     );
     f.shutdown();
+}
+
+/// C27: `:bd %` beside the drawer deletes the buffer `%` named when it was typed, not the
+/// replacement the window shows by the time Neovim's command runs.
+#[test]
+fn bd_percent_beside_the_drawer_deletes_the_shown_buffer() {
+    let (f, second) = delete_beside_the_drawer("bd %");
+    let values = f.probe(&[
+        format!("buflisted({second})"),
+        format!("bufexists({second})"),
+        "buflisted(bufnr())".to_owned(),
+    ]);
+    assert_eq!(
+        values,
+        ["0", "1", "1"],
+        "`:bd %` must delete {SECOND} (buffer {second}) and leave {FIRST}, now shown, alone: \
+         ({SECOND} listed, {SECOND} exists, {FIRST} listed) must read (0, 1, 1). (1, 1, 0) means \
+         `%` was resolved after the switch, so Neovim deleted the replacement {FIRST} instead; \
+         (0, 0, 1) means it ran :bwipeout."
+    );
+    f.shutdown();
+}
+
+/// What C28 reads in one core: the editor window's jumplist right before `:bd`, as `name:lnum`
+/// entries, its index, and the file `:bd` then shows in that window.
+#[derive(Debug)]
+struct JumpPick {
+    jumps: Vec<String>,
+    index: usize,
+    shown: String,
+}
+
+/// Builds a jumplist with three entries of [`SECOND`] before its index and two other files
+/// after, back inside [`SECOND`], then runs `:bd` there, beside the drawer when `beside`.
+fn bd_after_jumps(beside: bool) -> JumpPick {
+    let place = if beside {
+        "beside the drawer"
+    } else {
+        "with the drawer closed"
+    };
+    let f = Fixture::start();
+    let lines: String = (1..=SECOND_LINES).map(|n| format!("line {n}\n")).collect();
+    std::fs::write(f.cwd.join(SECOND), lines).expect("failed to rewrite the second file");
+    for name in LATER {
+        std::fs::write(f.cwd.join(name), format!("# {name}\n"))
+            .unwrap_or_else(|e| panic!("failed to write {name}: {e}"));
+    }
+    f.edit(FIRST);
+    f.edit(SECOND);
+    let editor = f.current_win();
+    for line in JUMP_LINES {
+        type_str(&f.core, &format!("{line}G"));
+    }
+    assert_eq!(
+        f.probe1("line('.')"),
+        JUMP_LINES[JUMP_LINES.len() - 1].to_string(),
+        "premise: the typed `<n>G` jumps must move the cursor inside {SECOND}"
+    );
+    for name in LATER {
+        f.edit(name);
+    }
+    let mut current = String::new();
+    for _ in 0..=LATER.len() {
+        f.core.send_input(ctrl(Key::Char('o')));
+        current = f.probe1("expand('%:t')");
+        if current == SECOND {
+            break;
+        }
+    }
+    assert_eq!(
+        current, SECOND,
+        "premise: <C-o> must walk the jumplist back into {SECOND} {place}"
+    );
+    if beside {
+        f.open_drawer_beside(editor);
+    }
+
+    let values = f.probe(&[
+        "&jumpoptions".to_owned(),
+        format!(
+            "join(map(getjumplist({editor})[0], \
+             {{_, j -> fnamemodify(bufname(j.bufnr), ':t') .. ':' .. j.lnum}}))"
+        ),
+        format!("getjumplist({editor})[1]"),
+    ]);
+    assert!(
+        format!(",{},", values[0]).contains(",clean,"),
+        "premise: 'jumpoptions' must hold clean {place}, the only setting under which `:bd` \
+         prunes the jumplist; it reads {:?}",
+        values[0]
+    );
+    let jumps: Vec<String> = values[1].split_whitespace().map(String::from).collect();
+    let index: usize = values[2]
+        .parse()
+        .unwrap_or_else(|e| panic!("getjumplist()[1] read {:?}: {e}", values[2]));
+    let in_second = |entry: &String| entry.starts_with(&format!("{SECOND}:"));
+    assert!(
+        jumps.get(index).is_some_and(in_second),
+        "premise: the jumplist index {index} must be inside the list, on a {SECOND} entry, \
+         {place}; the list reads {jumps:?}"
+    );
+    let before = jumps[..index]
+        .iter()
+        .filter(|entry| in_second(entry))
+        .count();
+    assert!(
+        before >= 2,
+        "premise: at least two {SECOND} entries must come before the index {index} {place}, \
+         so the index moves back more than once; the list reads {jumps:?}"
+    );
+
+    send_ex(&f.core, "bd");
+    let values = f.probe(&[
+        format!("win_id2win({editor}) > 0"),
+        "win_getid()".to_owned(),
+        format!(
+            "win_id2win({editor}) > 0 ? fnamemodify(bufname(winbufnr({editor})), ':t') : 'gone'"
+        ),
+    ]);
+    assert_eq!(
+        values[..2],
+        ["1".to_owned(), editor.to_string()],
+        "`:bd` of {SECOND} in the tab's only editor window {editor} {place} must keep that \
+         window open and current: (window open, current window). A closed window means the \
+         last pane was closed; with the drawer closed that is a broken premise about Neovim."
+    );
+    if beside {
+        f.assert_active(editor, "`:bd` after jumps beside the drawer");
+    }
+    let shown = values[2].clone();
+    f.shutdown();
+    JumpPick {
+        jumps,
+        index,
+        shown,
+    }
+}
+
+/// C28: from the same jumplist, `:bd` beside the drawer shows the buffer Neovim's own `:bd`
+/// shows with the drawer closed, with two entries of the deleted buffer before the index.
+#[test]
+fn bd_beside_the_drawer_shows_neovims_jumplist_pick() {
+    let neovim = bd_after_jumps(false);
+    let beside = bd_after_jumps(true);
+    assert_eq!(
+        (&beside.jumps, beside.index),
+        (&neovim.jumps, neovim.index),
+        "premise: both cores must reach `:bd` with the same jumplist and index in the editor \
+         window; opening the drawer must not change them"
+    );
+    assert_eq!(
+        beside.shown, neovim.shown,
+        "`:bd` of {SECOND} beside the drawer must show {:?}, the file Neovim's own `:bd` shows \
+         with the drawer closed from the jumplist {:?} at index {}. Another file means the \
+         helper's jumplist walk starts elsewhere, as when it moves the index back for fewer of \
+         the removed entries before it than Neovim does.",
+        neovim.shown, neovim.jumps, neovim.index
+    );
 }
 
 /// C4: with two editor windows on the same buffer beside the drawer, `:bd` closes one and

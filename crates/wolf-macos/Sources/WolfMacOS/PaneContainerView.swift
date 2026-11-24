@@ -200,9 +200,10 @@ final class PaneContainerView: NSView {
   /// `runPendingTerminalRestore`.
   private var pendingTerminalRestore: [LivenessSeam.TerminalRestoreStep]?
 
-  /// Files opened from outside Wolf (`openFile`), in arrival order, waiting for the view to be
-  /// ready: a bound first pane, and no layout rebuild, drawer restore or terminal restore
-  /// pending, any of which would replace the pane a file lands in. A restart reset keeps them.
+  /// Files opened from outside Wolf (`openFile`), and files picked while the drawer is the
+  /// active pane (`openPickedFile`), in arrival order, waiting for the view to be ready: a
+  /// bound first pane, and no layout rebuild, drawer restore or terminal restore pending, any
+  /// of which would replace the pane a file lands in. A restart reset keeps them.
   /// Each keeps the drained item holding its `wolf --wait`, if any, and the cursor to open at.
   private var pendingFileOpens:
     [(path: String, wait: FfiOpenItem?, cursor: (line: UInt64, col: UInt64)?)] = []
@@ -2462,10 +2463,11 @@ final class PaneContainerView: NSView {
     }
   }
 
-  /// Opens `path`, a file opened from outside Wolf, in the pane `specs/cli-and-file-open.md`
-  /// §5.2 chooses: unzooming first, focusing an editor pane already on it, opening it in an
-  /// editor or preview pane, or splitting the whole tab with a new editor pane on the left. A
-  /// missing file opens as a new buffer. It waits in `pendingFileOpens` until the view is ready.
+  /// Opens `path`, a file opened from outside Wolf or picked while the drawer is the active
+  /// pane (`openPickedFile`), in the pane `specs/cli-and-file-open.md` §5.2 chooses:
+  /// unzooming first, focusing an editor pane already on it, opening it in an editor or
+  /// preview pane, or splitting the whole tab with a new editor pane on the left. A missing
+  /// file opens as a new buffer. It waits in `pendingFileOpens` until the view is ready.
   /// `wait`, a drained item holding a `wolf --wait`, is handed to the core once the file is
   /// placed, so its command ends when the file's buffer closes. `cursor`, when set, is where
   /// the file opens, as `open_at` places it.

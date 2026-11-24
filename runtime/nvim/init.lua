@@ -723,7 +723,7 @@ local function bdelete_replacement(win, targets)
 	for i, j in ipairs(jumps) do
 		-- As mark_jumplist_forget_file, which only 'jumpoptions' clean runs.
 		if clean and targets[j.bufnr] then
-			if idx >= i then
+			if idx > #list then
 				idx = idx - 1
 			end
 		else
@@ -976,20 +976,25 @@ function _G.wolf_setup_layout(chan)
 	local function do_bdelete(cmd, o)
 		local cur = vim.api.nvim_get_current_win()
 		local shown = vim.api.nvim_get_current_buf()
-		local targets, doomed = {}, {}
-		local list = #o.fargs == 0 and { tostring(shown) } or o.fargs
-		for _, arg in ipairs(list) do
-			local b = tonumber(arg)
-			if b == nil then
-				b = vim.fn.bufnr(arg)
+		local nums, targets, doomed = {}, {}, {}
+		if #o.fargs == 0 then
+			nums[1] = shown
+		end
+		-- As Neovim's do_bufdel, which stops at the first name that matches no buffer.
+		for i, arg in ipairs(o.fargs) do
+			local b = arg:match("^%d+$") and tonumber(arg) or vim.fn.bufnr(arg)
+			if b < 0 then
+				break
 			end
+			nums[i] = b
+		end
+		for _, b in ipairs(nums) do
 			if b > 0 and vim.api.nvim_buf_is_valid(b) then
 				targets[b] = true
 				doomed[b] = o.bang or not vim.bo[b].modified
 			end
 		end
-		-- Named, since the current buffer is the replacement by the time it runs.
-		local native = cmd .. (o.bang and "!" or "") .. " " .. (#o.fargs == 0 and list[1] or o.args)
+		local native = cmd .. (o.bang and "!" or "") .. " " .. o.args
 		local drawer, every = false, true
 		for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
 			if vim.w[w].wolf_drawer == true then
@@ -1005,10 +1010,22 @@ function _G.wolf_setup_layout(chan)
 			if not pcall(vim.cmd, (o.bang and "buffer! " or "buffer ") .. r) and created then
 				pcall(vim.api.nvim_buf_delete, r, { force = true })
 			end
-			-- A bufhidden=wipe buffer went with the switch.
-			if #o.fargs == 0 and not vim.api.nvim_buf_is_valid(shown) then
+			-- By number once switched, since `%`, `#` or no argument would by then name other buffers.
+			-- A target the switch wiped (bufhidden=wipe) is left out.
+			local words, left = {}, false
+			for i = 1, math.max(#o.fargs, 1) do
+				local b = nums[i]
+				if b == nil then
+					table.insert(words, o.fargs[i])
+				elseif not targets[b] or vim.api.nvim_buf_is_valid(b) then
+					left = left or targets[b] == true
+					table.insert(words, tostring(b))
+				end
+			end
+			if not left then
 				return
 			end
+			native = cmd .. (o.bang and "!" or "") .. " " .. table.concat(words, " ")
 		end
 		local ok, err = pcall(vim.cmd, native)
 		if not ok then
