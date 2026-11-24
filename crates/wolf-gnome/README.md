@@ -20,6 +20,8 @@ The binary takes no command-line arguments: the `wolf` command, and GNOME Files 
 
 The picker, the sidebar, the primary menu's native `gtk::FileDialog`s and Neovim itself all open files the same way, through `InputEvent::Open`, which core performs as `:e`. A result in the sidebar's search panel opens a location rather than a file, through `InputEvent::OpenAt`, which core performs as `:edit` followed by `nvim_win_set_cursor` in one input-pump step; over a preview pane it repoints the preview through `preview_file` instead, falling back to `OpenAt` when core declines. Saving goes the same way, through `InputEvent::Save` and `InputEvent::SaveAs`, from the primary menu's Save and Save As items, from `Ctrl+Shift+S`, and from `:w` or `:saveas` typed inside Neovim.
 
+While the selected tab's terminal drawer is its active pane, the picker, the sidebar and the Open dialog place the file by core's pane choice, as a file from `wolf` is placed, since `:e` would edit in the drawer ([The drawer](../../specs/terminal-panes.md#the-drawer)).
+
 ## Running
 
 Everything goes through the Nix devShell, which supplies the GTK toolchain and exports `WOLF_NVIM_BIN` and `WOLF_RG_BIN`:

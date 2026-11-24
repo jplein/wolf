@@ -233,7 +233,7 @@ Purpose: The file-tree sidebar: an `NSOutlineView` driven by a long-lived `FfiFi
 - `onRenderWake()`, `reroot(to:)`'s only caller, re-roots when `handle.cwd()` differs from its root: Neovim's cwd is the one authority. wolf-gnome's settle-point re-root ([`shell.rs`](../../../wolf-gnome/src/README.md#shellrs)) is an accepted divergence.
 - `TreeCellView` marks what the active pane shows with a [`SidebarRowStyle`](../WolfKeyMap/Sidebar/README.md#sidebarrowstyleswift) label color, never the selection tint.
 - `applyLabelColor()` re-sets the label's string, an apparent no-op: after an emphasized click AppKit ignores `textColor`, leaving the formerly current row accented. `WolfMacOSTests` fails without it.
-- Activation routes on the active pane's mode, as the pickers do: a preview pane gets `preview_file`, falling back to `open` on `0`, which drops it to edit mode.
+- A file click opens through [`PaneContainerView.openPickedFile`](#panecontainerviewswift), as the picker, the search results and the Open dialog do.
 
 #### `FontRegistration.swift`
 
@@ -362,18 +362,19 @@ Purpose: The editor area: one flipped first-responder `NSView` painting every pa
 - `activeTerminal`, `activeTerminalSelection` — `nil` off a terminal pane.
 - `activeWin` — the active pane's window, `0` before one binds.
 - `activePreviewSourcePath` — `nil` in edit mode.
-- `otherPaneTarget(prefer:)` — `0` splits, `nil` is a no-op.
+- `otherPaneTarget(prefer:)` — `0` splits, `nil` no-ops.
 - `canClosePane`, `closeActivePane()`, `splitActivePane(_:)` — Close Pane's gate and action, and the splits' ([why](../../../../notes/wolf-macos-decisions.md#terminal-panes)).
 - `toggleZoom()`, `toggleTerminal()`, `isZoomed`, `zoomedPaneId`, `visiblePaneFrames` — Zoom Pane, Toggle Terminal unzooming first, the saved zoom, frames by window ([why](../../../../notes/wolf-macos-decisions.md#zoom-pane)).
-- `requestLayoutRebuild(_:tab:focused:drawer:)` — the launch restore at the first pane's bind, with focus and drawer ([order](../../../../notes/wolf-macos-decisions.md#the-per-tab-extras)).
-- `openFile(_:wait:)` — places a file by [§5.2](../../../../specs/cli-and-file-open.md#52-choosing-the-pane), waiting while a restore is pending ([why](../../../../notes/wolf-macos-decisions.md#opening-files-from-outside-wolf)).
+- `requestLayoutRebuild(_:tab:focused:drawer:)` — the launch restore at the first pane's bind ([order](../../../../notes/wolf-macos-decisions.md#the-per-tab-extras)).
+- `openFile(_:wait:at:)` — places a file by [§5.2](../../../../specs/cli-and-file-open.md#52-choosing-the-pane), waiting while a restore is pending ([why](../../../../notes/wolf-macos-decisions.md#opening-files-from-outside-wolf)).
+- `openPickedFile(_:at:)` — a picked file's route ([why](../../../../notes/wolf-macos-decisions.md#terminal-panes)).
 
 **Decisions**
 
 - One `geometry(_:fullWidth:)` call sets web-view frame, occlusion and statusbar span: no frame paints preview alignment without its web view.
 - Grids are skipped only under an opaque, loaded preview web view; the flag survives reloads: WebKit shows the outgoing document.
 - Scroll follows `scrollingDeltaY`'s natural-scroll-aware sign; `isDirectionInvertedFromDevice` double-corrects.
-- The drawer is a pane outside `tree`, excluded from leaves, neighbours and splits ([why](../../../../notes/wolf-macos-decisions.md#terminal-panes)).
+- The drawer is a pane outside `tree`, excluded from leaves, neighbours, splits ([why](../../../../notes/wolf-macos-decisions.md#terminal-panes)).
 - Only a terminal pane gets `NSTextInputClient` ([why](../../../../notes/wolf-macos-decisions.md#terminal-panes)), its input going to its session; `doCommand(by:)` [passes the rest on](../../../../notes/wolf-macos-decisions.md#key-equivalents-over-a-preview).
 
 #### `PickerChrome.swift`
@@ -483,7 +484,7 @@ Purpose: The sidebar content-search panel — a query field and three toggles ab
 - `focusSearchField()` defers `makeFirstResponder` by one runloop tick. Invoked from the Command Palette, the palette's `close()` runs afterwards and ends in `makeFirstResponder(paneContainer)`, clobbering a synchronous focus.
 - `refresh()` rebuilds only when the snapshot version or the char budget has advanced, so repeated batches and idle wakes cost nothing, while a sidebar resize re-windows the lines.
 - Collapsed files are tracked by path so a rebuild preserves them; every other file row expands.
-- Activating a line row routes on the active pane's mode: a preview pane gets `preview_file`, falling back to `open_at` on `0`. A preview has no cursor, so the match's line and column reach nvim only on the edit path.
+- Activating a line row opens through [`PaneContainerView.openPickedFile`](#panecontainerviewswift) at the match's line and column. A preview has no cursor, so they reach nvim only when the file is edited.
 
 #### `SearchWakeBridge.swift`
 

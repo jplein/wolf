@@ -214,6 +214,19 @@ Headless (`//crates/wolf-core:db`: real SQLite files in tempdirs, no nvim, no `W
 - The not-a-database fixture writes a garbage `-shm` and no `-wal`. A garbage `-wal` makes SQLite delete both sidecars itself when the failing connection closes, which hides whether the heal deleted them; the `-shm` is then checked by inode against a hard-linked witness, while the store's handle is alive.
 - The legacy fixtures are built at a neutral name and renamed into place, so nothing under `crates/` opens a database named `*-mru.sqlite`.
 
+#### `drawer_last_pane.rs`
+
+Real Neovim and the default shell, pinned to `/bin/sh`, in the drawer's pty (`//crates/wolf-core:drawer_last_pane`, as `terminal_drawer`, with `size = "medium"`).
+
+**Covers** — the tab's last pane beside the drawer, which [`runtime/nvim/README.md`](../../../runtime/nvim/README.md#decisions) defines with the drawer not counting:
+
+- `:bd` and `:bw` in the only editor window keeping it, current, on the file shown before, or on a new unnamed listed buffer when no other is listed; two windows on the buffer keeping one; a modified buffer refused with `E89` in the toast and nothing switched.
+- With the drawer closed, `:bd` keeping the window on the earlier file, and `:bd <n>` deleting only that hidden buffer.
+- `:q`, `:wq`, `:x`, `ZZ` and `ZQ` draining `CloseWindow` with the editor window open; `:close`, `<C-w>c`, `<C-w>q` and `InputEvent::ClosePane` refused.
+- `<C-w>q` from the drawer's session and `ClosePane` on the drawer closing only the drawer, its session live; `<C-w>c` refused in a lone terminal pane beside the drawer.
+
+**Gotchas** — The refused closes wait `NEGATIVE_SETTLE` for a close that must not happen; widen it if it flakes. The module doc lists the component premises each case measures.
+
 #### `empty_state_cwd.rs`
 
 Real Neovim (`//crates/wolf-core:empty_state_cwd`: staged nvim runfiles, `WOLF_NVIM_BIN`, `no-sandbox`).
@@ -910,7 +923,7 @@ The real `wolf` binary, against a real `OpenListener` or a raw `UnixListener` th
 
 `wolf --wait` end to end, [§6](../../../specs/cli-and-file-open.md#6-waiting): the real `wolf` over a real `OpenListener`, with a real core and Neovim behind it (`//crates/wolf-core:wolf_wait`: the real-nvim runfiles and env, plus `:wolf` as `WOLF_TEST_WOLF_BIN`, `no-sandbox`, `size = "medium"`).
 
-**Covers** — exit `0` after `:q` on the waited split, `:wq`, `ZZ` or `ZQ` on the tab's last pane, `:bd` and `:bw`; exit `1` after `:cq` in the waited window, which keeps Neovim alive, while `:cq` elsewhere still quits Neovim; a hide by `:e other` still waiting, with the toast; exit `1` when the tab closes, Neovim crashes or a stalled Neovim restarts, and for a path no buffer shows; a file already shown waited on its buffer; a hung-up command leaving no toast and other waits alone; and `git commit` with `wolf --wait` as its editor, committing the typed message, or nothing after `:cq`.
+**Covers** — exit `0` after `:q` on the waited split, `:wq`, `ZZ` or `ZQ` on the tab's last pane, `:bd` and `:bw`, and `:bd` beside the drawer, keeping the pane; exit `1` after `:cq` in the waited window, beside the drawer too, which keeps Neovim alive, while `:cq` elsewhere still quits Neovim; a hide by `:e other` still waiting, with the toast; exit `1` when the tab closes, Neovim crashes or a stalled Neovim restarts, and for a path no buffer shows; a file already shown waited on its buffer; a hung-up command leaving no toast and other waits alone; and `git commit` with `wolf --wait` as its editor, committing the typed message, or nothing after `:cq`.
 
 **Gotchas**
 

@@ -90,7 +90,7 @@ The baseline handle lifecycle: `wolf_ffi_start`, `read_frame` (dense `cols * row
 
 **Gotchas**
 
-- Drive the handle method, not a typed `:close<CR>`: the captive `init.lua` intercepts the interactive Ex command, while the method issues `nvim_command("close")` over RPC and bypasses it. Only the setup `:vsplit` is typed.
+- Drive the handle method, not a typed `:close<CR>`: the captive `init.lua`'s abbreviation sends a typed `:close` to the same `wolf_do_close` the method calls, so typing it would not test the method. Only the setup `:vsplit` is typed.
 
 #### `cmdline_ui.rs`
 

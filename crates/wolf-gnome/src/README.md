@@ -623,14 +623,14 @@ Purpose: the pure codec between the live pane tree, whose leaves are pane ids, a
 
 #### `pane_view.rs`
 
-Purpose: one tab's GTK glue: `layout`'s pane tree as nested `gtk::Paned`, one `gtk::Overlay` host per window, plus the drawer.
+Purpose: one tab's GTK glue: `layout`'s pane tree as nested `gtk::Paned`, a `gtk::Overlay` per window, the drawer.
 
 **Public API**
 
 - `build(core, metrics, drawer_share) -> PaneHandle` — panes appear with the first grid.
 - `cmdline_widget()`, the focus-return target; `toast_widget()`, `pum_widget()`.
 - `reset_after_restart()`, `drawer_is_open()`, `drawer_share()`, `request_terminal_restore(steps)`, `request_layout_rebuild(restored)`, `layout_snapshot() -> LayoutGather`, `capture_viewports()`, `snapshot_readiness()`, `readiness()`.
-- `active_terminal()`, `sync_terminal_focus(focused)`, `request_terminal(command)`, `open_file(path, wait)`.
+- `active_terminal()`, `sync_terminal_focus(focused)`, `request_terminal(command)`, `open_file(path, wait)`, `open_picked(path, at)`, `drawer_is_active()`.
 - `other_pane_target(prefer)` — [`other_pane_seam.rs`](#other_pane_seamrs)'s window: `Some(0)` splits, `None` no-ops.
 - `toggle_zoom()`, `toggle_terminal()` — [`pane_zoom.rs`](#pane_zoomrs)'s rules.
 
@@ -642,7 +642,7 @@ Purpose: one tab's GTK glue: `layout`'s pane tree as nested `gtk::Paned`, one `g
 - Pointer input is one all-button `gtk::GestureDrag` ([why](../../../notes/crates/wolf-gnome/src/pane_view.rs.md#one-drag-gesture)), pinning target and button at press; editor panes take only the primary.
 - A terminal pane paints through its own [`TerminalCanvas`](terminal/README.md#canvasrs) ([why](../../../notes/wolf-gnome/terminal-panes.md)).
 - Each pane's status and `b:wolf_full_width` cache per wake: a use-time read re-enters `draw_pane`'s guard, and paint, pointer and resize must agree.
-- One funnel sends every grid resize, against the size last requested rather than the lagging snapshot; it runs each wake, as a lifted cap re-divides a still allocation.
+- One funnel sends every grid resize, against the size last requested, not the lagging snapshot; it runs each wake, as a lifted cap re-divides a still allocation.
 - The drawer's paned exists only while one is bound, re-taking the tab's share each wake; a zoom shows its host alone, touching no weight or share ([why](../../../notes/wolf-gnome/window-structure.md)). `reset_after_restart` clears the drawer `detect_closes` misses.
 
 #### `pane_zoom.rs`
@@ -694,15 +694,15 @@ Purpose: the file-picker overlay — a search entry over a ranked results list. 
 
 **Public API**
 
-- `build(overlay, area, core) -> PickerHandle` — starts hidden. `area` is a `FocusTarget`, not the results host.
-- `PickerHandle::open`, `close` (both idempotent), and `is_open`, which the app reads to suppress key forwarding.
+- `build(overlay, area, core, opener) -> PickerHandle` — starts hidden. `area` is a `FocusTarget`, not the results host; `opener` takes a chosen file first.
+- `PickerHandle::open`, `close` (both idempotent), and `is_open`, read to suppress key forwarding.
 
 **Decisions**
 
-- The picker has no trigger predicate of its own: it opens from the `win.go-to-file` action; see [`actions.rs`](#actionsrs).
+- The picker has no trigger predicate of its own: it opens from `win.go-to-file`; see [`actions.rs`](#actionsrs).
 - The key controller runs in the capture phase, so Escape and the arrows are seen before the `SearchEntry` consumes them, and the arrows move the list selection while focus stays in the entry.
-- The selection is preserved across a streaming rebuild unless the query changed, so an arriving batch does not yank the user to the top row.
-- No shared overlay widget is extracted, by judgement: the three overlays already share the three seams below, and the widget construction left over is covered only by the cage smokes, so a common type would risk three working overlays to remove boilerplate.
+- The selection is preserved across a streaming rebuild unless the query changed, so a batch does not yank the user to the top row.
+- No shared overlay widget is extracted, by judgement: the three overlays already share the three seams below, and the leftover widget construction is covered only by the cage smokes, so a common type would risk three working overlays for boilerplate.
 
 **Gotchas**
 
@@ -867,20 +867,20 @@ Purpose: a Neovim window's `win_viewport` projected onto a pane-local thumb rect
 
 #### `search_panel.rs`
 
-Purpose: [`sidebar.rs`](#sidebarrs)'s Search page — a field and three toggles over streaming ripgrep matches grouped by file, whose line rows open locations.
+Purpose: [`sidebar.rs`](#sidebarrs)'s Search page — a field and three toggles over streaming ripgrep matches grouped by file.
 
 **Public API**
 
-- `build(core, area) -> SearchPanelHandle` — gate shut until the sidebar shows it; `area` is a [`picker.rs`](#pickerrs) `FocusTarget`.
-- `SearchPanelHandle::widget`, `focus_entry`, `owns_keyboard`, `set_sidebar_visible`, `fields`, `restore(fields, run)`, which moves no focus, `close`, cancelling `rg`, and `release_core`.
-- Pure seams, among them `SearchToggles` (`INITIAL`), `search_options_for`, `enter_action`, `activation_route` and `search_status`, all in the module doc.
+- `build(core, opener, area) -> SearchPanelHandle` — gate shut until the sidebar shows it; `area` is a [`picker.rs`](#pickerrs) `FocusTarget`.
+- `SearchPanelHandle::widget`, `focus_entry`, `owns_keyboard`, `set_sidebar_visible`, `fields`, `restore(fields, run)`, which moves no focus, `close`, cancelling `rg`, `release_core`.
+- Pure seams, among them `SearchToggles` (`INITIAL`), `search_options_for`, `enter_action`, `activation_route` and `search_status`, in the module doc.
 
 **Decisions**
 
 - Typing and toggling run nothing, and a toggle stales the status. Enter runs a changed query or toggles, activating on unchanged ones; an empty query clears, since `rg` would match every line.
 - The list never takes focus, since each batch replaces every row; Up and Down move the selection from the field.
-- `activation_route` reads liveness first, as nothing covers the rows on a crash, keeping the blocking `preview_file` on `Alive`; a declined repoint falls back to `open_at`.
-- Regex on and `All` off (Markdown-only) match the counterpart; case starts off, since `ignorecase()` blocks.
+- `activation_route` reads liveness first, as nothing covers the rows on a crash, keeping the blocking `preview_file` on `Alive`; a declined repoint falls back to `open_at`, and an admitted route tries `opener` first.
+- Regex on and `All` off match the counterpart; case starts off, since `ignorecase()` blocks.
 - A toggle never takes focus on click: it would take Enter and flip back.
 - `focus_entry` grabs synchronously: the palette closes before dispatching, so nothing retakes focus.
 - The list's `navigation-sidebar` class keeps the selection tint neutral, for OCR of the preselected row.
@@ -1006,13 +1006,13 @@ Purpose: the per-pane statusbar's rulebook, decidable from values.
 
 #### `tab_view.rs`
 
-Purpose: the GTK glue for native tabs — an `adw::TabBar` over an `adw::TabView`, where every tab owns its `WolfCore`, wake drain, restart state, [`pane_view.rs`](#pane_viewrs) and [`persistence.rs`](#persistencers) handle. Its decisions are [`tabs_ui.rs`](#tabs_uirs)'s.
+Purpose: the GTK glue for native tabs, where every tab owns its `WolfCore`, wake drain, restart state, [`pane_view.rs`](#pane_viewrs) and [`persistence.rs`](#persistencers) handle. Its decisions are [`tabs_ui.rs`](#tabs_uirs)'s.
 
 **Public API**
 
 - `build(TabsParts) -> TabsHandle` — no page exists until `open_tab`.
 - `TabsHandle::open_tab(TabParts) -> Option<TabHandle>` — starts its core and selects it, or logs once. `replace(old, parts)` does so in `old`'s place; hold no core borrow across it.
-- `select`, `selected`, `selected_core`, `core_source`, `entries`, `len`, `focus_target`, `shutdown_all`, `view_widget`, `bar_widget`, `seed_recency`, `recency`.
+- `select`, `selected`, `selected_core`, `core_source`, `entries`, `len`, `focus_target`, `shutdown_all`, `view_widget`, `bar_widget`, `seed_recency`, `recency`, `drawer_opener`.
 - `connect_selected`, given the tab left; `connect_wake`; `connect_closing`, before a closing tab's shutdown.
 - `sync_ui_focus(window_active)`, the `:checktime` trigger; `active_terminal()` and `sync_terminal_focus(window_active)` ([how](../../../notes/wolf-gnome/terminal-panes.md)).
 - `TabHandle`'s `core`, `liveness`, `restart`, `wake`, `refresh`, `capture_viewports`, `shutdown`, `set_empty`, `hide_empty_state`, `is_empty`, `wolf_tab_id`, `launch_cwd`, `live_directory` and sidebar accessors; `CoreSource` and `with_core`.
@@ -1020,9 +1020,9 @@ Purpose: the GTK glue for native tabs — an `adw::TabBar` over an `adw::TabView
 **Decisions**
 
 - A tab's wake channel exists before its core starts, so the startup flush's wake is queued, not lost. The core's [tab ID](../../../specs/cli-and-file-open.md#3-tab-ids) is set first, so no terminal session lacks it.
-- Window-level widgets take a `CoreSource`, never a cell, stale after a switch.
+- Window-level widgets take a `CoreSource`, never a cell, stale after a switch, and try `drawer_opener`'s `FileOpener` before `InputEvent::Open`, which would edit in an active drawer ([why](../README.md#entry-point)).
 - `close-page` is a veto: every arm must answer `close_page_finish` and return `Propagation::Stop`, or the page never leaves. Closing the last page closes the window, so `replace` opens first, keeping `old` when that fails.
-- Both handlers and every drain hold only `Weak`s: a strong reference from one the view or the main loop owns leaks every tab's pane view.
+- Both handlers and every drain hold only `Weak`s: a strong one leaks every tab's pane view.
 
 **Gotchas**
 
@@ -1116,21 +1116,21 @@ Purpose: the GTK glue for the file-tree sidebar — a `gtk::ListView` over a `gt
 
 **Public API**
 
-- `build(core, area, start, root_label) -> TreeHandle` — `area` is a [`picker.rs`](#pickerrs) `FocusTarget`; `start` is false in the empty state, where nothing is walked.
+- `build(core, opener, area, start, root_label) -> TreeHandle` — a file click tries `opener` first; `area` is a [`picker.rs`](#pickerrs) `FocusTarget`; `start` is false in the empty state, where nothing is walked.
 - `widget()` — [`sidebar.rs`](#sidebarrs)'s Files page.
-- `release_core(core)`, for a closing tab's core.
+- `release_core(core)`, on a tab's close.
 - `on_render_wake()`, `close()`, `set_sidebar_visible(shown)`, relayed through `sidebar.rs` and true only while a shown sidebar is on Files, and `reroot(root_label)`, from [`shell.rs`](#shellrs)'s one settle point; this module reads no cwd.
 
 **Decisions**
 
 - The root store holds one item: a synthetic `Dir` named after the working directory whose rel-path is the empty cwd sentinel, so the create-func needs no special case. `remove_all` destroys its expanded state, so it is re-expanded after every rebuild and before a reveal walks ancestors.
-- Children materialize lazily through `wolf_core::tree::TreeIndexCache` under rule R1, on `children_for`: the memo and the entries are borrowed inside one statement touching no widget, because GTK re-enters the create-func and a borrow held across `set_expanded` or `set_list_row` is a panic.
-- Only a traversal batch is coalesced ([`refresh_coalescer.rs`](#refresh_coalescerrs)); every other refresh is immediate, and all pass both gates in [`tree_gate.rs`](#tree_gaters). A pending reveal retries even when the rebuild is skipped.
+- Children materialize lazily through `wolf_core::tree::TreeIndexCache` under rule R1, on `children_for`: the memo and the entries are borrowed inside one statement touching no widget, because GTK re-enters the create-func and a borrow held across `set_expanded` or `set_list_row` panics.
+- Only a traversal batch is coalesced ([`refresh_coalescer.rs`](#refresh_coalescerrs)); every other refresh is immediate, and all pass both gates in [`tree_gate.rs`](#tree_gaters). A pending reveal retries even on a skipped rebuild.
 - The current-file bold moves through a registry of bound labels, which is what the version gate costs: a suppressed rebuild re-binds no row.
 
 **Gotchas**
 
-- Manual expansion below the root does not survive a root-store rebuild; [Present limitations](../../../notes/wolf-gnome/present-limitations.md) owns that limitation and what preserving it would cost.
+- Manual expansion below the root does not survive a root-store rebuild; [Present limitations](../../../notes/wolf-gnome/present-limitations.md) owns it and what preserving it would cost.
 
 #### `window.rs`
 

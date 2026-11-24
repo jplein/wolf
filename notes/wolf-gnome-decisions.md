@@ -10,7 +10,7 @@ This is the GTK 4 / libadwaita front-end: a runnable multi-window application th
 
 Split, close, and focus move are driven by core's layout-intent channel; a divider drag is the `gtk::Paned` handle's own gesture, landing in the pure tree's weights, or for the terminal drawer's divider in the tab's drawer share. Menu items, accelerators, and commands drained from Neovim all resolve through one `gio` action namespace.
 
-Files reach Neovim through `InputEvent::Open` and `InputEvent::OpenAt`, and a file from the `wolf` command also through `WolfCore::open_split_left`; [`README.md`](../crates/wolf-gnome/README.md) states each. What is durable here is that `InputEvent::OpenAt`'s edit and cursor move happen inside one input-pump step, so no other event can interleave between them.
+Files reach Neovim through `InputEvent::Open` and `InputEvent::OpenAt`, and a file from the `wolf` command, or one the picker, the sidebar or the open dialog opens while the drawer is the active pane, also through `WolfCore::open_split_left`; [`README.md`](../crates/wolf-gnome/README.md) states each. What is durable here is that `InputEvent::OpenAt`'s edit and cursor move happen inside one input-pump step, so no other event can interleave between them.
 
 ## Platform and build
 

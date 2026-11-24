@@ -177,6 +177,10 @@ Purpose: The vendored Lighthouse's expected colours, for the tests that render u
 - Each test repeats `WolfWindowController`'s composition, target then bridge call then wake, over a [`TerminalViewFixture`](#terminalviewfixtureswift), because AppKit routes no event to an offscreen window; the controller itself reaches no test here. No page loads, and nothing waits on one.
 - A wait for an opened file checks the file the window shows: the startup buffer is the markdown-named `Untitled.md`, so a Markdown buffer being active proves nothing. `otherPaneTarget` resolves from the container's active pane, which follows Neovim only on a wake, so each read first waits for `container.activeWin` to match.
 
+#### `TerminalDrawerLastPaneTests.swift`
+
+**Covers** — the tab's only editor pane beside the open drawer, over a live core: `:bd` keeping one pane, active and Neovim's current window, on the file shown before, which takes focus again after the drawer has had it; and `PaneContainerView.openPickedFile` with the drawer active opening a file in the editor pane, active, with the drawer kept, and at a given line.
+
 #### `TerminalDrawerResizeTests.swift`
 
 **Covers** — a drag on the drawer's top edge over a live core: the drawer view moving and growing before any wake, then its session's rows, the shell's `stty size` and the editor grid above following. The dragged share survives closing and reopening the drawer, and a second fixture, with its own core as a new tab has, opens its drawer at the default third.

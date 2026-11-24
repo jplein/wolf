@@ -50,15 +50,15 @@ Unlike buffer tracking, preview panes are not skipped. A preview pane's own flag
 
 Rebinds Neovim's window chords and the `:split`/`:close`/`:quit` Ex-command families to report layout intents, because the shell owns pane layout. Notifies **`wolf_layout`** with one map argument carrying an `action` discriminator, parsed by [`layout.rs`](../../crates/wolf-core/src/layout.rs):
 
-- `{ action = "split", orientation = "h"|"v", from, win }` — nvim performs the real split first, so the window, its grid, and `win_pos` exist; the intent tells the shell the orientation and both handles.
+- `{ action = "split", orientation = "h"|"v", from, win }` — nvim performs the real split first, so the window, its grid, and `win_pos` exist.
 - `{ action = "focus_dir", dir = "left"|"right"|"up"|"down", from }` — a pure intent. nvim does not move focus.
 - `{ action = "drawer_open", win }` — emitted by `wolf_toggle_terminal` through the exposed `_G.wolf_emit_drawer`.
 
-It also notifies **`wolf_active_win`** with `nvim_get_current_win()` on `WinEnter`, and **`wolf_command`** with `close_window` when a quit reaches the last pane. Closing a pane emits no intent: the shell observes the `win_close` redraw event. Exposes `_G.wolf_do_split`, `wolf_do_close`, `wolf_do_quit`, `wolf_do_focus`, and `wolf_emit_drawer`, which the `cnoreabbrev` overrides invoke from the command line.
+It also notifies **`wolf_active_win`** with `nvim_get_current_win()` on `WinEnter`, and **`wolf_command`** with `close_window` when a quit reaches the tab's last pane. The tab's last pane is its tabpage's last window but the drawer, which no pane tree holds. Closing a pane emits no intent: the shell observes the `win_close` redraw event. Exposes `_G.wolf_do_split`, `wolf_do_close`, `wolf_do_quit`, `wolf_do_focus`, and `wolf_emit_drawer`, which the `cnoreabbrev` overrides invoke from the command line.
 
 `_G.wolf_split_pane(orient)` is the split commands' entry. In a terminal placeholder it notifies **`wolf_terminal_split`** with the session id and `orient`, because core starts the new session; anywhere else it is `wolf_do_split`.
 
-Bindings: normal-mode `<C-w>` with `s`/`v`/`c`/`q` and `h`/`j`/`k`/`l` plus arrows; normal-mode `ZZ` and `ZQ` onto `do_quit`; `cnoreabbrev` for `split`, `sp`, `new`, `vsplit`, `vs`, `vnew`, `close`; and the quit families routed through the internal `:WolfQuit`, `:WolfWriteQuit`, `:WolfQuitAll`, and `:WolfWriteQuitAll` user commands.
+Bindings: normal-mode `<C-w>` with `s`/`v`/`c`/`q` and `h`/`j`/`k`/`l` plus arrows; normal-mode `ZZ` and `ZQ` onto `do_quit`; `cnoreabbrev` for `split`, `sp`, `new`, `vsplit`, `vs`, `vnew`, `close`; the quit families routed through the internal `:WolfQuit`, `:WolfWriteQuit`, `:WolfQuitAll`, and `:WolfWriteQuitAll` user commands; and `bd`, `bw` and their longer forms onto `:WolfBdelete` and `:WolfBwipeout` ([why](#decisions)).
 
 It also installs the `wolf --wait` tracking and `:cq`, which [`wolf_wait_register`](#wolf_wait_registerpath-id) describes.
 
@@ -204,7 +204,7 @@ Closes every window showing session `id`, giving a tabpage's last window a new e
 
 #### `wolf_terminal_close(win)`
 
-Closes window `win` unless it is its tabpage's last, as `wolf_do_close` does, for core's `<C-w>c` and `<C-w>q` in a terminal pane.
+Closes window `win` unless it is the tab's last pane, the drawer not counting, as `wolf_do_close` does, for core's `<C-w>c` and `<C-w>q` in a terminal pane. The drawer itself closes whenever its tabpage holds another window.
 
 #### `wolf_toggle_full_width()`
 
@@ -346,7 +346,7 @@ The durable dictionary is the global `'spellfile'` at `WOLF_SPELL_DIR/en.utf-8.a
 
 **Two payloads dodge the same msgpack ambiguity: an empty Lua table cannot be told apart from an empty map.** `wolf_theme` therefore sends four flat scalars with a `-1` sentinel rather than a table, and `wolf_highlight_code_blocks` returns the scalar `false` rather than an empty array for a non-highlightable block.
 
-**Split, close, and focus are deliberately asymmetric.** A split performs the real window operation and also reports an intent, so the shell learns the orientation and handles. A close performs a guarded `nvim_win_close` that refuses the last window and reports nothing, because the shell already observes `win_close`. A focus move performs nothing and is a pure intent, because the shell resolves the neighbour in its own layout.
+**Split, close, and focus are deliberately asymmetric.** A split performs the real window operation and also reports an intent, so the shell learns the orientation and handles. A close performs a guarded `nvim_win_close` that refuses the tab's last pane and reports nothing, because the shell already observes `win_close`. A focus move performs nothing and is a pure intent, because the shell resolves the neighbour in its own layout.
 
 **The `:q` family routes through internal user commands, not registry commands.** A write variant that fails aborts the quit, matching native `:wq`. A plain `:q` on the last pane with a modified buffer is refused with a native-style E37 echo; `:q!` overrides. The `:qa` family passes `all = true`, which skips the pane-count check so the whole window closes regardless of how many panes are open, with the modified guard still scoped to the current buffer.
 
@@ -357,6 +357,10 @@ The durable dictionary is the global `'spellfile'` at `WOLF_SPELL_DIR/en.utf-8.a
 **A hide asks core before it toasts.** A killed or interrupted command leaves its wait registered, and the toast must not name a file nobody waits for ([mechanism](../../notes/runtime/nvim/init.lua.md#a-hide-asks-core)).
 
 **`:cq` in a waited window deletes the buffer rather than quitting**, because a captive Neovim that quits is a crash, which would end every wait in the tab ([§6](../../specs/cli-and-file-open.md#6-waiting)).
+
+**`:bd` and `:bw` are intercepted, because beside the drawer they would close the tab's last pane.** Neovim keeps a window showing the deleted buffer only when it is the tabpage's last non-floating window, and the drawer never lets a pane be that, so the tree would be left empty with the drawer current. When the current tabpage holds the drawer, the current window is not it, and every window but the drawer shows a buffer the command deletes, `do_bdelete` first shows in the current window the buffer Neovim would pick there, or a new empty one. The pick is `bdelete_replacement`, a port of Neovim 0.12's `do_buffer_ext`. Then, and in every other case, Neovim's own command runs, so other windows close as Neovim closes them and a `wolf --wait` on the buffer still ends with `0`.
+
+A target counts as deleted only with `!` or when it is unmodified, so a refused `:bd` of a modified buffer switches nothing. An error from Neovim's command is echoed as its `E…` message, as `do_quit` echoes E37, since a Lua user command would otherwise print a traceback. `:WolfCquit` deletes through the same helper.
 
 **There are deliberately no `q!`, `wq!`, or `qa!` abbreviations.** `!` is not a keyword character, so such an abbreviation would be dead. Typing `:q!` fires the bare-`q` abbreviation and the `!` rides through to `:WolfQuit!`, whose callback reads `o.bang`. `a` is a keyword character, so `:qa` forms a distinct word that never collides with bare `q`.
 
@@ -380,6 +384,7 @@ Name avoidance is the defence. Yielding `Untitled 2.md` also keeps a fresh start
 
 ## Limitations
 
+- `:bunload`, the ranged or counted forms of `:bd` and `:bw` (`:3bd`, `:%bd`) and a scripted `bdelete` reach Neovim's own commands, which close the tab's last pane beside the drawer.
 - The tabpage lockout is best-effort. Obscure typed variants, user-defined abbreviations of the `:tab*` commands, and scripted `nvim_*` tabpage calls are not caught, so a determined user can still create or close a tabpage out from under the front-end.
 - The open-file mirror reports one global file set. `getbufinfo` is global to the nvim instance, so the same set is attached to every tabpage triple and only `active_path` is genuinely per-tabpage. A restart of a Neovim with several tabpages therefore reopens every file in every tabpage, each with the correct focused file.
 - Unnamed buffers are outside the open-file restore; only file-backed buffers are mirrored.
