@@ -353,7 +353,7 @@ Every request lands in the window that holds the keyboard, and no smoke asserts 
 
 #### `smoke_headless/new_tab.rs`
 
-The New Tab smokes, each launching on a folder tab and opening a folder `D` with no project state through its Open Recent row, then reading the save the quit leaves. New Tab from the folder tab must open an empty tab beside it: a live Neovim at `HOME`, the empty-state page, no sidebar, and `wolf` in its bar entry and in the header once it is the window's only tab. `D` opened into that tab must show the sidebar exactly when the origin showed it at New Tab, after the origin has closed too. A stored sidebar setting must win over the captured one, and New Window's empty tab must show the sidebar whatever its origin showed.
+The New Tab smokes, each launching on a folder tab and opening a folder `D` through its Open Recent row, then reading the save the quit leaves. New Tab must open an empty tab beside it: a live Neovim at `HOME`, the empty-state page, no sidebar, and `wolf` in its bar entry and in the header once it is the window's only tab. A `D` with no project state opened into that tab must show the sidebar exactly when the origin showed it at New Tab, after the origin has closed too. A `D` whose project state hides the sidebar must hide it over a shown origin, and New Window's empty tab must show the sidebar whatever its origin showed.
 
 `wolf` is in no fixture name, but `TEMP_CWD_PREFIX` spells it, so the term is not in `ASSERTED_OCR_TERMS`; this file's own guards check what its smokes put on screen. No Ex command is typed before a capture in the tab it shows, since the cmdline strip would draw the runtime dir's path.
 
