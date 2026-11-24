@@ -60,6 +60,8 @@ It also notifies **`wolf_active_win`** with `nvim_get_current_win()` on `WinEnte
 
 Bindings: normal-mode `<C-w>` with `s`/`v`/`c`/`q` and `h`/`j`/`k`/`l` plus arrows; `cnoreabbrev` for `split`, `sp`, `new`, `vsplit`, `vs`, `vnew`, `close`; and the quit families routed through the internal `:WolfQuit`, `:WolfWriteQuit`, `:WolfQuitAll`, and `:WolfWriteQuitAll` user commands.
 
+It also installs the `wolf --wait` tracking and `:cq`, which [`wolf_wait_register`](#wolf_wait_registerpath-id) describes.
+
 #### `wolf_setup_dir_tracking(chan)`
 
 Notifies **`wolf_cwd`** with `getcwd()` on `DirChanged` (pattern `*`, so `:cd`, `:lcd`, and `:tcd` all fire it). Core keeps the value in a sibling cell rather than the render snapshot and uses it to scope the file MRU by the live working directory.
@@ -260,6 +262,14 @@ Target validation is shared with `wolf_preview_in_other`, and an unusable target
 
 Opens `path` with `topleft vsplit`, a new window left of the whole tab, and returns that window, which is current. It emits no `wolf_layout` split, because a front-end applies a split intent to the pane it came from, never to the whole tab; the caller binds the window it is handed. A missing `path` opens as a new buffer for it.
 
+#### `wolf_wait_register(path, id)`
+
+Registers `wolf --wait` `id`, from core's `RegisterWait`, on the listed buffer named `path`, comparing full paths, then resolved ones. It never creates or loads a buffer, and never uses `bufnr(path)`, which pattern-matches. With no such buffer it ends the wait with `1` at once.
+
+The `WolfWait` augroup, which `wolf_setup_layout` installs, notifies **`wolf_wait_ended`** with `(ids, status)`. A buffer ends its waits with `0` when its last window closes, on `WinClosed`, or when it is deleted or wiped. A hide ends nothing: once the buffer shows in no window, a **`wolf_wait_live`** request asks core which of its waits are still connected. While any is, it echoes `wolf --wait is still waiting for <file>` into the message history, which shows as a toast.
+
+`:cq` and `:cquit` run `:WolfCquit`. In a window showing a waited buffer it ends that buffer's waits with `1` and `bdelete!`s it, keeping Neovim; anywhere else it runs `cquit` with the same bang and argument.
+
 #### `wolf_next_untitled(cwd, exclude_buf, extra_collision)`
 
 Pure name generator. Returns `(name, abspath)` for the first index whose name collides with neither a file or directory on disk in `cwd` nor any existing buffer's name, skipping `exclude_buf`. Index 1 is un-numbered `Untitled.md`, so the literal `Untitled 1.md` is never generated.
@@ -337,6 +347,12 @@ The durable dictionary is the global `'spellfile'` at `WOLF_SPELL_DIR/en.utf-8.a
 **Split, close, and focus are deliberately asymmetric.** A split performs the real window operation and also reports an intent, so the shell learns the orientation and handles. A close performs a guarded `nvim_win_close` that refuses the last window and reports nothing, because the shell already observes `win_close`. A focus move performs nothing and is a pure intent, because the shell resolves the neighbour in its own layout.
 
 **The `:q` family routes through internal user commands, not registry commands.** A write variant that fails aborts the quit, matching native `:wq`. A plain `:q` on the last pane with a modified buffer is refused with a native-style E37 echo; `:q!` overrides. The `:qa` family passes `all = true`, which skips the pane-count check so the whole window closes regardless of how many panes are open, with the modified guard still scoped to the current buffer.
+
+**A quit that closes the tab ends the closing buffers' waits before it notifies `close_window`.** The front-end shuts the tab's core down on that command, which ends every wait still held with `1`, and the `0` must reach the command first ([mechanism](../../notes/runtime/nvim/init.lua.md#waits-end-before-close_window)).
+
+**A hide asks core before it toasts.** A killed or interrupted command leaves its wait registered, and the toast must not name a file nobody waits for ([mechanism](../../notes/runtime/nvim/init.lua.md#a-hide-asks-core)).
+
+**`:cq` in a waited window deletes the buffer rather than quitting**, because a captive Neovim that quits is a crash, which would end every wait in the tab ([§6](../../specs/cli-and-file-open.md#6-waiting)).
 
 **There are deliberately no `q!`, `wq!`, or `qa!` abbreviations.** `!` is not a keyword character, so such an abbreviation would be dead. Typing `:q!` fires the bare-`q` abbreviation and the `!` rides through to `:WolfQuit!`, whose callback reads `o.bang`. `a` is a keyword character, so `:qa` forms a distinct word that never collides with bare `q`.
 

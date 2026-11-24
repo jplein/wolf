@@ -162,9 +162,13 @@ The app's side of the [`wolf` command's channel](../../../specs/cli-and-file-ope
 
 - `wolf_ffi_open_listen(state_dir: String) -> String` — Binds the listener in `state_dir`, `""` meaning core's, first dropping one already bound. `""` on success, else the error's message.
 - `wolf_ffi_open_stop()` — Drops the listener, which removes its socket.
-- `wolf_ffi_open_drain() -> Vec<FfiOpenItem>` — The requests taken since the last drain, in arrival order, each resolved through `OpenRequest::target`.
+- `wolf_ffi_open_drain() -> Vec<FfiOpenItem>` — The requests taken since the last drain, in arrival order, each resolved through `OpenRequest::target` and holding its `wolf --wait`, if any.
 - `wolf_ffi_open_item(path: String) -> FfiOpenItem` — `path` resolved as a request with no tab ID, which is Finder's route ([§7](../../../specs/cli-and-file-open.md#7-finder-and-gnome-files)). `""` is an activate.
 - `FfiOpenItem::kind/path/tab_id` — `kind` per `mod open_kind`, `tab_id` lowercase; a string is `""` when absent.
+- `FfiOpenItem::waits() -> bool` — Whether the item still holds a wait.
+- `WolfCoreHandle::wait_on(&self, item: &FfiOpenItem)` — Takes the item's wait and hands it to [`WolfCore::wait_on`](../../wolf-core/src/README.md#apirs) for the item's file, queued behind its placement. A no-op for an item with no wait; a target that is not a file, or a core shut down, ends the wait with `1`.
+
+**Take drained items with `pop()`, never by iterating the vec.** Iterating a `RustVec` only borrows its items, and dropping the vec drops every item still in it, which ends each wait with `1` before the file is placed.
 
 ### Commands and the command palette
 

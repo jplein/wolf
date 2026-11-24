@@ -630,7 +630,7 @@ Purpose: one tab's GTK glue: `layout`'s pane tree as nested `gtk::Paned`, one `g
 - `build(core, metrics, drawer_share) -> PaneHandle` — panes appear with the first grid.
 - `cmdline_widget()`, the focus-return target; `toast_widget()`, `pum_widget()`.
 - `reset_after_restart()`, `drawer_is_open()`, `drawer_share()`, `request_terminal_restore(steps)`, `request_layout_rebuild(restored)`, `layout_snapshot() -> LayoutGather`, `capture_viewports()`, `snapshot_readiness()`, `readiness()`.
-- `active_terminal()`, `sync_terminal_focus(focused)`, `request_terminal(command)`, `open_file(path)`.
+- `active_terminal()`, `sync_terminal_focus(focused)`, `request_terminal(command)`, `open_file(path, wait)`.
 - `other_pane_target(prefer)` — [`other_pane_seam.rs`](#other_pane_seamrs)'s window: `Some(0)` splits, `None` no-ops.
 - `toggle_zoom()`, `toggle_terminal()` — [`pane_zoom.rs`](#pane_zoomrs)'s rules.
 
@@ -641,7 +641,7 @@ Purpose: one tab's GTK glue: `layout`'s pane tree as nested `gtk::Paned`, one `g
 - [`preview_coalescer.rs`](#preview_coalescerrs)'s state is per tab: a rebuild replaces `panes`.
 - Pointer input is one all-button `gtk::GestureDrag` ([why](../../../notes/crates/wolf-gnome/src/pane_view.rs.md#one-drag-gesture)), pinning target and button at press; editor panes take only the primary.
 - A terminal pane paints through its own [`TerminalCanvas`](terminal/README.md#canvasrs) ([why](../../../notes/wolf-gnome/terminal-panes.md)).
-- Each pane's status and `b:wolf_full_width` cache once per wake: a use-time read re-enters `draw_pane`'s guard, and paint, pointer and resize must agree.
+- Each pane's status and `b:wolf_full_width` cache per wake: a use-time read re-enters `draw_pane`'s guard, and paint, pointer and resize must agree.
 - One funnel sends every grid resize, against the size last requested rather than the lagging snapshot; it runs each wake, as a lifted cap re-divides a still allocation.
 - The drawer's paned exists only while one is bound, re-taking the tab's share each wake; a zoom shows its host alone, touching no weight or share ([why](../../../notes/wolf-gnome/window-structure.md)). `reset_after_restart` clears the drawer `detect_closes` misses.
 

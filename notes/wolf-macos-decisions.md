@@ -281,7 +281,6 @@ The Mono face is the one cascaded because it is drawn unscaled, and every Mono g
 - The toolbar's search segment seeds the search toggles from Neovim each time it shows the search panel, replacing restored or user-set toggles, while the sidebar commands do not seed. Seeding once would save a never-seeded panel's all-off toggles as if chosen, which needs a design of its own.
 - A fill discards an unsaved buffer typed into the empty tab, as closing that tab would.
 - A file opened into an empty tab is not restored at launch: the tab has no folder, so it persists as an empty tab.
-- `wolf --wait` is refused, exiting `2` ([why](wolf-core-decisions.md#present-limitations)).
 - A capture runs only at a focus move, a tab switch, a window close and quit, so a crash loses the cursor and scroll movement since the last one, and a crash restart drops every capture with its panes.
 - Per-pane navigation history is not persisted across launches, and is not cursor-position history — Neovim's own jumplist (`<C-o>` / `<C-i>`) is untouched. Navigating back to a file deleted from disk opens an empty `[New]` buffer, exactly as `:e missing.md` would.
 

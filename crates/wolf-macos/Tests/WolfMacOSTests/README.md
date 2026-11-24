@@ -237,16 +237,18 @@ A split, a close and the shell exiting each unzoom, and so does Toggle Terminal,
 
 #### `OpenRequestFlowTests.swift`
 
-**Covers** — [opening from outside Wolf](../../../../specs/cli-and-file-open.md) end to end. The real `wolf` sends each request over the real socket; the test drains it, routes it through `FileOpenSeam.route` with a live [`TerminalViewFixture`](#terminalviewfixtureswift) as tab 7 beside a frontmost decoy, and hands a file sent to tab 7 to `PaneContainerView.openFile(_:)`, as `WolfWindowController.openFile` does.
+**Covers** — [opening from outside Wolf](../../../../specs/cli-and-file-open.md) end to end. The real `wolf` sends each request over the socket; the test drains and routes it through `FileOpenSeam.route` with a live [`TerminalViewFixture`](#terminalviewfixtureswift) as tab 7 beside a frontmost decoy, and hands tab 7's files to `PaneContainerView.openFile(_:wait:)`, as `WolfWindowController.openFile` does.
 
-A directory is Open Folder from tab 7, a file with no tab ID goes to its open project, and a stale ID falls back to resolution. In tab 7: a pane already on the file is focused; §5.2's four rules, a terminal always keeping its session; a zoomed tab unzooms; a missing file opens as a new buffer, writing nothing. Before the first bind, an open waits for a pending rebuild, and two opens both land.
+A directory is Open Folder from tab 7, a file with no tab ID goes to its open project, and a stale ID falls back to resolution. In tab 7: a pane already on the file is focused; §5.2's four rules, a terminal always keeping its session; a zoomed tab unzooms; a missing file opens as an unwritten new buffer. Before the first bind, an open waits for a pending rebuild, and two opens both land.
+
+A `wolf --wait` popped into `Request(owning:)` exits `0` at `:q` in its pane.
 
 **Gotchas**
 
-- The test enters a canonical base under `TEST_TMPDIR` and names the state dir relative to it, since no absolute socket path under Bazel's `TMPDIR` fits 103 bytes.
-- The rule-3 preview is the left pane, because rule 3 takes only a leftmost one; `PreviewViewFixture` previews on the right, so the test turns that pane into the terminal and previews again on the left.
+- The state dir is relative to a canonical base under `TEST_TMPDIR`, since no absolute socket path under Bazel's `TMPDIR` fits 103 bytes.
+- The rule-3 preview is the left pane, since rule 3 takes only a leftmost one; `PreviewViewFixture` previews on the right, so the test makes that pane the terminal and previews again on the left.
 - The rebuild case restores `vertical[f.md, b.md]` with pane 1 focused, so pane 0 already shows the file. Were rule 1 to pick the focused pane, the rebuild would run ahead of an early open's queued `:edit`, both landing there, and an early open would pass.
-- `AppDelegate`'s queue and the controller's raise are person checks.
+- `AppDelegate`'s queue and the raise are person checks.
 
 #### `NewWindowPlacementTests.swift`
 

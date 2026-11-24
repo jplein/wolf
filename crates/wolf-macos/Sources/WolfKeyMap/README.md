@@ -218,6 +218,7 @@ Purpose: Routes a request from the `wolf` command or Finder to Open Folder, to t
 **Public API**
 
 - `Request(_:)` — decodes a drained or Finder `FfiOpenItem`; an unknown kind is an activate.
+- `Request(owning:)` — decodes a drained item taken with `pop()`, and keeps it as `wait` when it holds a `wolf --wait`; `wait` is `nil` otherwise. A `Request` dropped with its `wait` unhanded ends the command with `1`.
 - `route(_:windows:tabIds:stacking:) -> Route` — `tabIds` maps each live tab's `WOLF_TAB_ID` to its tab id, and an ID whose tab is not in `windows` counts as none. `current` is the named tab when live, else `currentTab(windows:stacking:)`.
 - `currentTab(windows:stacking:)` — the frontmost window's selected tab, else its most recent one, as `OpenFolderSeam.step` reads them.
 - `choosePane(_:layout:focused:drawerZoomed:) -> PaneChoice` — `file` in core's resolved form, `focused` `nil` while the drawer is active. Each `Placement` index counts `PaneTree.leaves()` depth-first.

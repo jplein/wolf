@@ -462,11 +462,14 @@ Real Neovim (`WOLF_NVIM_BIN`, `no-sandbox` target with staged nvim runfiles).
 
 Headless, over real Unix-domain sockets (`//crates/wolf-core:open_channel`: `no-sandbox`, for the sockets).
 
-**Covers** — the 103-byte socket path limit on both sides, a refused path creating no directory; a request taken, queued and waking, and requests drained in arrival order; a wait, a malformed line, a relative path and an oversized line refused and not queued; a stalled client not holding up another, and a silent one let go; a stale socket replaced, while a live listener, a socket of another kind and a file that is not a socket are left alone; the socket's mode `0600`, and a drop removing only its own socket; `connect_or_launch` retrying after a launch, giving up at its timeout, never launching a running app, and returning a launch failure at once.
+**Covers** — the 103-byte socket path limit on both sides, a refused path creating no directory; a request taken, queued and waking, and requests drained in arrival order; a wait without a file, a malformed line, a relative path and an oversized line refused and not queued; a stalled client not holding up another, and a silent one let go; a stale socket replaced, while a live listener, a socket of another kind and a file that is not a socket are left alone; the socket's mode `0600`, and a drop removing only its own socket; `connect_or_launch` retrying after a launch, giving up at its timeout, never launching a running app, and returning a launch failure at once.
+
+A wait is taken and drains holding its `OpenWait`, which answers the status `end` gives, or `1` when dropped, and sees its command hang up.
 
 **Gotchas**
 
 - Bazel's test `TMPDIR` inside the macOS gate is about 120 bytes, so no absolute socket path under it fits. The binary enters a kept, canonical temp dir once, before any test names a socket, and every state dir is relative to it. A new case takes its dir from `fresh_state` or `dir_of_len`, never from `TMPDIR`.
+- A wait is queued only after its `Taken`, so a case drains one by polling.
 
 #### `palette_rank.rs`
 
@@ -892,12 +895,24 @@ Spawns a real Neovim (staged runfiles, wired `WOLF_NVIM_BIN`, `no-sandbox`), sta
 
 #### `wolf_command.rs`
 
-The real `wolf` binary, against a real `OpenListener` or a raw `UnixListener` that records what it is sent and scripts its replies (`//crates/wolf-core:wolf_command`: `:wolf` as `data`, named by `WOLF_TEST_WOLF_BIN`, `no-sandbox`, `wolf_test_support`).
+The real `wolf` binary, against a real `OpenListener` or a raw `UnixListener` that records what it is sent and scripts replies (`//crates/wolf-core:wolf_command`: `:wolf` as `data`, named by `WOLF_TEST_WOLF_BIN`, `no-sandbox`, `wolf_test_support`).
 
-**Covers** — the invocation table and exit statuses of [§1](../../../specs/cli-and-file-open.md#1-the-command): `wolf` alone activating; a relative path resolved against the working directory; `WOLF_TAB_ID` sent when well-formed and dropped otherwise; each refused invocation exiting `2` before connecting; `--` ending the options; nothing listening and an over-long socket path exiting `2`; on Linux, nothing listening starting the `wolf-gnome` beside it once, by the launcher's rules; the wait outcomes mapped to `0`, `1` and `2`; a close or a refusal before `Taken` exiting `2`; and a wait against the real listener exiting `2`.
+**Covers** — the invocation table and exit statuses of [§1](../../../specs/cli-and-file-open.md#1-the-command): `wolf` alone activating; a relative path resolved against the working directory; `WOLF_TAB_ID` sent when well-formed and dropped otherwise; each refused invocation exiting `2` before connecting; `--` ending the options; nothing listening and an over-long socket path exiting `2`; on Linux, nothing listening starting the `wolf-gnome` beside it once, by the launcher's rules; the wait outcomes mapped to `0`, `1` and `2`; a close or a refusal before `Taken` exiting `2`; and a wait against the real listener exiting with its `end`, or `1` dropped.
 
 **Gotchas**
 
-- The binary is Cargo's `CARGO_BIN_EXE_wolf`, else the Bazel runfile, resolved before the test binary enters its base dir, which it does for `open_channel.rs`' socket-path reason. Every test runs a copy at `bin/wolf` in the base, since Cargo builds the real `wolf-gnome` beside `CARGO_BIN_EXE_wolf`; the launcher's test puts a fake one beside a copy of its own. Each `wolf` runs in its case's `work` dir with a relative `WOLF_STATE_DIR` and no inherited `WOLF_TAB_ID`.
-- Every case sets `WOLF_STATE_DIR`, under which the macOS command never launches the app, so nothing listening exits `2` there too and never starts an installed Wolf.
+- The binary is Cargo's `CARGO_BIN_EXE_wolf`, else the Bazel runfile, resolved before the test binary enters its base dir, for `open_channel.rs`' socket-path reason. Every test runs a copy at `bin/wolf` in the base, since Cargo builds the real `wolf-gnome` beside `CARGO_BIN_EXE_wolf`; the launcher's test puts a fake one beside a copy of its own. Each `wolf` runs in its case's `work` dir with a relative `WOLF_STATE_DIR` and no inherited `WOLF_TAB_ID`.
+- Every case sets `WOLF_STATE_DIR`, under which the macOS command never launches the app, so nothing listening exits `2` there too, never starting an installed Wolf.
 - Exit `2` alone cannot show a refusal came before connecting, since a `wolf` that gets no answer exits `2` too, so the raw listener asserts that nobody connected.
+
+#### `wolf_wait.rs`
+
+`wolf --wait` end to end, [§6](../../../specs/cli-and-file-open.md#6-waiting): the real `wolf` over a real `OpenListener`, with a real core and Neovim behind it (`//crates/wolf-core:wolf_wait`: the real-nvim runfiles and env, plus `:wolf` as `WOLF_TEST_WOLF_BIN`, `no-sandbox`, `size = "medium"`).
+
+**Covers** — exit `0` after `:q` on the waited split, `:wq` on the tab's last pane, `:bd` and `:bw`; exit `1` after `:cq` in the waited window, which keeps Neovim alive, while `:cq` elsewhere still quits Neovim; a hide by `:e other` still waiting, with the toast; exit `1` when the tab closes, Neovim crashes or a stalled Neovim restarts, and for a path no buffer shows; a file already shown waited on its buffer; a hung-up command leaving no toast and other waits alone; and `git commit` with `wolf --wait` as its editor, committing the typed message, or nothing after `:cq`.
+
+**Gotchas**
+
+- Each test is the front-end: it drains the wait with `drain_taken`, sends `InputEvent::Open`, then `wait_on`. A case that closes the last pane shuts the core down as soon as `CloseWindow` drains, as a front-end would, so the `0` must arrive first.
+- It enters a kept, canonical base dir and runs a copy of `wolf` at `bin/wolf`, for `wolf_command.rs`' reasons. Each state dir is relative to it.
+- The `git` cases run `git` from `PATH`, the system's on macOS and the dev shell's on Linux, with no system or global config.

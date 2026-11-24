@@ -68,4 +68,6 @@ The `wolf` command's requests ([§2](../../specs/cli-and-file-open.md#2-the-chan
 
 A file is queued on its tab's pane view and placed by `wolf_core::choose_pane` on a later wake, once a pane is bound, every restore step of the tab has run and `open_request::may_place` admits its Neovim. A refused gather or a crash restart keeps it queued, so a file sent to a tab Open Folder has just opened waits for that tab's restore, and one sent to a dead Neovim lands after the restart.
 
+A `wolf --wait` rides with its file. The drain is `drain_taken`, never `drain_requests`, which would drop every wait and end each command with `1`, and the pane view hands the wait to its tab's core once the file is placed. Any route that loses the file, such as a tab closed first, drops the wait, which answers `1`.
+
 The pane a file lands in is made active at once, not on the wake Neovim reports the move, or keys would still reach the pane that was active, a terminal's session among them. `pending_focus` keeps `update_active_pane` from reading Neovim's previous window back meanwhile. The whole-tab split binds the window `WolfCore::open_split_left` answers to a new pane from `PaneTree::split_root_left`, since no `Split` intent names it.

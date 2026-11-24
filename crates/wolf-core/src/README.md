@@ -16,18 +16,18 @@ Crate root. Declares every module and flattens the public surface into root re-e
 
 **Public API**
 
-- `CoreConfig.cwd` is nvim's launch directory and the search/MRU root until nvim reports its own (`live_cwd`).
+- `CoreConfig.cwd` is nvim's launch directory, and the search/MRU root until nvim reports `live_cwd`.
 - `SnapshotReadGuard` outlives `&self`, owning an `Arc` of the lock; hold it for one paint.
-- The blocking queries (`list_buffers` and siblings) return an empty or zero fallback on any RPC error or timeout. Among them, `window_cursor(win)` reads any window's own view, and `open_split_left(path)` makes [§5.2](../../../specs/cli-and-file-open.md#52-choosing-the-pane) rule 4's split ([why](../../../notes/wolf-core-decisions.md#opening-files-from-outside-wolf)). The rest is fire-and-forget, on the ordered input channel: `split_pane` splits the window an earlier `focus_win` made current, and `set_window_cursor(win, view)` re-applies a view after a resize ([why](../../../notes/wolf-core-decisions.md#a-saved-view-is-applied-twice)).
-- `restart_nvim` returns `Ok(false)` when no respawn happened (`Alive` or in flight) and reopens nothing: capture `open_files_for_tabpage` first. After `Ok(true)` the snapshot, intents and history start over ([what carries](../../../notes/wolf-core-decisions.md#liveness-and-restart)).
+- Blocking queries (`list_buffers` and siblings) fall back to empty or zero on an RPC error or timeout. `window_cursor(win)` reads any window's view, and `open_split_left(path)` makes [§5.2](../../../specs/cli-and-file-open.md#52-choosing-the-pane) rule 4's split ([why](../../../notes/wolf-core-decisions.md#opening-files-from-outside-wolf)). The rest is fire-and-forget, on the ordered input channel: `split_pane` splits the window an earlier `focus_win` made current, `set_window_cursor(win, view)` re-applies a view after a resize ([why](../../../notes/wolf-core-decisions.md#a-saved-view-is-applied-twice)), and `wait_on(path, wait)` registers after the `Open` that placed `path`.
+- `restart_nvim` returns `Ok(false)` when no respawn happened (`Alive` or in flight) and reopens nothing: capture `open_files_for_tabpage` first. After `Ok(true)` the snapshot, intents, history and waits start over ([what carries](../../../notes/wolf-core-decisions.md#liveness-and-restart)).
 - `start` ignores `SIGPIPE` process-wide ([why](../../../notes/wolf-core-decisions.md#liveness-and-restart)).
-- `recent_dirs` omits non-directories, statting each on the calling thread, and never prunes, so a returning folder reappears.
+- `recent_dirs` stats on the calling thread, omits non-directories and never prunes, so a returning folder reappears.
 
 **Decisions**
 
-- `block_on_rpc` detaches a call that outlives `WOLF_RPC_TIMEOUT_MS` rather than dropping it: dropping its `nvim-rs` response receiver kills the io loop, which reads as a crash.
+- `block_on_rpc` detaches a call outliving `WOLF_RPC_TIMEOUT_MS`, never drops it: dropping its `nvim-rs` response receiver kills the io loop, which reads as a crash.
 - `WolfCore` is `!Send` and keeps the process in a `RefCell`, so a restart can swap one in through `&self`. Never hold a borrow across an `.await`.
-- Typing sent before a restart's swap never reaches the fresh nvim, while state input applies: `send_input`'s generation stamp cuts it, not liveness, since input sent while `Alive` can still be queued then.
+- Typing sent before a restart's swap never reaches the fresh nvim, while state input does. `send_input`'s generation stamp cuts it, not liveness: input sent while `Alive` can still be queued then.
 
 #### `pump.rs`
 
@@ -48,26 +48,27 @@ The input pump: the one consumer of `send_input`'s channel. While a batch's call
 
 #### `nvim.rs`
 
-Spawns and supervises the captive Neovim child, and wraps every RPC core issues against it. The launch contract and the supervisor's role in liveness are in [`wolf-core-decisions.md`](../../../notes/wolf-core-decisions.md).
+Spawns and supervises the captive Neovim, and wraps every RPC core issues to it. The launch contract and the supervisor's role in liveness are in [`wolf-core-decisions.md`](../../../notes/wolf-core-decisions.md).
 
 **Public API**
 
-- `NvimConfig::from_env` resolves the binary and creates the private state root. Its `Arc<TempDir>` guard keeps those directories only while a clone of the config lives.
+- `NvimConfig::from_env` resolves the binary and creates the private state root. Its `Arc<TempDir>` keeps those directories while any clone of the config lives.
 - `NvimProcess::handle` yields a cloned RPC handle usable without borrowing the process; the browser-preview server re-renders through one.
-- The `setup_*` methods install the nvim-side wiring behind every out-of-band `wolf_*` notification. A respawn re-runs the whole chain; a fresh nvim emits nothing until it does.
+- The `setup_*` methods install the nvim-side wiring behind every out-of-band `wolf_*` notification. A respawn re-runs the chain, and a fresh nvim emits nothing until then.
 - `NvimError::Timeout` comes only from `api`'s RPC chokepoint.
 
 **Decisions**
 
-- Every method reachable from that chokepoint returns `impl Future<..> + Send + 'static` (a cloned handle plus owned arguments) never `async fn(&self)`: the timeout path spawns the future as a task and detaches it, and a detached task cannot hold a borrow.
-- Channel and window ids, modes and paths reach `nvim_exec_lua` as varargs, never interpolated into the code string.
-- `yank_visual_selection` checks the mode before yanking: a bare `y` outside visual mode leaves nvim in operator-pending and the call never returns.
-- `shutdown` and `kill_in_place` both set `shutting_down` before the process exits, so the supervisor reads the stdout EOF as intentional rather than as a crash.
+- Every method reachable from that chokepoint returns `impl Future<..> + Send + 'static`, over a cloned handle and owned arguments, never `async fn(&self)`: the timeout path detaches the future as a task, which cannot hold a borrow.
+- Channel and window ids, modes and paths reach `nvim_exec_lua` as varargs, never interpolated into the code.
+- `yank_visual_selection` checks the mode before yanking: a bare `y` outside visual mode leaves nvim operator-pending, and the call never returns.
+- `shutdown` and `kill_in_place` both set `shutting_down` before the process exits, so the supervisor reads the stdout EOF as intentional, not a crash.
 - `kill_in_place` then waits, bounded, for the supervisor ([why](../../../notes/wolf-core-decisions.md#liveness-and-restart)). It skips the wait once the supervisor has finished: a failed respawn leaves the same process, and polling a completed `JoinHandle` again panics.
+- On a crash the supervisor marks `Dead`, then ends every wait with `1` ([why](../../../notes/wolf-core-decisions.md#opening-files-from-outside-wolf)).
 
 #### `redraw.rs`
 
-The `nvim-rs` handler: folds each `redraw` batch into `Snapshot` and routes the out-of-band `wolf_*` notifications into its sibling cells, queues and registries. It answers one request, `wolf_barrier` ([why](../../../notes/wolf-core-decisions.md#threading-and-locking)).
+The `nvim-rs` handler: folds each `redraw` batch into `Snapshot` and routes the out-of-band `wolf_*` notifications into its sibling cells, queues and registries. It answers two requests: `wolf_barrier` ([why](../../../notes/wolf-core-decisions.md#threading-and-locking)), and `wolf_wait_live` with the waits still connected. The [wait tracking](../../../runtime/nvim/README.md#wolf_wait_registerpath-id)'s `wolf_wait_ended` ends waits and fires no wake.
 
 **Decisions**
 
@@ -230,7 +231,7 @@ The toolkit-neutral input vocabulary and its translation into Neovim keystroke n
 
 **Public API**
 
-- `InputEvent` — the events a front-end sends, with `Key`, `KeyEvent`, `MouseButton`, `MouseAction`, `MouseEvent`, `ScrollDirection` and `ScrollEvent`.
+- `InputEvent` — the events a front-end sends, with `Key`, `KeyEvent`, `MouseButton`, `MouseAction`, `MouseEvent`, `ScrollDirection` and `ScrollEvent`. `RegisterWait` is `WolfCore::wait_on`'s alone.
 - `key_to_notation(&KeyEvent) -> String` — modifier order `C-`, `S-`, `A-`, `D-`; `<` becomes `<lt>`.
 - `InputEvent::is_toast_dismissing()` — whether the event is Neovim input that dismisses a showing message toast. The whole rule is in [Input: events](../../../specs/architecture.md#input-events-front-end--core).
 
@@ -616,8 +617,10 @@ Purpose: the channel of [§2](../../../specs/cli-and-file-open.md#2-the-channel)
 
 - `open_socket_path` refuses a path over `OPEN_SOCKET_PATH_MAX` bytes, measured as given. `connect`, `connect_or_launch` and `bind` check it before touching the filesystem.
 - `connect_or_launch` calls `launch` once, and only when nothing listens, then retries until `timeout`. A failing `launch` is returned at once.
-- `OpenListener::bind` returns `InUse` while a live listener holds the socket. A request it takes is queued before `wake` fires and before the client reads `Taken`. `drain_requests` returns them in arrival order, as `drain_commands` does.
-- The listener refuses, and never queues, a malformed request, a relative path, a line over `OPEN_REQUEST_MAX`, one not sent within `OPEN_REQUEST_TIMEOUT`, and every wait.
+- `OpenListener::bind` returns `InUse` while a live listener holds the socket, and ignores `SIGPIPE` process-wide, as `WolfCore::start` does. A plain request is queued and `wake` fired before the client reads `Taken`; a wait is queued just after its `Taken`, so a drain right after it may miss it until the next wake ([why](../../../notes/wolf-core-decisions.md#opening-files-from-outside-wolf)).
+- `drain_taken` returns the requests in arrival order, as `drain_commands` does, each a `TakenRequest` holding its `OpenWait` when it waits. `drain_requests` drops every wait, so each of those commands exits `1`.
+- `OpenWait` answers its command once: `end(status)`, or `1` when it drops unended. `is_connected` never blocks and turns false once the command has gone.
+- The listener refuses, and never queues, a malformed request, a relative path, a line over `OPEN_REQUEST_MAX`, one not sent within `OPEN_REQUEST_TIMEOUT`, and a wait whose target is not a file.
 - `OpenRequest.path` is unresolved; `target()` decides it on the app's side.
 
 #### `bin/wolf.rs`

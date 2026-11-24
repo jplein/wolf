@@ -346,6 +346,8 @@ The `wolf` command's smokes, each over a planted state. They run the `wolf` besi
 
 A terminal pane's shell sees its tab's `WOLF_TAB_ID`, distinct per tab, and its `wolf` lands in that tab through the whole-tab split; a stale ID goes to the file's project. With no app running, `wolf FILE` launches the app beside it, which restores both planted windows, adds none for the command's directory, and places the file after the restore.
 
+`wolf --wait` serves `git commit` typed into a tab's terminal, committing the typed message on `:wq`, and one from outside Wolf, which `:cq` aborts with no commit. `:wq` on a tab's last pane, which closes its window, still exits the waiting `wolf` `0`.
+
 Every request lands in the window that holds the keyboard, and no smoke asserts a raise, since `cage` raises no background window. Each request is followed by a polled Neovim readback, because `wolf` exits `0` once the request is taken, not handled.
 
 #### `smoke_headless/open_folder.rs`

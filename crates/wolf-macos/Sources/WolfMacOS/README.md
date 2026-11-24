@@ -366,7 +366,7 @@ Purpose: The editor area: one flipped first-responder `NSView` painting every pa
 - `canClosePane`, `closeActivePane()`, `splitActivePane(_:)` — Close Pane's gate and action, and the splits' ([why](../../../../notes/wolf-macos-decisions.md#terminal-panes)).
 - `toggleZoom()`, `toggleTerminal()`, `isZoomed`, `zoomedPaneId`, `visiblePaneFrames` — Zoom Pane, Toggle Terminal unzooming first, the saved zoom, frames by window ([why](../../../../notes/wolf-macos-decisions.md#zoom-pane)).
 - `requestLayoutRebuild(_:tab:focused:drawer:)` — the launch restore at the first pane's bind, with focus and drawer ([order](../../../../notes/wolf-macos-decisions.md#the-per-tab-extras)).
-- `openFile(_:)` — places a file by [§5.2](../../../../specs/cli-and-file-open.md#52-choosing-the-pane), waiting while a restore is pending ([why](../../../../notes/wolf-macos-decisions.md#opening-files-from-outside-wolf)).
+- `openFile(_:wait:)` — places a file by [§5.2](../../../../specs/cli-and-file-open.md#52-choosing-the-pane), waiting while a restore is pending ([why](../../../../notes/wolf-macos-decisions.md#opening-files-from-outside-wolf)).
 
 **Decisions**
 
@@ -655,7 +655,7 @@ Purpose: One tab's whole UI stack, owning its [`TabCore`](#tabcoreswift) as that
 - `build()` — shows the stack at its `WindowPlacement`, `.cascaded` being [§7's](../../../../notes/wolf-macos-decisions.md#new-windows) through `NSWindow.cascade(fromTopLeft:size:)`, and becomes its core's view.
 - `hasFolder` — false in the empty state, whose sidebar never scans `home`.
 - `persistedCwd` — the live cwd, else the launch directory ([why](../../../../notes/wolf-macos-decisions.md#opening-files-from-outside-wolf)); `""` in the empty state.
-- `openFile(_:)` — places a file from outside Wolf and raises the tab ([empty tab](../../../../notes/wolf-macos-decisions.md#opening-files-from-outside-wolf)).
+- `openFile(_:wait:)` — places a file from outside Wolf and raises the tab ([empty tab](../../../../notes/wolf-macos-decisions.md#opening-files-from-outside-wolf)).
 - `persistedTab()` — this view's [`SessionSeam`](../WolfKeyMap/Persistence/README.md#sessionseamswift) contribution, seeded from the restored tab.
 - `normalFrame` — [`StatePersistence`](#statepersistenceswift)'s, `nil` until recorded.
 - `canCopy` — Copy's gate; a terminal pane copies and pastes through its session.

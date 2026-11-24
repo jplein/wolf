@@ -67,7 +67,7 @@ The pump's budget re-arms each time it elapses, and when a Neovim prompt is show
 
 A crashed core stays `Dead` until `restart_nvim`, which force-kills and reaps the dead child, respawns in the same working directory and config, and re-runs the full setup chain.
 
-A restart starts the render state over. A fresh Neovim numbers its windows from 1000 and its tabpages from 1 again, so anything keyed by the dead process's handles would be read as the fresh one's: the snapshot is reset, and the layout intents and the navigation history are emptied. The commands queue is kept, because front-ends drain it in every liveness state. `kill_in_place` first waits for the killed process's supervisor, which resolves only once its io loop and handler loop are gone, so no notification from it lands after the reset.
+A restart starts the render state over. A fresh Neovim numbers its windows from 1000 and its tabpages from 1 again, so anything keyed by the dead process's handles would be read as the fresh one's: the snapshot is reset, the layout intents and the navigation history are emptied, and every `wolf --wait` ends with `1`, its buffer gone. The commands queue is kept, because front-ends drain it in every liveness state. `kill_in_place` first waits for the killed process's supervisor, which resolves only once its io loop and handler loop are gone, so no notification from it lands after the reset.
 
 The snapshot reset carries four fields. `seq` never goes back, because flush waiters key on it advancing. `open_files`, `tab_cwds` and `current_tabpage` are what a front-end captures before restarting, and a failed respawn must leave them for the next attempt; the fresh Neovim replaces each one wholesale during setup.
 
@@ -191,7 +191,11 @@ A state table at a newer version is frozen per `db::Table` handle. Its flag is s
 - The `wolf` command is `src/bin/wolf.rs` in this crate, not a crate of its own. The client and the listener share one protocol module, so the two sides cannot drift, and the command links no GUI toolkit because core has none.
 - One `OpenListener` serves an app process, on std threads rather than a core's tokio runtime, because every core belongs to a tab that can close.
 - Each connection is served on a thread of its own, with the read timeout `OPEN_REQUEST_TIMEOUT` and the line cap `OPEN_REQUEST_MAX`, so a client that stalls or floods holds up no other and holds no thread for long.
-- A request is queued and the wake fired before `Taken` is sent, so a command that exited `0` has its request in the queue.
+- A plain request is queued and the wake fired before `Taken` is sent, so a command that exited `0` has its request in the queue. A wait is answered `Taken` first and queued after, because once queued it can end at any moment, and its end must never reach the command ahead of `Taken`.
+- A wait lives in its tab's core, in a registry the redraw handler and the supervisor share, and `OpenWait`'s `Drop` answers `1`. Any route that loses a wait, a tab closed before placement, a dropped drain or the app quitting, therefore ends its command rather than leaving it hanging.
+- `wait_on` queues its registration as input, behind the `:edit` that opened the file, so the buffer exists when `init.lua` looks it up by name. A direct RPC could overtake that queued `:edit` and find no buffer.
+- The supervisor ends a crashed Neovim's waits itself, without waiting for `restart_nvim`, because the user may never restart, and the crashed Neovim's buffers are gone.
+- A command's hang-up is checked only when a hide asks `wolf_wait_live`, with no watcher thread per wait; otherwise the wait's final write fails and is ignored. A hung-up wait matters only to the "still waiting" toast, which must not name a file nobody waits for.
 - The socket is mode `0600`, because any process that can connect can make Wolf open a path.
 - An existing socket file is probed before it is unlinked, and only a refused connect marks it as stale, left by a crashed app. Any other connect failure is returned and removes nothing, because it does not show the listener is gone: a socket of another kind, or one the user cannot connect to, may be live. A live listener's socket is `InUse`, and a file that is not a socket is never removed.
 - `Drop` unlinks the socket only when its `(dev, ino)` is still the one it bound, read through the absolute path recorded at bind, so a listener never removes a successor's socket, whatever the working directory has become.
@@ -213,7 +217,6 @@ A state table at a newer version is frozen per `db::Table` handle. Its flag is s
 - The Tier-1 open-file mirror reports the instance-global buflisted file set per tabpage rather than a genuinely per-tabpage set, which over-reopens on restore. The active path is genuinely per-tabpage.
 - The file-search watcher does not cover a root it cannot watch, a session started with `WOLF_FS_WATCH=0` whose root no watched session shares, or any root when the watcher cannot start. A recursive inotify watch adds one watch per directory, ignored and skipped trees included, so a root as large as `$HOME` can exhaust `max_user_watches`. An FSEvents stream that fails to start is silent, because notify 8.2.0 ignores `FSEventStreamStart`'s result. An external change under such a root waits for an nvim trigger, and GNOME forwards no OS focus, so `FocusGained` never fires there.
 - An edit to `.git/info/exclude`, to the global excludes file, or to a `.gitignore` above the session root changes what the walk lists without forcing a rescan. The watcher's filter can also go on judging events by the rules it read before such an edit until the root stops being watched.
-- The open listener refuses every wait, so `wolf --wait` exits `2`.
 - A launched app that exits before it listens leaves the command polling until `LAUNCH_TIMEOUT`, then exiting `2` saying Wolf is not running.
 
 ## Deferred
