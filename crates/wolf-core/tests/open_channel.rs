@@ -1,7 +1,9 @@
 //! Headless tests of the open channel of `specs/cli-and-file-open.md` §2 over real Unix-domain
 //! sockets: `open_socket_path` and its 103-byte limit, `OpenListener` taking, refusing and
-//! queueing requests and waking the front-end, its socket's lifecycle, and `OpenClient`'s
-//! connect and connect-or-launch.
+//! queueing requests and waking the front-end, a wait's `OpenWait` and the replies it ends with,
+//! its socket's lifecycle, and `OpenClient`'s connect and connect-or-launch.
+//!
+//! A wait is answered `Taken` before it is queued, so a test drains one by polling.
 //!
 //! ## Relative socket paths
 //!
@@ -32,7 +34,7 @@ use std::time::{Duration, Instant};
 
 use wolf_core::{
     open_socket_path, OpenChannelError, OpenClient, OpenListener, OpenReply, OpenRequest, TabId,
-    WakeFn, OPEN_SOCKET_NAME,
+    TakenRequest, WakeFn, OPEN_SOCKET_NAME,
 };
 
 /// How long a test waits for a reply before failing rather than hanging.
@@ -291,25 +293,181 @@ fn requests_drain_in_arrival_order() {
     );
 }
 
+/// Connects a client to `state`, sends the wait `req`, and returns the client once it has read
+/// `Taken`, for the wait's final reply.
+fn send_wait(state: &Path, req: &OpenRequest) -> OpenClient {
+    let mut client = OpenClient::connect(state)
+        .unwrap_or_else(|e| panic!("OpenClient::connect({}) failed: {e:?}", state.display()));
+    client
+        .set_read_timeout(Some(REPLY_WAIT))
+        .expect("set_read_timeout failed");
+    client.send(req).expect("send failed");
+    let reply = client
+        .read_reply()
+        .expect("read_reply failed, such as by timing out with no reply")
+        .expect("the listener closed the connection without a reply");
+    assert_taken(&reply, "a wait for a file");
+    client
+}
+
+/// The one request `listener` takes within [`REPLY_WAIT`], polled, since a wait is answered
+/// `Taken` before it is queued.
+fn drain_one_taken(listener: &OpenListener, what: &str) -> TakenRequest {
+    let deadline = Instant::now() + REPLY_WAIT;
+    loop {
+        let mut taken = listener.drain_taken();
+        if !taken.is_empty() {
+            assert_eq!(
+                taken.len(),
+                1,
+                "{what} must queue one request; the drain holds {taken:?}."
+            );
+            return taken.remove(0);
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{what} was answered Taken but never queued within {REPLY_WAIT:?}."
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// The client's next reply, failing with `what` on a read error.
+fn next_reply(client: &mut OpenClient, what: &str) -> Option<OpenReply> {
+    client
+        .read_reply()
+        .unwrap_or_else(|e| panic!("reading {what} failed, such as by timing out: {e:?}"))
+}
+
+fn wait_request(path: &str) -> OpenRequest {
+    OpenRequest {
+        wait: true,
+        ..request(path)
+    }
+}
+
 #[test]
-fn a_wait_is_refused_and_not_queued() {
+fn a_wait_is_taken_and_answered_when_it_ends() {
     let state = fresh_state();
     let listener = bind(&state);
-    let req = OpenRequest {
-        wait: true,
-        ..request("/abs/waited.md")
-    };
-    let reply = round_trip(&state, &req);
-    assert!(
-        matches!(&reply, OpenReply::Refused { message } if message.contains("--wait")),
-        "a wait must be refused with a message naming --wait, which this listener does not \
-         support; got {reply:?}. Taken means the wait was handled as a plain request."
+    let req = wait_request("/abs/waited.md");
+    let mut client = send_wait(&state, &req);
+
+    let taken = drain_one_taken(&listener, "a wait for a file");
+    assert_eq!(
+        taken.request, req,
+        "the drained wait must carry the request as sent; a different one means a field was \
+         lost on the wire."
+    );
+    let wait = taken.wait.unwrap_or_else(|| {
+        panic!(
+            "a wait must drain holding its connection as an OpenWait; None means the listener \
+             queued it as a plain request and closed the connection, so the command can never \
+             learn how the wait ended."
+        )
+    });
+
+    wait.end(0);
+    assert_eq!(
+        next_reply(&mut client, "the wait's final reply"),
+        Some(OpenReply::WaitEnded { status: 0 }),
+        "end(0) must send the command WaitEnded with status 0. Status 1 means end ignores its \
+         status; None means it closed the connection without a reply."
     );
     assert_eq!(
-        listener.drain_requests(),
-        Vec::new(),
-        "a refused wait must not be queued."
+        next_reply(&mut client, "what follows the final reply"),
+        None,
+        "after WaitEnded the listener must close the connection; another reply means the wait \
+         answered twice, as a Drop that writes after end would."
     );
+}
+
+#[test]
+fn a_dropped_wait_answers_1() {
+    let state = fresh_state();
+    let listener = bind(&state);
+    let mut client = send_wait(&state, &wait_request("/abs/dropped.md"));
+
+    let taken = drain_one_taken(&listener, "a wait for a file");
+    let wait = taken
+        .wait
+        .expect("premise: a wait for a file must drain holding its OpenWait");
+    drop(wait);
+    assert_eq!(
+        next_reply(&mut client, "the dropped wait's final reply"),
+        Some(OpenReply::WaitEnded { status: 1 }),
+        "a wait dropped without end, as by a tab that closes, must answer WaitEnded with status \
+         1. None means Drop closed the connection without a reply, which the command also \
+         reads as 1 but only by accident; status 0 means a lost wait reads as a closed buffer."
+    );
+}
+
+#[test]
+fn a_wait_without_a_file_is_refused_and_not_queued() {
+    let state = fresh_state();
+    let listener = bind(&state);
+    let directory = base().join(fresh_state());
+    std::fs::create_dir(&directory).expect("failed to create the directory to wait for");
+    let rows = [
+        (
+            "a wait for a directory",
+            OpenRequest {
+                path: Some(directory.clone()),
+                wait: true,
+                tab_id: None,
+            },
+        ),
+        (
+            "a wait with no path",
+            OpenRequest {
+                path: None,
+                wait: true,
+                tab_id: None,
+            },
+        ),
+    ];
+    for (what, req) in rows {
+        let reply = round_trip(&state, &req);
+        assert!(
+            matches!(&reply, OpenReply::Refused { message } if message.contains("--wait")),
+            "{what} must be refused with a message naming --wait, since only a file has a \
+             buffer to wait on; got {reply:?}. Taken means the listener checks only that the \
+             wait is well-formed."
+        );
+        thread::sleep(Duration::from_millis(300));
+        let queued = listener.drain_taken();
+        assert!(
+            queued.is_empty(),
+            "{what} was refused, so it must not be queued; the drain holds {queued:?}."
+        );
+    }
+}
+
+#[test]
+fn a_wait_knows_when_its_command_hangs_up() {
+    let state = fresh_state();
+    let listener = bind(&state);
+    let client = send_wait(&state, &wait_request("/abs/hangup.md"));
+    let wait = drain_one_taken(&listener, "a wait for a file")
+        .wait
+        .expect("premise: a wait for a file must drain holding its OpenWait");
+
+    assert!(
+        wait.is_connected(),
+        "is_connected must be true while the command holds its end of the connection open; \
+         false means it reports a hang-up that did not happen, which would drop a live wait."
+    );
+
+    drop(client);
+    let deadline = Instant::now() + REPLY_WAIT;
+    while wait.is_connected() {
+        assert!(
+            Instant::now() < deadline,
+            "is_connected must turn false once the command has closed its end; after \
+             {REPLY_WAIT:?} it is still true, so a killed command's wait is never noticed."
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
 }
 
 #[test]

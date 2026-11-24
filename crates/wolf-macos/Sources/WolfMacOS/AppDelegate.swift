@@ -681,8 +681,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   /// Takes the socket's requests into `openQueue`, then, once launched and while not quitting,
   /// handles every queued request in order against the live windows.
   func handleOpenRequests() {
-    for item in wolf_ffi_open_drain() {
-      openQueue.append(FileOpenSeam.Request(item))
+    // Popped, so each request owns its item: iterating borrows, and the vec's drop ends waits.
+    let items = wolf_ffi_open_drain()
+    var popped: [FfiOpenItem] = []
+    while let item = items.pop() { popped.append(item) }
+    for item in popped.reversed() {
+      openQueue.append(FileOpenSeam.Request(owning: item))
     }
     guard isLaunched, !isTerminating else { return }
     while !openQueue.isEmpty {
@@ -718,9 +722,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     case .openFolder(let directory, let current):
       openFolder(directory, from: controller(current))?.raise()
     case .openFile(let file, let tab):
-      controller(tab)?.openFile(file)
+      controller(tab)?.openFile(file, wait: request.wait)
     case .openFileInProject(let file, let project, let current):
-      openFolder(project, from: controller(current))?.openFile(file)
+      openFolder(project, from: controller(current))?.openFile(file, wait: request.wait)
     }
   }
 

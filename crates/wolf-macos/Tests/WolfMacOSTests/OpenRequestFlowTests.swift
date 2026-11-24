@@ -106,6 +106,50 @@ private final class OpenChannel {
     }
     return requests
   }
+
+  /// Starts `wolf args` in the base with `WOLF_TAB_ID` set to `tabId` and leaves it running, as
+  /// `wolf --wait` stays until its wait ends; `nil`, with the test failed, when it cannot run.
+  func start(
+    _ args: [String], tabId: String, file: StaticString = #filePath, line: UInt = #line
+  ) -> Process? {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: wolf)
+    process.arguments = args
+    process.currentDirectoryURL = URL(fileURLWithPath: base)
+    var env = ProcessInfo.processInfo.environment
+    env["WOLF_STATE_DIR"] = Self.stateDir
+    env["WOLF_TAB_ID"] = tabId
+    process.environment = env
+    process.standardError = Pipe()
+    do {
+      try process.run()
+    } catch {
+      XCTFail("premise: could not run \(wolf): \(error)", file: file, line: line)
+      return nil
+    }
+    return process
+  }
+
+  /// The one request the listener takes, drained as `AppDelegate` drains: every item taken with
+  /// `pop()`, so the request owns it, then put back in arrival order. `nil`, with the test
+  /// failed, when not exactly one arrives.
+  func drainOwning(file: StaticString = #filePath, line: UInt = #line) -> FileOpenSeam.Request? {
+    var requests: [FileOpenSeam.Request] = []
+    LiveCore.spin(timeout: Self.timeout) {
+      let items = wolf_ffi_open_drain()
+      var popped: [FfiOpenItem] = []
+      while let item = items.pop() { popped.append(item) }
+      requests += popped.reversed().map { FileOpenSeam.Request(owning: $0) }
+      return !requests.isEmpty
+    }
+    guard requests.count == 1 else {
+      XCTFail(
+        "premise: one running wolf must send one request; \(requests.count) drained",
+        file: file, line: line)
+      return nil
+    }
+    return requests[0]
+  }
 }
 
 /// A live tab to route to: a `TerminalViewFixture` known to the router as tab 7, beside a
@@ -639,6 +683,59 @@ final class OpenRequestFlowTests: XCTestCase {
       listed, "1",
       "the first file must be loaded and listed in Neovim too; 0 means the queue kept only the"
         + " last open, and an empty probe that Neovim never ran it")
+  }
+
+  // MARK: - M1: a waited file
+
+  /// M1: a real `wolf --wait F` from tab 7's terminal, drained with `pop()` into
+  /// `Request(owning:)`, is opened with its wait by `openFile(_:wait:)` in the active pane of a
+  /// vertical split, and `:q` there, closing the buffer's last window, ends the command with `0`.
+  func testAWaitedFileEndsItsCommandWhenItsPaneCloses() {
+    guard let channel = OpenChannel() else { return }
+    defer { channel.finish() }
+    guard let tab = routedTab(), let x = write("x.md", in: tab.directory),
+      let f = write("waited.md", in: tab.directory)
+    else { return }
+    let fixture = tab.fixture
+    defer { fixture.shutdown() }
+    let handle = fixture.handle
+    let container = fixture.container
+    guard open(x, in: fixture), let wB = splitVertical(fixture) else { return }
+
+    guard let wolf = channel.start(["--wait", f], tabId: tab.tabId) else { return }
+    defer { if wolf.isRunning { wolf.terminate() } }
+    guard let request = channel.drainOwning() else { return }
+    guard case .openFile(let opened, let target) = tab.route(request), target == RoutedTab.id,
+      opened == f
+    else {
+      XCTFail(
+        "premise: \(f) sent with tab 7's ID must route to openFile(\(f), 7): it routes"
+          + " \(describe(tab.route(request)))")
+      return
+    }
+    container.openFile(opened, wait: request.wait)
+    let landed = fixture.wake { self.shows(wB, fixture) == f && handle.active_win() == wB }
+    XCTAssertTrue(
+      landed,
+      "premise: the waited file must open in the active pane B (\(wB)), which Neovim must have"
+        + " current: B shows \(shows(wB, fixture)), Neovim's window is \(handle.active_win())")
+    guard landed else { return }
+
+    typeEx("q", into: handle)
+    let exited = fixture.wake { !wolf.isRunning }
+    XCTAssertTrue(
+      exited,
+      "wolf --wait must exit once :q closes the last window on \(f); it is still running, so"
+        + " nothing ended its wait")
+    guard exited else { return }
+    let stderr = (wolf.standardError as? Pipe).flatMap {
+      String(data: $0.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
+    }
+    XCTAssertEqual(
+      wolf.terminationStatus, 0,
+      "wolf --wait must exit 0 when its buffer closes; 1 means the wait was dropped on its way"
+        + " to the core: Request(owning:) kept no item, openFile never called wait_on, or"
+        + " WolfCoreHandle.wait_on dropped it. stderr: \(stderr ?? "")")
   }
 
   // MARK: - Helpers

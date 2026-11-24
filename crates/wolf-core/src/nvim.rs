@@ -1931,8 +1931,9 @@ fn value_is_true(value: Option<&Value>) -> bool {
 /// starts there rather than inheriting the host process's cwd).
 ///
 /// The io-loop handle is MOVED into a supervisor task that awaits it and — unless
-/// the exit was intentional (`shutting_down`) — marks `liveness` `Dead` and fires
-/// `wake`, so a crashed nvim signals the front-end instead of freezing silently.
+/// the exit was intentional (`shutting_down`) — marks `liveness` `Dead`, fires
+/// `wake` and ends the handler's waits with `1`, so a crashed nvim signals the front-end
+/// instead of freezing silently.
 /// stderr is captured and drained to the log (rather than `/dev/null`). Returns
 /// the live process; the caller then `ui_attach`es.
 pub async fn spawn(
@@ -1987,6 +1988,7 @@ pub async fn spawn(
     }
     cmd.current_dir(&cfg.cwd);
 
+    let waits = handler.waits();
     let (nvim, io_handle, mut child) = new_child_cmd(&mut cmd, handler)
         .await
         .map_err(NvimError::Spawn)?;
@@ -2023,7 +2025,10 @@ pub async fn spawn(
                 tracing::warn!(target: "nvim_supervisor", "captive nvim supervisor join error: {e}");
             }
         }
+        // After `Dead`, so a `wait_on` racing the crash sees it. The crashed nvim's buffers are
+        // gone, and the user may never restart it.
         crate::liveness::mark_dead(&liveness, &wake);
+        waits.end_all();
     });
 
     Ok(NvimProcess {

@@ -753,9 +753,10 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
   /// Opens `path`, a file opened from outside Wolf, in this tab's pane by
   /// `specs/cli-and-file-open.md` §5.2, and raises the tab with the pane container focused.
   /// An empty tab hides its empty state so the file shows, and stays a tab with no folder.
-  func openFile(_ path: String) {
+  /// `wait`, a drained item holding a `wolf --wait`, goes to this tab's core with the file.
+  func openFile(_ path: String, wait: FfiOpenItem? = nil) {
     if !hasFolder { emptyState?.isHidden = true }
-    paneContainer?.openFile(path)
+    paneContainer?.openFile(path, wait: wait)
     raise()
     if let paneContainer {
       window?.makeFirstResponder(paneContainer)

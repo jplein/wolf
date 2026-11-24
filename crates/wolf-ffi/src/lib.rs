@@ -53,8 +53,8 @@ use wolf_core::{
     Appearance, BufInfo, BufferRow, Cmdline, Command, CommandMru, CoreConfig, CursorShape,
     FileSearch, FocusDir, Grid, HighlightTable, InputEvent, Key, KeyEvent, LayoutIntent, Liveness,
     MarkdownCursor, MouseAction, MouseButton, MouseEvent, OpenListener, OpenRequest, OpenTarget,
-    PaletteRow, PaletteRowKind, PaletteWindow, PaneChoice, PanePlacement, PaneStatus, PreviewInfo,
-    Pum, ResolvedStyle, Rgb, ScrollDirection, ScrollEvent, SearchMatch, SearchOptions,
+    OpenWait, PaletteRow, PaletteRowKind, PaletteWindow, PaneChoice, PanePlacement, PaneStatus,
+    PreviewInfo, Pum, ResolvedStyle, Rgb, ScrollDirection, ScrollEvent, SearchMatch, SearchOptions,
     SearchSession, SplitOrientation, TabFiles, TabId, TerminalCell, TerminalCellWidth,
     TerminalCommand, TerminalCursor, TerminalCursorStyle, TerminalFrame, TerminalId,
     TerminalMouseEvent, TerminalMouseKind, TerminalScrollEvent, TerminalTarget, TerminalUnderline,
@@ -615,6 +615,9 @@ mod ffi {
         fn close_tabpage(&self, tab: i64);
         // Focuses a specific Neovim window (click-to-focus / resolved FocusDir).
         fn focus_win(&self, win: i64);
+        // Hands `item`'s wait to this core, queued behind the file's placement; a wait it cannot
+        // take ends with 1.
+        fn wait_on(&self, item: &FfiOpenItem);
         // `mod liveness`, a lock-free read with no RPC, polled on each wake to drive the crash/stall
         // overlay. DEAD when the core is gone.
         fn liveness(&self) -> u8;
@@ -1242,6 +1245,8 @@ mod ffi {
         fn path(&self) -> String;
         // The request's tab ID, lowercase; "" when it carried none.
         fn tab_id(&self) -> String;
+        // Whether the item still holds a `wolf --wait`, for `WolfCoreHandle::wait_on`.
+        fn waits(&self) -> bool;
     }
 
     extern "Rust" {
@@ -1251,6 +1256,7 @@ mod ffi {
         // Drops the listener, which removes its socket. A no-op with none.
         fn wolf_ffi_open_stop();
         // The requests taken since the last drain, in arrival order; empty with no listener.
+        // Take the items with `pop()`: iterating borrows them, and the vec's drop ends each wait.
         fn wolf_ffi_open_drain() -> Vec<FfiOpenItem>;
         // `path` resolved as a request with no tab ID, which is Finder's route; "" activates.
         fn wolf_ffi_open_item(path: String) -> FfiOpenItem;
@@ -1779,14 +1785,20 @@ pub fn wolf_ffi_open_stop() {
 }
 
 /// The requests the listener took since the last drain, in arrival order, each resolved
-/// through [`OpenRequest::target`]. Empty with no listener.
+/// through [`OpenRequest::target`] and holding its wait. Empty with no listener.
+///
+/// Dropping an item that still holds a wait ends that wait with `1`, so a caller takes each
+/// item out of the vec, rather than iterating it, before the vec drops.
 #[must_use]
 pub fn wolf_ffi_open_drain() -> Vec<FfiOpenItem> {
-    let requests = open_listener()
+    let taken = open_listener()
         .as_ref()
-        .map(OpenListener::drain_requests)
+        .map(OpenListener::drain_taken)
         .unwrap_or_default();
-    requests.iter().map(FfiOpenItem::of).collect()
+    taken
+        .into_iter()
+        .map(|taken| FfiOpenItem::of(&taken.request, taken.wait))
+        .collect()
 }
 
 /// `path` resolved as a request with no tab ID would be, which is how
@@ -1798,21 +1810,30 @@ pub fn wolf_ffi_open_item(path: String) -> FfiOpenItem {
         wait: false,
         tab_id: None,
     };
-    FfiOpenItem::of(&request)
+    FfiOpenItem::of(&request, None)
 }
 
 /// One open request, resolved (opaque to Swift).
 pub struct FfiOpenItem {
     target: OpenTarget,
     tab_id: Option<TabId>,
+    /// Taken by [`WolfCoreHandle::wait_on`]; ends with `1` when the item drops holding it.
+    wait: RefCell<Option<OpenWait>>,
 }
 
 impl FfiOpenItem {
-    fn of(request: &OpenRequest) -> FfiOpenItem {
+    fn of(request: &OpenRequest, wait: Option<OpenWait>) -> FfiOpenItem {
         FfiOpenItem {
             target: request.target(),
             tab_id: request.tab_id,
+            wait: RefCell::new(wait),
         }
+    }
+
+    /// Whether the item still holds a wait, which [`WolfCoreHandle::wait_on`] takes.
+    #[must_use]
+    pub fn waits(&self) -> bool {
+        self.wait.borrow().is_some()
     }
 
     /// The target's `open_kind` discriminant.
@@ -3073,6 +3094,20 @@ impl WolfCoreHandle {
     pub fn close_tabpage(&self, tab: i64) {
         if let Some(core) = self.core.borrow().as_ref() {
             core.close_tabpage(tab);
+        }
+    }
+
+    /// Takes `item`'s wait and hands it to this core through [`WolfCore::wait_on`], for the
+    /// item's file. An item with no wait is a no-op; one whose target is not a file, or a core
+    /// that has been shut down, ends the wait with `1`.
+    pub fn wait_on(&self, item: &FfiOpenItem) {
+        let Some(wait) = item.wait.borrow_mut().take() else {
+            return;
+        };
+        let borrow = self.core.borrow();
+        match (borrow.as_ref(), &item.target) {
+            (Some(core), OpenTarget::File(path)) => core.wait_on(path, wait),
+            _ => drop(wait),
         }
     }
 

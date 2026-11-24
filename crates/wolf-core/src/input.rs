@@ -368,6 +368,14 @@ pub enum InputEvent {
         /// `true` = focus gained (`FocusGained`), `false` = focus lost (`FocusLost`).
         gained: bool,
     },
+    /// Register wait `id` on the buffer showing `path` (delegated to the init.lua
+    /// `wolf_wait_register` helper). Sent by [`crate::WolfCore::wait_on`].
+    RegisterWait {
+        /// The file the wait is for, as it was opened.
+        path: PathBuf,
+        /// The wait's id in the core's registry.
+        id: u64,
+    },
 }
 
 impl InputEvent {
@@ -424,7 +432,8 @@ impl InputEvent {
             | InputEvent::ToggleTerminal { .. }
             | InputEvent::BindTerminal { .. }
             | InputEvent::ToggleFullWidth
-            | InputEvent::SetUiFocus { .. } => false,
+            | InputEvent::SetUiFocus { .. }
+            | InputEvent::RegisterWait { .. } => false,
         }
     }
 
@@ -458,7 +467,8 @@ impl InputEvent {
             | InputEvent::ToggleTerminal { .. }
             | InputEvent::BindTerminal { .. }
             | InputEvent::ToggleFullWidth
-            | InputEvent::SetUiFocus { .. } => false,
+            | InputEvent::SetUiFocus { .. }
+            | InputEvent::RegisterWait { .. } => false,
         }
     }
 }
@@ -632,7 +642,27 @@ pub(crate) async fn apply(nvim: &mut impl Rpc, event: &InputEvent) -> Result<(),
         InputEvent::BindTerminal { id, target } => bind_terminal(nvim, *id, *target).await,
         InputEvent::ToggleFullWidth => toggle_full_width(nvim).await,
         InputEvent::SetUiFocus { gained } => set_ui_focus(nvim, *gained).await,
+        InputEvent::RegisterWait { path, id } => register_wait(nvim, path, *id).await,
     }
+}
+
+/// Registers wait `id` on `path`'s buffer through the init.lua `wolf_wait_register` helper,
+/// which answers `1` for the wait itself when no buffer shows `path`. The path goes as an
+/// argument, never into the Lua source.
+async fn register_wait(nvim: &mut impl Rpc, path: &Path, id: u64) -> Result<(), Box<CallError>> {
+    let _ = nvim
+        .request(
+            "nvim_exec_lua",
+            vec![
+                Value::from("wolf_wait_register(...)"),
+                Value::Array(vec![
+                    Value::from(path.to_string_lossy().as_ref()),
+                    Value::from(id),
+                ]),
+            ],
+        )
+        .await?;
+    Ok(())
 }
 
 /// Makes tabpage `handle` current via `nvim_set_current_tabpage`.

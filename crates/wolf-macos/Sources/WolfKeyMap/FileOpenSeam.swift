@@ -21,21 +21,38 @@ public enum FileOpenSeam {
     public let target: Target
     /// The request's `WOLF_TAB_ID`, lowercase; `""` when it has none.
     public let tabId: String
+    /// The drained item to hand to `WolfCoreHandle.wait_on` once the file is placed; `nil` when
+    /// the request does not wait. Dropping it unhanded ends the command's wait with `1`.
+    public let wait: FfiOpenItem?
 
     init(target: Target, tabId: String) {
       self.target = target
       self.tabId = tabId
+      wait = nil
     }
 
     /// Decodes a drained or Finder item. An unknown kind is an activate.
     public init(_ item: FfiOpenItemRef) {
+      (target, tabId) = Self.decode(item)
+      wait = nil
+    }
+
+    /// Decodes a drained item, taken from its vec with `pop()`, and keeps it when it waits.
+    public init(owning item: FfiOpenItem) {
+      (target, tabId) = Self.decode(item)
+      wait = item.waits() ? item : nil
+    }
+
+    /// An item's target, an unknown kind decoding as an activate, and its tab ID.
+    private static func decode(_ item: FfiOpenItemRef) -> (Target, String) {
       let path = item.path().toString()
+      let target: Target
       switch OpenKind(rawValue: item.kind()) {
       case .directory: target = .directory(path)
       case .file: target = .file(path)
       case .activate, nil: target = .activate
       }
-      tabId = item.tab_id().toString()
+      return (target, item.tab_id().toString())
     }
   }
 

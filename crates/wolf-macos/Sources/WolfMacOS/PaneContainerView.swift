@@ -203,7 +203,8 @@ final class PaneContainerView: NSView {
   /// Files opened from outside Wolf (`openFile`), in arrival order, waiting for the view to be
   /// ready: a bound first pane, and no layout rebuild, drawer restore or terminal restore
   /// pending, any of which would replace the pane a file lands in. A restart reset keeps them.
-  private var pendingFileOpens: [String] = []
+  /// Each keeps the drained item holding its `wolf --wait`, if any.
+  private var pendingFileOpens: [(path: String, wait: FfiOpenItem?)] = []
 
   /// Invoked whenever the pane layout changes in a way that must be persisted (a
   /// divider drag ends, or a restore rebuild completes). Set by the window
@@ -2462,8 +2463,10 @@ final class PaneContainerView: NSView {
   /// §5.2 chooses: unzooming first, focusing an editor pane already on it, opening it in an
   /// editor or preview pane, or splitting the whole tab with a new editor pane on the left. A
   /// missing file opens as a new buffer. It waits in `pendingFileOpens` until the view is ready.
-  func openFile(_ path: String) {
-    pendingFileOpens.append(path)
+  /// `wait`, a drained item holding a `wolf --wait`, is handed to the core once the file is
+  /// placed, so its command ends when the file's buffer closes.
+  func openFile(_ path: String, wait: FfiOpenItem? = nil) {
+    pendingFileOpens.append((path, wait))
     runPendingFileOpens()
   }
 
@@ -2474,10 +2477,12 @@ final class PaneContainerView: NSView {
     guard !pendingFileOpens.isEmpty, !panes.isEmpty, pendingLayoutRebuild == nil,
       pendingDrawerRestore == nil, pendingTerminalRestore == nil
     else { return }
-    let paths = pendingFileOpens
+    let opens = pendingFileOpens
     pendingFileOpens.removeAll()
-    for path in paths {
+    for (path, wait) in opens {
       placeFile(path)
+      // Even after a placement that returned early: Neovim answers 1 when no buffer shows it.
+      if let wait { handle.wait_on(wait) }
     }
     syncGridSizes()
     needsDisplay = true

@@ -80,7 +80,7 @@ use std::rc::{Rc, Weak};
 use adw::prelude::*;
 use gtk::{gdk, glib};
 use wolf_core::app_state::{Tab, Window};
-use wolf_core::{InputEvent, TerminalId, WolfConfig};
+use wolf_core::{InputEvent, OpenWait, TerminalId, WolfConfig};
 
 use crate::buffer_picker::{self, BufferPickerHandle};
 use crate::coordinator::{self, Coordinator, CoordinatorInner, WindowId};
@@ -477,9 +477,10 @@ impl WindowHandle {
     /// Opens `file`, a path from outside Wolf in [`wolf_core::OpenTarget::File`]'s form, in
     /// tab `tab`: selects it, hides an empty tab's empty-state page while leaving the tab
     /// empty for the save, queues the file with its pane view
-    /// ([`crate::pane_view::PaneHandle::open_file`]), wakes it, and raises this window.
-    /// `false` when this window holds no such tab.
-    pub fn open_file(&self, tab: TabId, file: PathBuf) -> bool {
+    /// ([`crate::pane_view::PaneHandle::open_file`]) with its `wolf --wait`, if any, wakes it,
+    /// and raises this window. `false` when this window holds no such tab, which drops `wait`
+    /// and so ends it with `1`.
+    pub fn open_file(&self, tab: TabId, file: PathBuf, wait: Option<OpenWait>) -> bool {
         let Some(entry) = self.tab(tab) else {
             return false;
         };
@@ -487,7 +488,7 @@ impl WindowHandle {
         if entry.is_empty() {
             entry.hide_empty_state();
         }
-        entry.panes().open_file(file);
+        entry.panes().open_file(file, wait);
         entry.wake();
         self.raise();
         true

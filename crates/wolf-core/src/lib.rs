@@ -129,8 +129,8 @@ pub use nav_history::{
     MAX_MENU_ROWS,
 };
 pub use open_channel::{
-    open_socket_path, OpenChannelError, OpenClient, OpenListener, OpenReply, OpenRequest,
-    OPEN_SOCKET_NAME, OPEN_SOCKET_PATH_MAX,
+    open_socket_path, OpenChannelError, OpenClient, OpenListener, OpenReply, OpenRequest, OpenWait,
+    TakenRequest, OPEN_SOCKET_NAME, OPEN_SOCKET_PATH_MAX,
 };
 pub use palette::{rank_palette, PaletteRow, PaletteRowKind, PaletteWindow};
 pub use pane_status::{pane_status, PaneStatus, NO_NAME};

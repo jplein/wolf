@@ -1664,6 +1664,35 @@ rust_test(
 )
 
 rust_test(
+    name = "wolf_wait",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/wolf_wait.rs",
+    ],
+    crate_root = "tests/wolf_wait.rs",
+    # Spawns the real `wolf`, `git` and nvim over real sockets, which the macOS build sandbox does
+    # not allow. Medium: the restart case waits out an RPC timeout before it restarts Neovim.
+    tags = ["no-sandbox"],
+    size = "medium",
+    edition = "2021",
+    data = [
+        ":wolf",
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim",
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+        "WOLF_TEST_WOLF_BIN": "$(rootpath :wolf)",
+    },
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
+)
+
+rust_test(
     name = "terminal_tab_id",
     srcs = [
         "tests/common/mod.rs",

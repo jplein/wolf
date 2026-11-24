@@ -692,8 +692,52 @@ local function abbrev(word, replacement)
 	))
 end
 
+-- `wolf --wait` ids by waited buffer, and the channel their ends go to; set by wolf_setup_layout.
+local waits = {}
+local wait_chan = nil
+
+-- Ends every wait on `buf` with `status`; core answers each command.
+local function end_waits(buf, status)
+	local ids = waits[buf]
+	waits[buf] = nil
+	if ids ~= nil then
+		pcall(vim.rpcnotify, wait_chan, "wolf_wait_ended", ids, status)
+	end
+end
+
+-- The listed buffer named `path` once both go through `norm`, or nil.
+local function listed_buf_named(path, norm)
+	local want = norm(path)
+	for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+		local name = vim.api.nvim_buf_get_name(buf)
+		if name ~= "" and vim.bo[buf].buflisted and norm(name) == want then
+			return buf
+		end
+	end
+	return nil
+end
+
+-- Matches by full path, then resolved, never by bufnr(path), which pattern-matches. A path with
+-- no listed buffer ends its wait with 1.
+function _G.wolf_wait_register(path, id)
+	local function full(p)
+		return vim.fn.fnamemodify(p, ":p")
+	end
+	local buf = listed_buf_named(path, full)
+		or listed_buf_named(path, function(p)
+			return vim.fn.resolve(full(p))
+		end)
+	if buf == nil then
+		pcall(vim.rpcnotify, wait_chan, "wolf_wait_ended", { id }, 1)
+		return
+	end
+	waits[buf] = waits[buf] or {}
+	table.insert(waits[buf], id)
+end
+
 -- See runtime/nvim/README.md#wolf_setup_layoutchan; split, close and focus are asymmetric.
 function _G.wolf_setup_layout(chan)
+	wait_chan = chan
 	-- 'h' = :split (stacked), 'v' = :vsplit (side by side). nvim splits first, then both handles are
 	-- reported.
 	local function do_split(orient)
@@ -734,6 +778,13 @@ function _G.wolf_setup_layout(chan)
 					{}
 				)
 				return
+			end
+			-- Before close_window, on which the front-end shuts the tab's core down and ends every
+			-- wait with 1. See notes/runtime/nvim/init.lua.md#waits-end-before-close_window
+			local wins = opts.all and vim.api.nvim_tabpage_list_wins(0)
+				or { vim.api.nvim_get_current_win() }
+			for _, win in ipairs(wins) do
+				end_waits(vim.api.nvim_win_get_buf(win), 0)
 			end
 			vim.rpcnotify(chan, "wolf_command", "close_window")
 		end
@@ -830,6 +881,61 @@ function _G.wolf_setup_layout(chan)
 	abbrev("wqall", "WolfWriteQuitAll")
 	abbrev("xa", "WolfWriteQuitAll")
 	abbrev("xall", "WolfWriteQuitAll")
+
+	-- In a waited window :cq abandons the wait and keeps Neovim, which quitting would crash.
+	-- See specs/cli-and-file-open.md#6-waiting
+	vim.api.nvim_create_user_command("WolfCquit", function(o)
+		local buf = vim.api.nvim_get_current_buf()
+		if waits[buf] ~= nil then
+			end_waits(buf, 1)
+			pcall(vim.cmd, "bdelete! " .. buf)
+		else
+			vim.cmd("cquit" .. (o.bang and "!" or "") .. " " .. o.args)
+		end
+	end, { bang = true, nargs = "?" })
+	abbrev("cq", "WolfCquit")
+	abbrev("cquit", "WolfCquit")
+
+	-- A waited buffer closes with its last window, or when deleted or wiped; a hide only toasts.
+	local wait_group = vim.api.nvim_create_augroup("WolfWait", { clear = true })
+	vim.api.nvim_create_autocmd("WinClosed", {
+		group = wait_group,
+		callback = function(args)
+			local ok, buf = pcall(vim.api.nvim_win_get_buf, tonumber(args.match))
+			if ok and waits[buf] ~= nil and #vim.fn.win_findbuf(buf) <= 1 then
+				end_waits(buf, 0)
+			end
+		end,
+	})
+	vim.api.nvim_create_autocmd({ "BufDelete", "BufWipeout" }, {
+		group = wait_group,
+		callback = function(args)
+			end_waits(args.buf, 0)
+		end,
+	})
+	vim.api.nvim_create_autocmd("BufHidden", {
+		group = wait_group,
+		callback = function(args)
+			local buf = args.buf
+			if waits[buf] == nil then
+				return
+			end
+			-- Scheduled past the hide. See notes/runtime/nvim/init.lua.md#a-hide-asks-core
+			vim.schedule(function()
+				if waits[buf] == nil or #vim.fn.win_findbuf(buf) > 0 then
+					return
+				end
+				local ok, live = pcall(vim.rpcrequest, chan, "wolf_wait_live", waits[buf])
+				if ok and type(live) == "table" then
+					waits[buf] = #live > 0 and live or nil
+				end
+				if waits[buf] ~= nil then
+					local name = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":~")
+					vim.api.nvim_echo({ { "wolf --wait is still waiting for " .. name } }, true, {})
+				end
+			end)
+		end,
+	})
 
 	-- Active-window tracking: report the focused window on every WinEnter, and emit
 	-- once immediately so the startup window is reflected.

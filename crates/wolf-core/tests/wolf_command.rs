@@ -1,7 +1,7 @@
 //! Tests of the real `wolf` binary against the invocation table and exit statuses of
 //! `specs/cli-and-file-open.md` §1, over the channel of §2. The app is either a real
 //! `OpenListener` or a raw `UnixListener` that records what it is sent and answers with scripted
-//! `OpenReply` lines, for the wait outcomes no listener produces yet.
+//! `OpenReply` lines, for replies a real listener never sends, such as a status other than 0 or 1.
 //!
 //! The binary is Cargo's `CARGO_BIN_EXE_wolf`, or under Bazel the `:wolf` runfile named by
 //! `WOLF_TEST_WOLF_BIN`. Each test works in its own case directory under one kept, canonical
@@ -27,7 +27,7 @@ use std::sync::{Arc, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use wolf_core::{OpenListener, OpenReply, OpenRequest, OpenTarget, TabId, WakeFn};
+use wolf_core::{OpenListener, OpenReply, OpenRequest, OpenTarget, TabId, TakenRequest, WakeFn};
 use wolf_test_support::resolve_test_runfile;
 
 /// The variable Bazel names the `wolf` runfile in.
@@ -126,6 +126,16 @@ impl Case {
         std::fs::create_dir_all(&self.state).expect("failed to create the state dir");
         UnixListener::bind(self.state.join(wolf_core::OPEN_SOCKET_NAME))
             .expect("failed to bind the raw listener")
+    }
+
+    /// Starts `wolf args` in `work` with the case's state dir and no `WOLF_TAB_ID`.
+    fn spawn(&self, args: &[&str]) -> Child {
+        let mut cmd = Command::new(&env().bin);
+        cmd.args(args)
+            .current_dir(&self.work)
+            .env("WOLF_STATE_DIR", STATE_FROM_WORK)
+            .env_remove("WOLF_TAB_ID");
+        spawn_piped(cmd, &format!("wolf {args:?}"))
     }
 
     /// Runs `wolf args` in `work` with the case's state dir.
@@ -681,18 +691,78 @@ fn no_taken_reply_exits_2() {
     }
 }
 
+/// The one request `listener` takes from the running `child`, polled for up to [`RUN_WAIT`]. Kills
+/// `child` and fails when it exits first or nothing is queued in time.
+fn drain_wait(listener: &OpenListener, child: &mut Child, what: &str) -> TakenRequest {
+    let deadline = Instant::now() + RUN_WAIT;
+    loop {
+        let mut taken = listener.drain_taken();
+        if !taken.is_empty() {
+            assert_eq!(
+                taken.len(),
+                1,
+                "{what} must queue one request; the drain holds {taken:?}."
+            );
+            return taken.remove(0);
+        }
+        if let Some(status) = child.try_wait().expect("try_wait failed") {
+            let mut err = String::new();
+            if let Some(mut pipe) = child.stderr.take() {
+                let _ = std::io::Read::read_to_string(&mut pipe, &mut err);
+            }
+            panic!(
+                "{what} exited {status} before its request was queued; 2 means the listener \
+                 refused the wait. stderr:\n{err}"
+            );
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            panic!("{what} was taken by nothing within {RUN_WAIT:?}.");
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
 #[test]
-fn a_wait_against_the_listener_exits_2() {
+fn a_wait_against_the_listener_exits_with_its_end() {
     let case = new_case();
     let listener = case.listen();
-    let out = case.run(&["--wait", "f.md"], None);
-    assert_refusal(
-        &out,
-        "wolf --wait f.md against a listener that supports no wait",
-    );
-    assert_eq!(
-        listener.drain_requests(),
-        Vec::new(),
-        "a refused wait must not be queued."
-    );
+    let rows: [(&str, Option<i32>, i32); 2] = [
+        ("a wait the app ends with end(0)", Some(0), 0),
+        ("a wait the app drops", None, 1),
+    ];
+    for (what, end, code) in rows {
+        let what = format!("wolf --wait f.md, {what},");
+        let mut child = case.spawn(&["--wait", "f.md"]);
+        let taken = drain_wait(&listener, &mut child, &what);
+        assert_eq!(
+            taken.request,
+            OpenRequest {
+                path: Some(case.work.join("f.md")),
+                wait: true,
+                tab_id: None,
+            },
+            "{what} must send its absolute path with wait set."
+        );
+        let Some(wait) = taken.wait else {
+            let _ = child.kill();
+            panic!(
+                "{what} must drain holding its OpenWait; None means the listener queued it as a \
+                 plain request, so nothing can end the wait."
+            );
+        };
+        match end {
+            Some(status) => wait.end(status),
+            None => drop(wait),
+        }
+        let out = wait_to_end(child, &what);
+        assert_exit(
+            &out,
+            code,
+            &format!(
+                "{what} (0 only for a wait ended with status 0; 1 for a dropped wait, whose Drop \
+                 answers 1 or closes the connection)"
+            ),
+        );
+    }
 }

@@ -20,6 +20,7 @@ use tokio::process::ChildStdin;
 
 use crate::command::Command;
 use crate::layout::{LayoutIntent, SplitOrientation};
+use crate::open_channel::WaitRegistry;
 use crate::recent_dirs::RecentDirs;
 use crate::render::{
     Cell, Cmdline, CmdlineChunk, CursorShape, DefaultColors, HlAttr, MarkdownCursor, Message,
@@ -239,12 +240,23 @@ const TERMINAL_OPEN_EVENT: &str = "wolf_terminal_open";
 /// [`TERMINAL_OPEN_EVENT`]'s gives: the binding's own `wolf_buffers` emit wakes the front-end.
 const TERMINAL_SPLIT_EVENT: &str = "wolf_terminal_split";
 
-/// Name of the one nvim→core request, sent by `_G.wolf_sync_buffers` in
+/// Name of the nvim→core barrier request, sent by `_G.wolf_sync_buffers` in
 /// `runtime/nvim/init.lua` straight after a synchronous `wolf_buffers` emit. nvim-rs
 /// applies notifications inline in its handler loop but spawns a request only after every
 /// earlier notification is applied, so the answer tells Neovim that emit has landed in
 /// the snapshot. [`RedrawHandler::handle_request`] answers it with `nil`.
 const BARRIER_REQUEST: &str = "wolf_barrier";
+
+/// Name of the out-of-band notification the `WolfWait` tracking in `runtime/nvim/init.lua` sends
+/// when waited buffers close, carrying `[ids, status]`. Each id's wait ends with `status`. It
+/// touches no snapshot state and fires no wake, because nothing a front-end reads changes; the
+/// condition is in specs/architecture.md#the-corefront-end-contract
+const WAIT_ENDED_EVENT: &str = "wolf_wait_ended";
+
+/// Name of the nvim→core request the `WolfWait` tracking sends when a waited buffer is hidden,
+/// carrying `[ids]`. [`RedrawHandler::handle_request`] answers with the ids whose command is
+/// still connected, dropping the waits of the others.
+const WAIT_LIVE_REQUEST: &str = "wolf_wait_live";
 
 /// `nvim-rs` [`Handler`] that applies redraw batches to a [`SharedSnapshot`].
 #[derive(Clone)]
@@ -257,6 +269,7 @@ pub struct RedrawHandler {
     nav_history: NavHistoryCell,
     search_registry: Arc<crate::files::SearchRegistry>,
     terminals: Arc<TerminalRegistry>,
+    waits: WaitRegistry,
     wake: WakeFn,
 }
 
@@ -266,9 +279,10 @@ impl RedrawHandler {
     /// cwd into `cwd` (recording it into the always-on global `recent_dirs` MRU),
     /// folding per-pane navigation targets into `nav_history`, routing
     /// `wolf_fs_changed` events into `search_registry`, pushing the editor's colours and
-    /// placeholder wipes into `terminals`, and waking via `wake`.
+    /// placeholder wipes into `terminals`, ending and checking the waits in `waits`, and waking
+    /// via `wake`.
     // One parameter per sibling cell the handler folds into; bundling them into a
-    // struct would just rename the same nine things.
+    // struct would just rename the same things.
     #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub(crate) fn new(
@@ -280,6 +294,7 @@ impl RedrawHandler {
         nav_history: NavHistoryCell,
         search_registry: Arc<crate::files::SearchRegistry>,
         terminals: Arc<TerminalRegistry>,
+        waits: WaitRegistry,
         wake: WakeFn,
     ) -> Self {
         Self {
@@ -291,9 +306,23 @@ impl RedrawHandler {
             nav_history,
             search_registry,
             terminals,
+            waits,
             wake,
         }
     }
+
+    /// The core's wait registry, shared with this handler.
+    pub(crate) fn waits(&self) -> WaitRegistry {
+        self.waits.clone()
+    }
+}
+
+/// The wait ids in `value`, an array of integers; anything else is skipped.
+fn wait_ids(value: Option<&Value>) -> Vec<u64> {
+    value
+        .and_then(Value::as_array)
+        .map(|ids| ids.iter().filter_map(Value::as_u64).collect())
+        .unwrap_or_default()
 }
 
 #[async_trait]
@@ -434,6 +463,16 @@ impl Handler for RedrawHandler {
                 // wake shows the new `live_cwd` to the front-ends.
                 self.apply_cwd(args);
             }
+            WAIT_ENDED_EVENT => {
+                let status = args
+                    .get(1)
+                    .and_then(Value::as_i64)
+                    .and_then(|s| i32::try_from(s).ok())
+                    .unwrap_or(1);
+                for id in wait_ids(args.first()) {
+                    self.waits.end(id, status);
+                }
+            }
             _ => {}
         }
     }
@@ -441,13 +480,16 @@ impl Handler for RedrawHandler {
     async fn handle_request(
         &self,
         name: String,
-        _args: Vec<Value>,
+        args: Vec<Value>,
         _neovim: Neovim<Self::Writer>,
     ) -> Result<Value, Value> {
-        if name == BARRIER_REQUEST {
-            Ok(Value::Nil)
-        } else {
-            Err(Value::from(format!("unknown request: {name}")))
+        match name.as_str() {
+            BARRIER_REQUEST => Ok(Value::Nil),
+            WAIT_LIVE_REQUEST => {
+                let live = self.waits.live(&wait_ids(args.first()));
+                Ok(Value::Array(live.into_iter().map(Value::from).collect()))
+            }
+            _ => Err(Value::from(format!("unknown request: {name}"))),
         }
     }
 }

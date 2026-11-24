@@ -32,6 +32,7 @@ use crate::liveness::{self, Liveness};
 use crate::mru::{FileEntry, MruStore};
 use crate::nav_history::{MenuRow, NavMove, NavTarget, MAX_MENU_ROWS};
 use crate::nvim::{self, DurableDirs, NvimConfig, NvimError, NvimProcess};
+use crate::open_channel::{OpenWait, WaitRegistry};
 use crate::pump::{Pump, PumpTarget, QueuedInput};
 use crate::recent_dirs::RecentDirs;
 use crate::redraw::{CommandQueue, IntentQueue, NavHistoryCell, RedrawHandler, TrackedCwd, WakeFn};
@@ -244,6 +245,9 @@ pub struct WolfCore {
     /// The terminal sessions. They live beside the Neovim process, never in the snapshot,
     /// so a crash or [`restart_nvim`](WolfCore::restart_nvim) leaves them running.
     terminals: Arc<TerminalRegistry>,
+    /// The `wolf --wait` commands waiting on this tab's buffers, shared with the redraw handler
+    /// and the supervisor. Dropped with the core, so a lost wait answers `1`.
+    waits: WaitRegistry,
 }
 
 /// The process's canonicalized home directory, resolved at most once.
@@ -366,6 +370,7 @@ impl WolfCore {
             terminfo_dir: cfg.terminfo_dir.clone(),
         });
 
+        let waits = WaitRegistry::default();
         let handler = RedrawHandler::new(
             snapshot.clone_handle(),
             intents.clone(),
@@ -375,6 +380,7 @@ impl WolfCore {
             nav_history.clone(),
             search_registry.clone(),
             terminals.clone(),
+            waits.clone(),
             wake.clone(),
         );
 
@@ -475,6 +481,7 @@ impl WolfCore {
             restarting: AtomicBool::new(false),
             search_registry,
             terminals,
+            waits,
         })
     }
 
@@ -514,6 +521,27 @@ impl WolfCore {
         {
             tracing::warn!("input dropped: core input pump is gone");
         }
+    }
+
+    /// Hands `wait` to this tab: the command ends when the buffer showing `path` closes, with
+    /// the status `specs/cli-and-file-open.md` §6 gives.
+    ///
+    /// Queued like [`send_input`](Self::send_input), so the registration lands behind an
+    /// [`Open`](InputEvent::Open) or [`focus_win`](Self::focus_win) sent before it. `path` is
+    /// the form the file was opened under, [`OpenTarget::File`](crate::OpenTarget::File)'s. With
+    /// no buffer showing `path` by then, or with Neovim [`Dead`](Liveness::Dead), the wait ends
+    /// with `1`.
+    pub fn wait_on(&self, path: &Path, wait: OpenWait) {
+        let id = self.waits.insert(wait);
+        // Checked after the insert: the supervisor marks `Dead` before it ends every wait.
+        if self.liveness() == Liveness::Dead {
+            self.waits.end(id, 1);
+            return;
+        }
+        self.send_input(InputEvent::RegisterWait {
+            path: path.to_owned(),
+            id,
+        });
     }
 
     /// Copies the current visual-mode selection to text, or `None` if there is
@@ -1874,6 +1902,7 @@ impl WolfCore {
     /// Cleanly shuts down the terminal sessions and the captive Neovim, and tears down the
     /// runtime.
     ///
+    /// Every wait handed to [`wait_on`](Self::wait_on) that is still held ends with `1` first.
     /// Every session is hung up first, and this returns only once every shell is reaped,
     /// within one [`TERMINAL_HANGUP_GRACE`](crate::TERMINAL_HANGUP_GRACE) for all of them.
     /// Reaps the Neovim child even when it is WEDGED (the `shutdown` reap force-kills after
@@ -1884,8 +1913,10 @@ impl WolfCore {
             runtime,
             nvim,
             terminals,
+            waits,
             ..
         } = self;
+        waits.end_all();
         terminals.shutdown();
         let nvim = nvim.into_inner();
         runtime.block_on(async move { nvim.shutdown().await })?;
@@ -1942,7 +1973,8 @@ impl WolfCore {
     ///   holds a [`read_snapshot`](Self::read_snapshot) guard across this call gets
     ///   the reset at the next write instead. Reopening the Tier-1 files +
     ///   rebinding panes is the FRONT-END's job (off the mirror captured before
-    ///   the restart) — this method reopens nothing.
+    ///   the restart) — this method reopens nothing. Every wait handed to
+    ///   [`wait_on`](Self::wait_on) has ended with `1`, since the dead nvim's buffers are gone.
     ///   Typing [`send_input`](Self::send_input) enqueued before the swap is dropped
     ///   rather than delivered to the fresh nvim, so a half-typed Ex command cannot
     ///   arrive as normal-mode keys; state input (resize, focus, tabpage, ...) still
@@ -1991,6 +2023,7 @@ impl WolfCore {
         self.snapshot.reset_for_respawn();
         self.intents.lock().clear();
         *self.nav_history.lock() = crate::nav_history::NavHistory::default();
+        self.waits.end_all();
 
         // Leave the terminal Dead state for the restart (Dead -> Alive), waking the
         // front-end. This is the ONLY exit from Dead (unconditional store-Alive).

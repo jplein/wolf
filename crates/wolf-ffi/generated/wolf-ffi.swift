@@ -382,6 +382,10 @@ extension WolfCoreHandleRef {
         __swift_bridge__$WolfCoreHandle$focus_win(ptr, win)
     }
 
+    public func wait_on(_ item: FfiOpenItemRef) {
+        __swift_bridge__$WolfCoreHandle$wait_on(ptr, item.ptr)
+    }
+
     public func liveness() -> UInt8 {
         __swift_bridge__$WolfCoreHandle$liveness(ptr)
     }
@@ -2716,6 +2720,10 @@ extension FfiOpenItemRef {
 
     public func tab_id() -> RustString {
         RustString(ptr: __swift_bridge__$FfiOpenItem$tab_id(ptr))
+    }
+
+    public func waits() -> Bool {
+        __swift_bridge__$FfiOpenItem$waits(ptr)
     }
 }
 extension FfiOpenItem: Vectorizable {

@@ -69,7 +69,9 @@ use std::time::Duration;
 use adw::prelude::*;
 use gtk::{gio, glib};
 use wolf_core::app_state::{ProjectState, WindowState};
-use wolf_core::{AppStateStore, OpenListener, OpenRequest, PaletteWindow, WakeFn, WolfConfig};
+use wolf_core::{
+    AppStateStore, OpenListener, OpenWait, PaletteWindow, TakenRequest, WakeFn, WolfConfig,
+};
 
 use crate::actions;
 use crate::app;
@@ -537,23 +539,25 @@ impl Coordinator {
     }
 
     /// Handles every request the listener has taken, in arrival order. Requests drained
-    /// while the application quits are dropped.
+    /// while the application quits are dropped, which ends their waits with `1`.
     fn handle_open_requests(&self, app: &gtk::Application) {
         let requests = match self.inner.listener.borrow().as_ref() {
-            Some(listener) => listener.drain_requests(),
+            Some(listener) => listener.drain_taken(),
             None => return,
         };
         if self.inner.shutting_down.get() {
             return;
         }
-        for request in requests {
-            self.handle_open_request(app, &request);
+        for taken in requests {
+            self.handle_open_request(app, taken);
         }
     }
 
-    /// Routes `request` through [`open_request::route`] over the live windows, their tabs'
-    /// IDs and the stacking order, and acts on the route.
-    fn handle_open_request(&self, app: &gtk::Application, request: &OpenRequest) {
+    /// Routes `taken`'s request through [`open_request::route`] over the live windows, their
+    /// tabs' IDs and the stacking order, and acts on the route. A wait travels with its file to
+    /// the tab that opens it, and is dropped, ending with `1`, when none does.
+    fn handle_open_request(&self, app: &gtk::Application, taken: TakenRequest) {
+        let TakenRequest { request, wait } = taken;
         let target = request.target();
         let handles = self.handles();
         let windows: Vec<_> = handles.iter().map(WindowHandle::live_window).collect();
@@ -580,14 +584,14 @@ impl Coordinator {
             Route::OpenFolder { directory, current } => {
                 self.open_folder(app, current, directory);
             }
-            Route::OpenFile { file, tab } => self.open_file(tab, file),
+            Route::OpenFile { file, tab } => self.open_file(tab, file, wait),
             Route::OpenFileInProject {
                 file,
                 project,
                 current,
             } => {
                 if let Some(landed) = self.open_folder(app, current, project) {
-                    self.open_file(landed, file);
+                    self.open_file(landed, file, wait);
                 }
             }
         }
@@ -600,11 +604,11 @@ impl Coordinator {
         }
     }
 
-    /// Opens `file` in `tab` ([`WindowHandle::open_file`]).
-    fn open_file(&self, (window, tab): TabRef, file: PathBuf) {
+    /// Opens `file` in `tab` with its `wolf --wait`, if any ([`WindowHandle::open_file`]).
+    fn open_file(&self, (window, tab): TabRef, file: PathBuf, wait: Option<OpenWait>) {
         let opened = self
             .handle(window)
-            .is_some_and(|handle| handle.open_file(tab, file.clone()));
+            .is_some_and(|handle| handle.open_file(tab, file.clone(), wait));
         if !opened {
             eprintln!(
                 "wolf-gnome: {} not opened: its tab has closed",

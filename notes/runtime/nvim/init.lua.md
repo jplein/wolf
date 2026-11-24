@@ -59,3 +59,11 @@ So the `BufNew` callback removes `A` when the `.swp` nvim would pick for the buf
 A buffer that already has a swap is renamed earlier, by `buf_name_changed` between `BufNew` and `BufFilePost`, with `A` still out. So `:saveas` of such a buffer onto a name where a dead owner's `.swp` sits still shows that swap's `ATTENTION` text as a toast. It is never a prompt, because `SwapExists` fires only on the file-load path.
 
 A live owner's swap, which is another tab's Neovim, stays under `A` and raises nothing. A long-path buffer is skipped, since it gets `noswapfile`.
+
+## Waits end before close_window
+
+`do_quit` ends the waits of every buffer whose window the close takes before it notifies `close_window`. The front-end shuts the tab's core down on that command, and the shutdown ends every wait it still holds with `1`. Core applies notifications in the order Neovim sent them, so the `0` reaches the command first. `WinClosed` cannot do it here, because the front-end closes the tab without closing its last window in Neovim.
+
+## A hide asks core
+
+`BufHidden` fires before the window shows its new buffer, so the check is scheduled past it, and runs only while the buffer still shows in no window. A command that was killed or interrupted leaves its wait registered, so the check asks core with `wolf_wait_live` which of the buffer's waits are still connected, and core drops the others. No toast names a file whose every command has gone, and no watcher thread is needed to notice a hang-up.

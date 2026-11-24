@@ -16,8 +16,8 @@
 //!
 //! ## Premises about the components
 //!
-//! - The listener queues a request before it replies `Taken`, so once a client has read
-//!   `Taken`, the request is in the queue a drain takes.
+//! - The listener queues a plain request before it replies `Taken`, and a wait just after it, so
+//!   every drain here polls until the requests it expects arrive.
 //! - `wolf_core::TabId` parses either case and displays lowercase, so a request sent with an
 //!   uppercase ID drains lowercase only if the bridge formats the parsed ID.
 
@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 use wolf_core::{open_socket_path, OpenChannelError, OpenClient, OpenReply, OpenRequest, TabId};
 use wolf_ffi::{
     wolf_ffi_open_drain, wolf_ffi_open_item, wolf_ffi_open_listen, wolf_ffi_open_stop,
-    wolf_ffi_set_open_wake,
+    wolf_ffi_set_open_wake, FfiOpenItem,
 };
 
 // `open_kind`
@@ -152,6 +152,19 @@ struct Drained {
     kind: u8,
     path: String,
     tab_id: String,
+}
+
+/// Drains until `count` items have arrived or [`WAIT`] passes, and returns the items themselves.
+fn drain_items(count: usize) -> Vec<FfiOpenItem> {
+    let deadline = Instant::now() + WAIT;
+    let mut items = Vec::new();
+    loop {
+        items.extend(wolf_ffi_open_drain());
+        if items.len() >= count || Instant::now() >= deadline {
+            return items;
+        }
+        std::thread::sleep(POLL);
+    }
 }
 
 /// Drains until `count` items have arrived or [`WAIT`] passes, and returns what arrived.
@@ -414,4 +427,53 @@ fn an_open_item_resolves_as_a_request_without_a_tab_id() {
             given.display()
         );
     }
+}
+
+/// F1: a wait drains as an item holding its wait, and a plain request as one holding none.
+#[test]
+fn a_wait_drains_holding_its_wait() {
+    let _serial = serial();
+    let state = listen();
+    let file = project().join("notes.md");
+
+    let mut client = OpenClient::connect(&state)
+        .unwrap_or_else(|e| panic!("OpenClient::connect({}) failed: {e:?}", state.display()));
+    client
+        .set_read_timeout(Some(WAIT))
+        .expect("set_read_timeout failed");
+    client
+        .send(&OpenRequest {
+            path: Some(file.clone()),
+            wait: true,
+            tab_id: None,
+        })
+        .expect("send failed");
+    assert_eq!(
+        client.read_reply().expect("read_reply failed"),
+        Some(OpenReply::Taken),
+        "premise: the listener must take a wait for a file"
+    );
+    let waited = drain_items(1);
+    send(&state, &request(Some(file.clone()), None));
+    let plain = drain_items(1);
+    wolf_ffi_open_stop();
+
+    assert_eq!(
+        (waited.len(), plain.len()),
+        (1, 1),
+        "premise: the wait and the plain request must each drain as one item"
+    );
+    assert!(
+        waited[0].waits(),
+        "the wait for {} must drain as an item that holds its wait; false means the bridge \
+         dropped the OpenWait, so the command is answered 1 before the file even opens",
+        file.display()
+    );
+    assert!(
+        !plain[0].waits(),
+        "a plain request must drain as an item holding no wait; true means waits() does not \
+         read the item's wait, so a plain request would be handed to wait_on"
+    );
+    drop(waited);
+    drop(client);
 }

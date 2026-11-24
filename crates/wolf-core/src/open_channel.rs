@@ -5,9 +5,10 @@
 //! [`OpenClient`] is the command's side. [`OpenListener`] is the app's: one per process, on
 //! std threads rather than a core's runtime, since every core belongs to a tab that can close.
 //! It queues each request it takes and calls its [`WakeFn`], and the front-end drains the queue
-//! on the wake, as it drains [`crate::WolfCore::drain_commands`].
+//! on the wake, as it drains [`crate::WolfCore::drain_commands`]. A wait drains holding its
+//! connection as an [`OpenWait`], which answers the command when the wait ends.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fs::{self, Permissions};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::fd::AsRawFd;
@@ -203,16 +204,156 @@ impl OpenClient {
     }
 }
 
+/// The app's end of a `wolf --wait` connection, which answers the command once with how the
+/// wait ended.
+///
+/// Dropping an unended wait answers `1`, so a wait lost with its tab, its core or the app ends
+/// the command rather than leaving it hanging. Write errors are ignored: a command that has gone
+/// needs no answer.
+pub struct OpenWait {
+    stream: Option<UnixStream>,
+}
+
+impl OpenWait {
+    /// Answers the command with [`OpenReply::WaitEnded`] carrying `status`, then closes.
+    pub fn end(mut self, status: i32) {
+        self.finish(status);
+    }
+
+    /// Whether the command still holds its end of the connection. It never blocks.
+    #[must_use]
+    pub fn is_connected(&self) -> bool {
+        let Some(stream) = &self.stream else {
+            return false;
+        };
+        let mut fd = libc::pollfd {
+            fd: stream.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: `fd` is one valid entry whose descriptor outlives the call.
+        let rc = unsafe { libc::poll(&mut fd, 1, 0) };
+        // Nothing to read, or a failed poll: no sign of a hang-up.
+        if rc <= 0 {
+            return true;
+        }
+        if fd.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
+            return false;
+        }
+        let mut byte = 0u8;
+        // SAFETY: `byte` is valid for the one byte asked for; the peek consumes nothing.
+        let read = unsafe {
+            libc::recv(
+                stream.as_raw_fd(),
+                std::ptr::addr_of_mut!(byte).cast(),
+                1,
+                libc::MSG_PEEK | libc::MSG_DONTWAIT,
+            )
+        };
+        read != 0
+    }
+
+    fn finish(&mut self, status: i32) {
+        if let Some(mut stream) = self.stream.take() {
+            write_reply(&mut stream, &OpenReply::WaitEnded { status });
+        }
+    }
+}
+
+impl Drop for OpenWait {
+    fn drop(&mut self) {
+        self.finish(1);
+    }
+}
+
+impl std::fmt::Debug for OpenWait {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenWait")
+            .field("ended", &self.stream.is_none())
+            .finish()
+    }
+}
+
+/// A request the listener took, with its [`OpenWait`] when the request waits.
+#[derive(Debug)]
+pub struct TakenRequest {
+    /// The request as the command sent it.
+    pub request: OpenRequest,
+    /// The connection to answer when the wait ends; `None` for a request that does not wait.
+    pub wait: Option<OpenWait>,
+}
+
+/// The waits a core holds, keyed by the id its Neovim reports them by.
+///
+/// Each method removes under the lock and ends or drops after releasing it, so no reply is
+/// written with the lock held.
+#[derive(Clone, Default)]
+pub(crate) struct WaitRegistry {
+    inner: Arc<Mutex<WaitTable>>,
+}
+
+#[derive(Default)]
+struct WaitTable {
+    next: u64,
+    waits: HashMap<u64, OpenWait>,
+}
+
+impl WaitRegistry {
+    /// Holds `wait` and returns its id; ids start at 1 in each registry.
+    pub(crate) fn insert(&self, wait: OpenWait) -> u64 {
+        let mut table = self.inner.lock();
+        table.next += 1;
+        let id = table.next;
+        table.waits.insert(id, wait);
+        id
+    }
+
+    /// Ends wait `id` with `status`; an unknown id is a no-op.
+    pub(crate) fn end(&self, id: u64, status: i32) {
+        let wait = self.inner.lock().waits.remove(&id);
+        if let Some(wait) = wait {
+            wait.end(status);
+        }
+    }
+
+    /// The ids among `ids` this registry holds whose command is still connected. A held wait
+    /// whose command hung up is dropped.
+    pub(crate) fn live(&self, ids: &[u64]) -> Vec<u64> {
+        let mut live = Vec::new();
+        let mut gone = Vec::new();
+        {
+            let mut table = self.inner.lock();
+            for id in ids {
+                match table.waits.get(id) {
+                    Some(wait) if wait.is_connected() => live.push(*id),
+                    Some(_) => gone.extend(table.waits.remove(id)),
+                    None => {}
+                }
+            }
+        }
+        drop(gone);
+        live
+    }
+
+    /// Drops every held wait, so each answers `1`.
+    pub(crate) fn end_all(&self) {
+        let waits: Vec<OpenWait> = self.inner.lock().waits.drain().map(|(_, w)| w).collect();
+        drop(waits);
+    }
+}
+
 /// What the listener's threads share with it.
 struct Shared {
-    queue: Mutex<VecDeque<OpenRequest>>,
+    queue: Mutex<VecDeque<TakenRequest>>,
     wake: WakeFn,
 }
 
 /// The app's end: a listening socket whose taken requests a front-end drains on a wake.
 ///
 /// Each connection is served on a thread of its own, so a client that stalls holds up no
-/// other. Dropping the listener stops it and removes its socket file, unless another listener
+/// other. A plain request is queued before its `Taken` reply. A wait is answered `Taken` first
+/// and queued after, so its final reply can never precede `Taken`; a drain right after a wait's
+/// `Taken` may miss it until the next wake. Dropping the listener stops it and removes its socket file, unless another listener
 /// has replaced that file since.
 pub struct OpenListener {
     shared: Arc<Shared>,
@@ -231,7 +372,12 @@ impl OpenListener {
     /// A socket whose connect is refused is stale, and is replaced. A live listener's socket is
     /// [`OpenChannelError::InUse`]. Any other connect failure, or a file at the path that is not
     /// a socket, is [`OpenChannelError::Io`]; neither removes the file.
+    ///
+    /// `bind` ignores `SIGPIPE` for the whole process, as [`crate::WolfCore::start`] does, since
+    /// a reply can go to a command that has gone before any core started.
     pub fn bind(state_dir: &Path, wake: WakeFn) -> Result<OpenListener, OpenChannelError> {
+        // SAFETY: setting a disposition to `SIG_IGN` installs no handler.
+        unsafe { libc::signal(libc::SIGPIPE, libc::SIG_IGN) };
         let socket = open_socket_path(state_dir)?;
         fs::create_dir_all(state_dir)?;
         if let Ok(meta) = fs::symlink_metadata(&socket) {
@@ -269,10 +415,20 @@ impl OpenListener {
         })
     }
 
-    /// The requests taken since the last drain, in arrival order.
+    /// The requests taken since the last drain, in arrival order, each with its wait.
+    #[must_use]
+    pub fn drain_taken(&self) -> Vec<TakenRequest> {
+        self.shared.queue.lock().drain(..).collect()
+    }
+
+    /// The requests taken since the last drain, in arrival order. Every wait among them is
+    /// dropped, so each of those commands is answered `1`.
     #[must_use]
     pub fn drain_requests(&self) -> Vec<OpenRequest> {
-        self.shared.queue.lock().drain(..).collect()
+        self.drain_taken()
+            .into_iter()
+            .map(|taken| taken.request)
+            .collect()
     }
 
     /// The socket path, as [`open_socket_path`] made it.
@@ -348,15 +504,34 @@ fn serve(mut stream: UnixStream, shared: &Shared) {
     if ready.is_err() {
         return;
     }
-    let reply = match read_request(&stream) {
-        Ok(request) => {
-            shared.queue.lock().push_back(request);
-            (shared.wake)();
-            OpenReply::Taken
+    match read_request(&stream) {
+        Ok(request) if request.wait => {
+            write_reply(&mut stream, &OpenReply::Taken);
+            let wait = OpenWait {
+                stream: Some(stream),
+            };
+            push(shared, request, Some(wait));
         }
-        Err(message) => OpenReply::Refused { message },
-    };
-    if let Ok(mut line) = serde_json::to_vec(&reply) {
+        Ok(request) => {
+            push(shared, request, None);
+            write_reply(&mut stream, &OpenReply::Taken);
+        }
+        Err(message) => write_reply(&mut stream, &OpenReply::Refused { message }),
+    }
+}
+
+/// Queues `request` with `wait`, then wakes the front-end.
+fn push(shared: &Shared, request: OpenRequest, wait: Option<OpenWait>) {
+    shared
+        .queue
+        .lock()
+        .push_back(TakenRequest { request, wait });
+    (shared.wake)();
+}
+
+/// Writes `reply` as one line, ignoring a failure: the command may have gone.
+fn write_reply(stream: &mut UnixStream, reply: &OpenReply) {
+    if let Ok(mut line) = serde_json::to_vec(reply) {
         line.push(b'\n');
         let _ = stream.write_all(&line);
     }
@@ -384,8 +559,8 @@ fn read_request(stream: &UnixStream) -> Result<OpenRequest, String> {
     {
         return Err("the request's path is not absolute".to_owned());
     }
-    if request.wait {
-        return Err("this Wolf does not support --wait".to_owned());
+    if request.wait && !matches!(request.target(), OpenTarget::File(_)) {
+        return Err("--wait needs a file".to_owned());
     }
     Ok(request)
 }

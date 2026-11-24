@@ -182,10 +182,10 @@ use webkit6::prelude::{PolicyDecisionExt, WebViewExt};
 
 use wolf_core::app_state::{Node, TabContent};
 use wolf_core::{
-    CursorShape, InputEvent, LayoutIntent, MouseAction, MouseButton, MouseEvent, PaneStatus,
-    PreviewInfo, Rgb, ScrollEvent, Snapshot, SplitOrientation, TerminalCommand, TerminalId,
-    TerminalMouseEvent, TerminalMouseKind, TerminalScrollEvent, TerminalTarget, ToastChunk,
-    WindowCursor, WolfCore,
+    CursorShape, InputEvent, LayoutIntent, MouseAction, MouseButton, MouseEvent, OpenWait,
+    PaneStatus, PreviewInfo, Rgb, ScrollEvent, Snapshot, SplitOrientation, TerminalCommand,
+    TerminalId, TerminalMouseEvent, TerminalMouseKind, TerminalScrollEvent, TerminalTarget,
+    ToastChunk, WindowCursor, WolfCore,
 };
 
 use crate::cmdline_ui::{self, PumView, ToastView};
@@ -675,7 +675,8 @@ struct PaneInner {
     pending_terminal_restore: RefCell<Option<Vec<TerminalRestore>>>,
     /// Files opened from outside Wolf ([`PaneHandle::open_file`]), in arrival order, placed by
     /// [`Self::run_pending_file_opens`]. A restart reset keeps them, so they land after it.
-    pending_file_opens: RefCell<VecDeque<PathBuf>>,
+    /// Each keeps its `wolf --wait`, if any, for the core once the file is placed.
+    pending_file_opens: RefCell<VecDeque<(PathBuf, Option<OpenWait>)>>,
     /// The pane a placed file made active, with Neovim's current window when it was asked to
     /// move. [`Self::update_active_pane`] keeps that pane until Neovim's window moves.
     pending_focus: Cell<Option<(PaneId, Option<i64>)>>,
@@ -814,14 +815,23 @@ impl PaneInner {
             return;
         }
         loop {
-            let Some(path) = self.pending_file_opens.borrow().front().cloned() else {
+            // Checked before the pop: an `OpenWait` cannot be cloned back if the gather refuses.
+            if self.pending_file_opens.borrow().is_empty() {
                 return;
-            };
+            }
             let pane_layout::LayoutGather::Ready(live) = self.layout_snapshot() else {
                 return;
             };
-            self.pending_file_opens.borrow_mut().pop_front();
+            let Some((path, wait)) = self.pending_file_opens.borrow_mut().pop_front() else {
+                return;
+            };
             self.place_file(&path, live);
+            // Even after a placement that returned early: Neovim answers 1 when no buffer shows it.
+            if let Some(wait) = wait {
+                if let Some(core) = self.core.borrow().as_ref() {
+                    core.wait_on(&path, wait);
+                }
+            }
         }
     }
 
@@ -4460,9 +4470,13 @@ impl PaneHandle {
     /// Queues `path`, a file opened from outside Wolf, for this tab's next ready wake, which
     /// places it by `specs/cli-and-file-open.md` §5.2 ([`PaneInner::run_pending_file_opens`]).
     /// `path` is in [`wolf_core::OpenTarget::File`]'s form; a missing file opens as a new
-    /// buffer. The caller wakes the tab.
-    pub fn open_file(&self, path: PathBuf) {
-        self.inner.pending_file_opens.borrow_mut().push_back(path);
+    /// buffer. `wait`, a `wolf --wait` for it, goes to this tab's core once the file is placed.
+    /// The caller wakes the tab.
+    pub fn open_file(&self, path: PathBuf, wait: Option<OpenWait>) {
+        self.inner
+            .pending_file_opens
+            .borrow_mut()
+            .push_back((path, wait));
     }
 
     /// Hands this tab the terminal restore a crash-restart computed, replacing any earlier

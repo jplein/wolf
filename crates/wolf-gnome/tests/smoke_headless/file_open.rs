@@ -28,6 +28,10 @@
 //! | `32` | a terminal's shell never wrote its readback; the log names which |
 //! | `40` | the app never wrote its ready file |
 //! | `41` | the ready file of an app `wolf` launched names a pid that is gone |
+//! | `51` | S5's leg 1: the `git commit` typed into the terminal never wrote its status |
+//! | `52` | S5's leg 2: the `git commit` from the scenario shell was still running at its bound |
+//! | `53` | S5's leg 3: `wolf --wait` was still running at its bound |
+//! | `54` | S5's leg 3: the app still ran after `:wq` on tab 1's last pane closed its window |
 
 use super::open_folder::{canonical, edit, make_dir, plant};
 use super::recovery::with_nvim_pid_helper;
@@ -89,6 +93,23 @@ fo_shell() {
     wtype -k Return
 }
 
+# fo_wait_pid <pid> <code> <label>: waits for a child of this shell to exit, leaving its status
+# in fo_rc, and exits <code> when it still runs after FILE_TRIES.
+fo_wait_pid() {
+    _fw_n=0
+    while kill -0 "$1" 2>/dev/null; do
+        _fw_n=$((_fw_n + 1))
+        if [ "$_fw_n" -ge "$FILE_TRIES" ]; then
+            kill "$1" 2>/dev/null
+            echo "wolf-gnome file-open smoke: $3 (pid $1) still runs after $FILE_TRIES tries." >&2
+            exit "$2"
+        fi
+        sleep "$WAIT_INTERVAL"
+    done
+    fo_rc=0
+    wait "$1" || fo_rc=$?
+}
+
 fo_read_once() {
     _fo_t=0
     while [ "$_fo_t" -lt "$READ_FILE_TRIES" ]; do
@@ -135,10 +156,12 @@ app_pid=$!
 wait_ready "$app_pid" 11 "wolf-gnome file-open smoke"
 "#;
 
-/// The quit every scenario ends with: `Ctrl+Shift+Q`, the exit status when the app is this
-/// shell's child, and the save frozen into `$FO_STATE_COPY`.
+/// The quit every scenario ends with: `Ctrl+Shift+Q` unless the app has already exited, the exit
+/// status when the app is this shell's child, and the save frozen into `$FO_STATE_COPY`.
 const FO_QUIT: &str = r#"
-wtype -M ctrl -M shift -k q -m shift -m ctrl
+if kill -0 "$app_pid" 2>/dev/null; then
+    wtype -M ctrl -M shift -k q -m shift -m ctrl
+fi
 tries=0
 gone=0
 while [ "$tries" -lt "$QUIT_TRIES" ]; do
@@ -220,6 +243,59 @@ wait_nvim_count 2 21 "after the cold launch restored the planted session"
 fo_probe "$FO_READ" "$FO_A" "$FO_FILE" "the front window after the cold launch"
 "#;
 
+/// S5's body: leg 1 commits from tab 2's terminal, leg 2 commits from this shell and aborts
+/// with `:cq`, and leg 3 waits on a file of tab 1 and closes its last pane with `:wq`, which
+/// closes the window and so ends the app. Each leg leaves its evidence in files for the test.
+const FO_WAIT_BODY: &str = r#"
+wait_nvim_count 2 21 "after the launch restored two tabs"
+sleep "$SETTLE"
+
+fo_shell "GIT_EDITOR='$WOLF_CMD --wait' git commit --allow-empty -q; echo \"rc=\$?\" > '$FO_W_RC1'"
+sleep "$SETTLE"
+fo_probe "$FO_W_READ1" "$FO_R" "$FO_R/.git/COMMIT_EDITMSG" "leg 1's message file"
+wtype -- "ggO$FO_W_MSG1"
+wtype -k Escape
+wtype -- ":wq"
+wtype -k Return
+wait_file_contains "$FO_W_RC1" "rc=" "leg 1's git commit" || exit 51
+git -C "$FO_R" log -1 --format=%s > "$FO_W_SUBJECT1"
+git -C "$FO_R" rev-list --count HEAD > "$FO_W_COUNT1"
+
+GIT_EDITOR="$WOLF_CMD --wait" git -C "$FO_R" commit --allow-empty -q &
+fo_git_pid=$!
+sleep "$SETTLE"
+fo_probe "$FO_W_READ2" "$FO_R" "$FO_R/.git/COMMIT_EDITMSG" "leg 2's message file"
+wtype -- "ggO$FO_W_MSG2"
+wtype -k Escape
+wtype -- ":w"
+wtype -k Return
+wtype -- ":cq"
+wtype -k Return
+fo_wait_pid "$fo_git_pid" 52 "leg 2's git commit"
+echo "rc=$fo_rc" > "$FO_W_RC2"
+git -C "$FO_R" rev-list --count HEAD > "$FO_W_COUNT2"
+
+"$WOLF_CMD" --wait "$FO_W_NOTES" &
+fo_wolf_pid=$!
+sleep "$SETTLE"
+fo_probe "$FO_W_READ3" "$FO_A" "$FO_W_NOTES" "leg 3's file"
+wtype -- "ggO$FO_W_TEXT3"
+wtype -k Escape
+wtype -- ":wq"
+wtype -k Return
+fo_wait_pid "$fo_wolf_pid" 53 "leg 3's wolf --wait"
+echo "rc=$fo_rc" > "$FO_W_RC3"
+_fo_n=0
+while kill -0 "$app_pid" 2>/dev/null; do
+    _fo_n=$((_fo_n + 1))
+    if [ "$_fo_n" -ge "$QUIT_TRIES" ]; then
+        echo "wolf-gnome file-open smoke: :wq on tab 1's last pane left the app running." >&2
+        exit 54
+    fi
+    sleep "$WAIT_INTERVAL"
+done
+"#;
+
 /// What one file-open scenario is given.
 struct FileOpenRun<'a> {
     smoke: &'a str,
@@ -274,10 +350,12 @@ fn run_file_open(run: &FileOpenRun<'_>, runtime_dir: &CageRuntime<'_>) -> PathBu
          the keys reached no Neovim, as when focus stayed in a terminal pane. Exit 22: the \
          Neovim count changed after a request, so a window or tab was added where a tab should \
          have been reused. Exit 21: the launch did not restore the planted tabs, and nothing \
-         below is about opening files. Exit 32: a terminal's shell wrote no readback. Exit 11, \
-         40 or 41: the app never became ready. Exit 12, 13 or 16: the quit failed or left no \
-         save. The cage log in the runtime dir carries the scenario's own lines, each readback \
-         that did not match among them."
+         below is about opening files. Exit 32: a terminal's shell wrote no readback. Exit 51 \
+         to 53: a wolf --wait leg's git or wolf never finished, so nothing ended its wait. Exit \
+         54: :wq on a tab's last pane did not close its window. Exit 11, 40 or 41: the app never \
+         became ready. Exit 12, 13 or 16: the quit failed or left no save. The cage log in the \
+         runtime dir carries the scenario's own lines, each readback that did not match among \
+         them."
     );
     frozen
 }
@@ -1049,5 +1127,213 @@ fn a_cold_launch_restores_the_session_before_the_file_under_cage() {
         tab_tails(saved_tab(SMOKE, &saved, &front)),
         Some(vec![tail(&a1), tail(&file)]),
         "{SMOKE}: A's tab must save the file in the active pane 1, pane 0 untouched"
+    );
+}
+
+/// S5's repository, a sibling of the launch cwd.
+const FO_WAIT_REPO_NAME: &str = "fogolf";
+
+/// What S5's legs type: leg 1's commit message, leg 2's abandoned one, and leg 3's text.
+const FO_WAIT_MSG1: &str = "landed from a wolf terminal";
+const FO_WAIT_MSG2: &str = "abandoned with cq";
+const FO_WAIT_TEXT3: &str = "typed before the last pane closed";
+
+/// Runs `git args` in `dir` with no system or global configuration, asserting success.
+fn fo_git(smoke: &str, dir: &str, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .args([
+            "-c",
+            "init.defaultBranch=main",
+            "-c",
+            "commit.gpgsign=false",
+        ])
+        .args(args)
+        .current_dir(dir)
+        .envs(fo_git_env())
+        .output()
+        .unwrap_or_else(|e| panic!("{smoke}: failed to spawn git: {e}"));
+    assert!(
+        out.status.success(),
+        "{smoke}: `git {args:?}` in {dir} failed with {}: {}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// The environment every `git` in S5 runs with, the app's terminals included: no system or
+/// global configuration, and a fixed identity.
+fn fo_git_env() -> Vec<(String, String)> {
+    [
+        ("GIT_CONFIG_NOSYSTEM", "1"),
+        ("GIT_CONFIG_GLOBAL", "/dev/null"),
+        ("GIT_AUTHOR_NAME", "Wolf Smoke"),
+        ("GIT_AUTHOR_EMAIL", "wolf-smoke@example.invalid"),
+        ("GIT_COMMITTER_NAME", "Wolf Smoke"),
+        ("GIT_COMMITTER_EMAIL", "wolf-smoke@example.invalid"),
+    ]
+    .into_iter()
+    .map(|(name, value)| (name.to_owned(), value.to_owned()))
+    .collect()
+}
+
+/// **`wolf --wait` serves `git commit` from a Wolf terminal and from outside Wolf, and reports
+/// `0` for `:wq` on a tab's last pane.** §6.
+///
+/// Planted: one window. Tab 1 is on the launch cwd `A` with one edit pane; tab 2 is on the
+/// repository `R`, a sibling of `A` with one commit, as `Vertical[edit X, terminal]` focused on
+/// the terminal, and it is selected.
+///
+/// 1. Typed into tab 2's terminal: `GIT_EDITOR='<wolf> --wait' git commit`. The message file
+///    lands in the edit pane by rule 2; the scenario types a message and `:wq`, which closes
+///    that pane only.
+/// 2. From the scenario shell: `GIT_EDITOR="<wolf> --wait" git -C R commit &`. The file lands
+///    in a pane split off the whole tab; the scenario types a message, `:w` and `:cq`.
+/// 3. From the scenario shell: `wolf --wait A/notes.md &`. It lands in tab 1, which it selects;
+///    the scenario types a line and `:wq` on tab 1's last pane. That closes the window
+///    (`specs/command-lifecycle.md`), its only one, so the app exits before the quit.
+///
+/// ## Observables
+///
+/// Leg 1's commit exits 0 and `R`'s newest commit has the typed subject. Leg 2's commit exits
+/// non-zero and `R`'s commit count is what leg 1 left. Leg 3's `wolf` exits 0 and `notes.md`
+/// starts with the typed line. Each leg's readback first shows its file landed.
+///
+/// ## Falsifiers
+///
+/// | # | edit | predicted red |
+/// | --- | --- | --- |
+/// | S5a | `handle_open_requests` drains with `drain_requests` | leg 1, no commit |
+/// | S5b | `run_pending_file_opens` drops the wait instead of `wait_on` | leg 1 |
+/// | S5c | `WolfCquit`'s waited branch ends with `0` | leg 2 commits |
+/// | S5d | delete the `end_waits` loop before `close_window` | leg 3 exits 1 |
+#[test]
+fn wolf_wait_serves_git_and_the_last_pane_under_cage() {
+    const SMOKE: &str = "wolf_wait_serves_git_and_the_last_pane_under_cage";
+
+    let runtime_dir = require_smoke_env();
+    let cwd = make_temp_cwd();
+    let a = canonical(SMOKE, &cwd);
+    let r = make_dir(SMOKE, smoke_home(&cwd), FO_WAIT_REPO_NAME);
+    fo_git(SMOKE, &r, &["init", "-q"]);
+    fo_git(SMOKE, &r, &["commit", "-q", "--allow-empty", "-m", "seed"]);
+    let a_shown = write_file(SMOKE, &a, "alphashown.md", "# alpha shown");
+    let notes = write_file(SMOKE, &a, "notes.md", "# alpha notes");
+    let r_shown = write_file(SMOKE, &r, "golfshown.md", "# golf shown");
+    let message_file = path_in(&r, ".git/COMMIT_EDITMSG");
+
+    let tabs = vec![
+        fo_tab(&a, Some(edit(&a_shown)), Some(0), None),
+        fo_tab(
+            &r,
+            Some(split(
+                PaneOrientation::Vertical,
+                vec![0.5, 0.5],
+                vec![edit(&r_shown), terminal(&r)],
+            )),
+            Some(1),
+            None,
+        ),
+    ];
+    plant(
+        SMOKE,
+        &smoke_state_dir(&cwd),
+        &[WindowState {
+            windows: vec![fo_window(tabs, 1)],
+        }],
+    );
+
+    let names = [
+        "FO_W_READ1",
+        "FO_W_READ2",
+        "FO_W_READ3",
+        "FO_W_RC1",
+        "FO_W_RC2",
+        "FO_W_RC3",
+        "FO_W_SUBJECT1",
+        "FO_W_COUNT1",
+        "FO_W_COUNT2",
+    ];
+    let evidence: Vec<PathBuf> = names
+        .iter()
+        .map(|name| runtime_dir.join(format!("{}.txt", name.to_lowercase())))
+        .collect();
+    let mut env = fo_git_env();
+    for (name, path) in names.iter().zip(&evidence) {
+        clear_evidence(path, SMOKE);
+        env.push((var(name), path.to_string_lossy().into_owned()));
+    }
+    env.extend([
+        (var("FO_A"), a.clone()),
+        (var("FO_R"), r.clone()),
+        (var("FO_W_NOTES"), notes.clone()),
+        (var("FO_W_MSG1"), FO_WAIT_MSG1.to_owned()),
+        (var("FO_W_MSG2"), FO_WAIT_MSG2.to_owned()),
+        (var("FO_W_TEXT3"), FO_WAIT_TEXT3.to_owned()),
+    ]);
+    let run = FileOpenRun {
+        smoke: SMOKE,
+        cwd: &cwd,
+        home: None,
+        launch: true,
+        body: FO_WAIT_BODY,
+        env,
+        frozen_name: "wolf_gnome_file_open_wait_state",
+    };
+    run_file_open(&run, &runtime_dir);
+    let [read1, read2, read3, rc1, rc2, rc3, subject1, count1, count2] =
+        [0, 1, 2, 3, 4, 5, 6, 7, 8].map(|i| evidence[i].as_path());
+
+    let read = read_probe(SMOKE, read1);
+    assert_eq!(
+        (read.cwd.as_str(), read.path.as_str()),
+        (r.as_str(), message_file.as_str()),
+        "{SMOKE}: premise: leg 1's message file must land in tab 2, on R. Readback: {read:?}"
+    );
+    assert_eq!(
+        (read_trimmed(rc1, SMOKE), read_trimmed(subject1, SMOKE)),
+        ("rc=0".to_owned(), FO_WAIT_MSG1.to_owned()),
+        "{SMOKE}: leg 1's git commit, typed into tab 2's terminal, must exit 0 and commit the \
+         typed subject once :wq closes its pane. rc=1 with the subject seed means wolf --wait \
+         exited 1, so the wait was dropped between the listener and the tab's core: drained \
+         without its wait, or the pane placed the file and dropped it"
+    );
+
+    let read = read_probe(SMOKE, read2);
+    assert_eq!(
+        (read.cwd.as_str(), read.path.as_str()),
+        (r.as_str(), message_file.as_str()),
+        "{SMOKE}: premise: leg 2's message file must land in tab 2, on R. Readback: {read:?}"
+    );
+    let rc = read_trimmed(rc2, SMOKE);
+    assert_ne!(
+        rc, "rc=0",
+        "{SMOKE}: leg 2's git commit must fail once :cq ends its editor with 1; rc=0 means :cq \
+         ended the wait as a close"
+    );
+    assert_eq!(
+        read_trimmed(count2, SMOKE),
+        read_trimmed(count1, SMOKE),
+        "{SMOKE}: leg 2's aborted commit must leave R's commit count where leg 1 left it; one \
+         more means the message written with :w was committed"
+    );
+
+    let read = read_probe(SMOKE, read3);
+    assert_eq!(
+        (read.cwd.as_str(), read.path.as_str()),
+        (a.as_str(), notes.as_str()),
+        "{SMOKE}: premise: leg 3's file must land in tab 1, on A. Readback: {read:?}"
+    );
+    assert_eq!(
+        read_trimmed(rc3, SMOKE),
+        "rc=0",
+        "{SMOKE}: leg 3's wolf --wait must exit 0 for :wq on tab 1's last pane, though that \
+         closes the window; rc=1 means the window's close reached the command before the \
+         buffer's"
+    );
+    let written = std::fs::read_to_string(&notes)
+        .unwrap_or_else(|e| panic!("{SMOKE}: failed to read {notes}: {e}"));
+    assert!(
+        written.starts_with(FO_WAIT_TEXT3),
+        "{SMOKE}: leg 3's :wq must have written the typed line to {notes}; it holds {written:?}"
     );
 }
