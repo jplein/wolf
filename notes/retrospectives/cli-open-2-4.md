@@ -1,0 +1,29 @@
+# Retrospective: `wolf --wait` end to end on core, `init.lua`, macOS and GNOME
+
+Last verified at commit `645a4e467754f90a8f24fd9895dc190154d63f62`.
+
+The task implemented §6 of `specs/cli-and-file-open.md`, the last of its series: a waited buffer tracked in `runtime/nvim/init.lua`, `:cq` on it, and the wait carried from the open channel through `wolf-ffi` and both front-ends. It took one round of five invocations, for $31.02 and 80 agent-minutes, and landed as `036ade8` and `645a4e4`. There was no rework: review 1 approved, and both gates exited 0 on both workers at their first run.
+
+## What went well
+
+- **Plan 1 named every new API the tests call, so tests and code met at the first try.** `test-writer-1`'s Bazel build failed only on `TakenRequest`, `OpenWait`, `drain_taken`, `wait_on` and `FfiOpenItem::waits`, which let it type-check against stubs in two Linux commands. `coder-1`'s first run of the new `wolf_wait` target passed all 15 tests (its Linux command 3). This has held across the series ([cli-open-2-1](cli-open-2-1.md)).
+- **The input pump's ordering carried the wait with no new mechanism.** `InputEvent::RegisterWait` is classified as state, so it queues behind the `Open` that placed the file and survives a restart. Notifications on the one Neovim channel arrive in order, so `:wq` on a tab's last pane answers `0` before `close_window` acts. Review 1 §2 checked both and found no defect.
+- **The earlier tasks' fixtures took the new tests unchanged.** S5 extended `crates/wolf-gnome/tests/smoke_headless/file_open.rs`, and the only shared change was making `FO_QUIT` skip its key once the app has exited. M1 reused `LiveCore` and `TerminalViewFixture` in `OpenRequestFlowTests.swift`.
+- **Falsifiers on real Neovim stayed cheap.** `wolf_wait.rs` drives a real core, Neovim and `wolf` binary with `cargo test --exact`, so `coder-1` took 30 reds in six Linux commands (7 to 12), each restored and checksummed. Its whole invocation was $6.25 and 26 minutes.
+- **`--entry-words` let the writer see the budget before writing.** `technical-writer-1` ran `./tools/lint/markdown_check.sh --entry-words`, which `build.md` names, before its first edit. It found eleven entries already at 241 to 250 words, reported every cut and move, and the documentation gate passed at its first run.
+
+## What did not go well
+
+- **The README entries have no room left.** `api.rs`, `nvim.rs`, `input.rs`, `coordinator.rs`, `pane_view.rs`, `window.rs`, `AppDelegate.swift`, `PaneContainerView.swift`, `WolfWindowController.swift` and two test entries were at 241 to 250 words before the change. Four planned facts went to code comments or `notes/wolf-gnome/the-coordinator-and-its-windows.md` instead. Review 1 §5 found that a cut dropped "once" from the `pane_view.rs` entry, which carried part of its point.
+- **Another README crossed the size warning.** `crates/wolf-ffi/src/README.md` went to 50,603 bytes, joining six others in the documentation gate's warnings. They include `crates/wolf-gnome/tests/README.md` at 132,850 and `crates/wolf-gnome/src/README.md` at 99,046 bytes.
+- **The macOS pop-drain is written twice.** `AppDelegate.handleOpenRequests` and the test helper `OpenChannel.drainOwning` in `OpenRequestFlowTests.swift` each pop the drained items and reverse them. M1 runs only the copy, so no test reaches the app's code, which review 1 §3 and `coder-1`'s report both name. The rule that a drained item must be popped, or its wait ends, is held only by a comment and a warning in the FFI README.
+- **Running one XCTest method is still not in `build.md`.** `coder-1` found `--test_filter=OpenRequestFlowTests/<method>` by trying it, and listed the gap in its report. This is the fifth task to report it (see below).
+- **`ZZ` on a waited message file ends the wait with `1`.** Review 1 §5 found that `init.lua` does not route `ZZ` or `ZQ` through `do_quit`. On a tab's last pane, `ZZ` quits Neovim, Wolf restarts it as a crash, and a waiting `git commit` aborts. §6 of the spec names only `:q`, `:wq` and `:close`, so nothing in the task asked for it.
+- **Four notes were edited and kept their old SHA.** `notes/wolf-core-decisions.md`, `notes/wolf-macos-decisions.md`, `notes/wolf-gnome/the-coordinator-and-its-windows.md` and `notes/runtime/nvim/init.lua.md` changed. Neither `coder-1` nor `technical-writer-1` re-verified a whole file, as `CLAUDE.md` requires before a bump. [ghostty-4](ghostty-4.md) reported the same drift.
+
+## Recommendations
+
+1. **Split the over-budget READMEs.** This is recommendation 3 of [cli-open-2-3](cli-open-2-3.md), recommendation 4 of [followups-3](followups-3.md) and recommendation 5 of [pane-ui-5](pane-ui-5.md), come up again. It reaches beyond `wolf-gnome` now, to `crates/wolf-core/src/README.md`, `crates/wolf-ffi/src/README.md`, `Sources/WolfKeyMap/README.md` and `runtime/nvim/README.md`. Eleven entries here could not take one fact more without another moving out.
+2. **Move the pop-drain into `FileOpenSeam.swift`.** Give it one function that drains with `wolf_ffi_open_drain`, pops and returns `[FileOpenSeam.Request]` in arrival order. Call it from `AppDelegate.handleOpenRequests` and from `drainOwning`. M1 would then run the app's own drain, and the pop rule would live in code rather than in a comment.
+3. **Name `--test_filter=<Class>/<method>` in `build.md`.** This is recommendation 5 of [application-state-7](application-state-7.md), 2 of [nerd-font-2](nerd-font-2.md), 3 of [fixes-1](fixes-1.md) and 5 of [open-items-11](open-items-11.md), come up again. It is one line, and five coders have looked for it.
+4. **Decide `ZZ` and `ZQ` in §6 of `specs/cli-and-file-open.md`.** Say whether they close a waited buffer like `:wq` and `:q!`, and if so route them through `do_quit` in `runtime/nvim/init.lua`, with a `wolf_wait.rs` case. `ZZ` is a common way to leave a commit message, and today it aborts the commit on a tab's last pane.
