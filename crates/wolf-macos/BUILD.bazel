@@ -225,6 +225,13 @@ sh_test(
     data = [":Wolf"],
 )
 
+# Runs install_wolf.sh on a synthetic archive with a temporary HOME and a fake lsregister.
+sh_test(
+    name = "install_wolf_test",
+    srcs = ["install_wolf_test.sh"],
+    data = ["install_wolf.sh"],
+)
+
 swift_test(
     name = "WolfKeyMapTests",
     srcs = [

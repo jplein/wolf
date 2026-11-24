@@ -314,4 +314,12 @@ for icon in UTTypeIconFile UTTypeIcons; do
 done
 echo "PASS check (ac): $MD_UTI is imported as public.plain-text with md and markdown, not exported, with no icon"
 
-echo "PASS: Wolf.app bundles nvim/bin/nvim (executable), the markdown parser, the runtime tree, init.lua, the vendored orlando plugin, the vendored lighthouse colorscheme, the vendored nvim-treesitter + textobjects plugins, the curated compiled treesitter parsers, the JetBrains Mono fonts (4 TTFs + OFL.txt), the iA Writer Mono S fonts (4 TTFs + LICENSE.md), Symbols Nerd Font Mono (TTF + LICENSE + README.md), rg/rg (executable), terminfo/78/xterm-ghostty, bin/wolf (executable), and the Markdown and folder document types"
+# (ad), (ae) The bundle version outranks every copy registered before the document types existed.
+SHORT_VERSION=$(plist_get CFBundleShortVersionString || true)
+[ "$SHORT_VERSION" = "0.2.0" ] || fail "CFBundleShortVersionString must be 0.2.0, so Launch Services prefers this copy over stale ones; it has '$SHORT_VERSION'"
+echo "PASS check (ad): CFBundleShortVersionString is 0.2.0"
+BUNDLE_VERSION=$(plist_get CFBundleVersion || true)
+[ "$BUNDLE_VERSION" = "2" ] || fail "CFBundleVersion must be 2, so Launch Services prefers this copy over stale ones; it has '$BUNDLE_VERSION'"
+echo "PASS check (ae): CFBundleVersion is 2"
+
+echo "PASS: Wolf.app bundles nvim/bin/nvim (executable), the markdown parser, the runtime tree, init.lua, the vendored orlando plugin, the vendored lighthouse colorscheme, the vendored nvim-treesitter + textobjects plugins, the curated compiled treesitter parsers, the JetBrains Mono fonts (4 TTFs + OFL.txt), the iA Writer Mono S fonts (4 TTFs + LICENSE.md), Symbols Nerd Font Mono (TTF + LICENSE + README.md), rg/rg (executable), terminfo/78/xterm-ghostty, bin/wolf (executable), the Markdown and folder document types, and version 0.2.0 (2)"

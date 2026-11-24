@@ -9,6 +9,8 @@ fail() {
   exit 1
 }
 
+warn() { echo "install_wolf: warning: $1" >&2; }
+
 [ "$#" -eq 1 ] || fail "usage: install_wolf.sh <path-to-Wolf.zip>"
 ARCHIVE="$1"
 
@@ -17,6 +19,8 @@ ARCHIVE="$1"
 
 DEST_DIR="$HOME/Applications"
 DEST="$DEST_DIR/Wolf.app"
+# WOLF_LSREGISTER replaces the tool, so a test never registers with the real database.
+LSREGISTER="${WOLF_LSREGISTER:-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister}"
 
 command -v ditto >/dev/null 2>&1 || fail "'ditto' is required but not on PATH"
 
@@ -40,3 +44,11 @@ fi
 mv "$NEW_APP" "$DEST" || fail "could not move the new bundle into $DEST"
 
 echo "install_wolf: installed $DEST"
+
+# Force Launch Services to re-read the bundle's declarations; a failure only warns.
+# See notes/crates/wolf-macos/install_wolf.sh.md#launch-services-registration
+if [ ! -x "$LSREGISTER" ]; then
+  warn "lsregister not found at '$LSREGISTER'; Finder may not offer Wolf until it is registered"
+elif ! "$LSREGISTER" -f "$DEST"; then
+  warn "lsregister could not register $DEST; Finder may not offer Wolf until it is registered"
+fi
