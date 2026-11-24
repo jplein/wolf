@@ -982,3 +982,68 @@ fn git_commit_aborted_with_cq_makes_no_commit() {
     );
     core.shutdown().expect("shutdown failed");
 }
+
+/// W16: normal-mode `ZZ` on the tab's only window writes the typed line and ends the wait with
+/// `0`, as `:wq` does in W2, rather than quitting Neovim.
+#[test]
+fn zz_on_the_last_pane_exits_0() {
+    const TEXT: &str = "typed before ZZ on the last pane";
+    let case = new_case();
+    let file = case.write("msgsixteen.md", "# sixteen\n");
+    let (core, _waiter) = case.start_core();
+    let mut wolf = case.spawn_wait("msgsixteen.md");
+    case.open_waited(&core, &mut wolf);
+    let (shown, _, _) = case.current(&core);
+    assert_eq!(
+        shown,
+        file.display().to_string(),
+        "premise: msgsixteen.md must be current"
+    );
+
+    type_first_line(&core, TEXT);
+    type_str(&core, "ZZ");
+    shut_down_on_close_window(core, "ZZ");
+    wolf.assert_exits(
+        0,
+        "ZZ on the tab's last pane, then the tab's shutdown",
+        "1 means the wait ended as abnormal: Neovim quit on ZZ, or the shutdown came first.",
+    );
+    let written = std::fs::read_to_string(&file).expect("failed to read msgsixteen.md back");
+    assert!(
+        written.starts_with(TEXT),
+        "ZZ on a modified buffer must have written the typed line to msgsixteen.md; it holds \
+         {written:?}"
+    );
+}
+
+/// W17: normal-mode `ZQ` on the tab's only window discards the typed line and ends the wait
+/// with `0`, rather than quitting Neovim.
+#[test]
+fn zq_on_the_last_pane_exits_0() {
+    const TEXT: &str = "typed before ZQ on the last pane";
+    let case = new_case();
+    let file = case.write("msgseventeen.md", "# seventeen\n");
+    let (core, _waiter) = case.start_core();
+    let mut wolf = case.spawn_wait("msgseventeen.md");
+    case.open_waited(&core, &mut wolf);
+    let (shown, _, _) = case.current(&core);
+    assert_eq!(
+        shown,
+        file.display().to_string(),
+        "premise: msgseventeen.md must be current"
+    );
+
+    type_first_line(&core, TEXT);
+    type_str(&core, "ZQ");
+    shut_down_on_close_window(core, "ZQ");
+    wolf.assert_exits(
+        0,
+        "ZQ on the tab's last pane, then the tab's shutdown",
+        "1 means the wait ended as abnormal: Neovim quit on ZQ, or the shutdown came first.",
+    );
+    let written = std::fs::read_to_string(&file).expect("failed to read msgseventeen.md back");
+    assert_eq!(
+        written, "# seventeen\n",
+        "ZQ must discard the typed line and write nothing to msgseventeen.md"
+    );
+}

@@ -28,8 +28,11 @@ mod common;
 
 use std::time::{Duration, Instant};
 
-use common::{ch, key, poll_until, FlushWaiter, FLUSH_TIMEOUT, POLL_INTERVAL};
-use wolf_core::{Command, Key, MenuGroup, WolfCore, COMMAND_SPECS};
+use common::{
+    ch, key, poll_until, probe_values, settle_for, type_str, FlushWaiter, FLUSH_TIMEOUT,
+    POLL_INTERVAL,
+};
+use wolf_core::{Command, Key, Liveness, MenuGroup, WolfCore, COMMAND_SPECS};
 
 /// The outer/global grid id. Window content lives on grids `>= 2`; grid 1 is
 /// never a window grid in these scenarios.
@@ -47,6 +50,12 @@ const DOC: &str = "# Commands\nbody\n";
 /// Distinctive text inserted before writing in the `:wq` test, so we can prove the
 /// buffer's edited contents actually reached disk.
 const WQ_MARKER: &str = "wolfwqmarker";
+
+/// Text inserted before a normal-mode `ZZ`, absent from `DOC`, so only a write puts it on disk.
+const ZZ_MARKER: &str = "wolfzzmarker";
+
+/// Text inserted before a normal-mode `ZQ`, absent from `DOC`, so a write would show on disk.
+const ZQ_MARKER: &str = "wolfzqmarker";
 
 /// Polls `core.drain_commands()` until it yields a non-empty batch (or panics
 /// after `timeout`), returning the first non-empty drain. This is the
@@ -532,6 +541,150 @@ fn ex_qa_emits_close_window_when_multiple_panes() {
         commands.contains(&Command::CloseWindow),
         ":qa with multiple panes must close the WHOLE window (Command::CloseWindow), \
          not merely drop the pane count; got {commands:?}"
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// Inserts `text` at the cursor, returns to normal mode and waits for the edit's flush.
+fn insert_text(core: &WolfCore, waiter: &FlushWaiter, text: &str) {
+    core.send_input(ch('i'));
+    type_str(core, text);
+    core.send_input(key(Key::Esc));
+    waiter.wait_for_flush(core, FLUSH_TIMEOUT);
+}
+
+/// Polls `path` until it holds `marker`, failing with `what` after [`FLUSH_TIMEOUT`].
+fn wait_for_file_to_hold(path: &std::path::Path, marker: &str, what: &str) {
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    loop {
+        let contents = std::fs::read_to_string(path);
+        if matches!(&contents, Ok(text) if text.contains(marker)) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{what} must write {marker:?} to disk within {FLUSH_TIMEOUT:?}; the file reads \
+             {contents:?}. Unchanged means the key closed or quit without writing, or the buffer \
+             was never modified."
+        );
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// Asserts the captive Neovim is still `Alive` after [`SETTLE`], since `what` closed the last
+/// pane through `close_window` rather than by quitting Neovim.
+fn assert_alive_after_settle(core: &WolfCore, waiter: &FlushWaiter, what: &str) {
+    settle_for(waiter, SETTLE);
+    assert_eq!(
+        core.liveness(),
+        Liveness::Alive,
+        "{what} on the last pane must leave Neovim running. Dead means Neovim quit itself, \
+         the native key's crash, even though close_window drained; NotResponding means it hung."
+    );
+}
+
+/// `ZZ` on a MODIFIED sole pane behaves as `:x` there: it writes the buffer through `do_quit`,
+/// then fires `close_window`, and Neovim keeps running. Native `ZZ` would quit Neovim instead.
+#[test]
+fn zz_on_last_pane_writes_and_emits_close_window() {
+    let (core, waiter, file) = common::start_core_with_temp_md(DOC);
+    let path = file.path().to_path_buf();
+    wait_for_initial_window(&core, &waiter);
+
+    insert_text(&core, &waiter, ZZ_MARKER);
+    // Discard anything queued during setup so we observe only `ZZ`'s command.
+    let _ = core.drain_commands();
+
+    type_str(&core, "ZZ");
+    wait_for_file_to_hold(&path, ZZ_MARKER, "ZZ on a modified last pane");
+    let commands = drain_until_command(
+        &core,
+        FLUSH_TIMEOUT,
+        "CloseWindow from ZZ on the last pane; a timeout means Neovim quit instead",
+    );
+    assert!(
+        commands.contains(&Command::CloseWindow),
+        "ZZ must close the front-end window after writing; got {commands:?}"
+    );
+    assert_alive_after_settle(&core, &waiter, "ZZ");
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// `ZZ` on an UNMODIFIED sole pane writes nothing, as native `ZZ` does and unlike Wolf's `:x`,
+/// which always writes. The file is deleted from disk first, so any write would recreate it.
+#[test]
+fn zz_on_unmodified_last_pane_writes_nothing_and_emits_close_window() {
+    let (core, waiter, file) = common::start_core_with_temp_md(DOC);
+    let path = file.path().to_path_buf();
+    wait_for_initial_window(&core, &waiter);
+
+    file.close()
+        .expect("failed to delete the temp file from disk");
+    let probe_dir = tempfile::tempdir().expect("failed to create the probe dir");
+    let premise = probe_values(
+        &core,
+        &["&modified", "filereadable(expand('%:p'))"],
+        &probe_dir.path().join("probe.txt"),
+    );
+    assert_eq!(
+        premise,
+        ["0", "0"],
+        "premise: the buffer must be unmodified (first) and its file gone from disk (second)"
+    );
+    // Discard anything queued during setup so we observe only `ZZ`'s command.
+    let _ = core.drain_commands();
+
+    type_str(&core, "ZZ");
+    let commands = drain_until_command(
+        &core,
+        FLUSH_TIMEOUT,
+        "CloseWindow from ZZ on an unmodified last pane; a timeout means Neovim quit instead",
+    );
+    assert!(
+        commands.contains(&Command::CloseWindow),
+        "ZZ on an unmodified last pane must close the front-end window; got {commands:?}"
+    );
+    assert_alive_after_settle(&core, &waiter, "ZZ");
+    assert!(
+        !path.exists(),
+        "ZZ on an unmodified buffer must write nothing, as native ZZ does; {} exists again, so \
+         ZZ wrote it, as :x does",
+        path.display()
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// `ZQ` on a MODIFIED sole pane behaves as `:q!` there: it discards the edit, fires
+/// `close_window` and leaves Neovim running.
+#[test]
+fn zq_on_last_pane_discards_and_emits_close_window() {
+    let (core, waiter, file) = common::start_core_with_temp_md(DOC);
+    let path = file.path().to_path_buf();
+    wait_for_initial_window(&core, &waiter);
+
+    insert_text(&core, &waiter, ZQ_MARKER);
+    // Discard anything queued during setup so we observe only `ZQ`'s command.
+    let _ = core.drain_commands();
+
+    type_str(&core, "ZQ");
+    let commands = drain_until_command(
+        &core,
+        FLUSH_TIMEOUT,
+        "CloseWindow from ZQ on a modified last pane; a timeout means Neovim quit instead, or \
+         ZQ was refused with E37 because it did not force",
+    );
+    assert!(
+        commands.contains(&Command::CloseWindow),
+        "ZQ on a modified last pane must force Command::CloseWindow; got {commands:?}"
+    );
+    assert_alive_after_settle(&core, &waiter, "ZQ");
+    let contents = std::fs::read_to_string(&path).expect("failed to read the temp file back");
+    assert_eq!(
+        contents, DOC,
+        "ZQ must discard the edit and write nothing; a file holding {ZQ_MARKER:?} means ZQ wrote"
     );
 
     core.shutdown().expect("shutdown should be Ok");

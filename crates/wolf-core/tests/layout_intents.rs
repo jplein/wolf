@@ -439,6 +439,52 @@ fn ex_q_closes_pane_when_multiple() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
+/// Types the normal-mode `keys` with two panes open and asserts the pane count drops back to
+/// `base`: `keys` closed the current pane alone, rather than the whole window through
+/// `close_window`, which in this core-only test leaves the count at `base + 1`.
+fn assert_normal_keys_close_one_of_two_panes(keys: &str) {
+    let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
+    let base = wait_for_initial_window(&core, &waiter);
+    let _ = core.drain_intents();
+
+    // Make two windows to have one to close.
+    ctrl_w_then(&core, 'v');
+    let _ = drain_until_intent(&core, FLUSH_TIMEOUT, "Split from <C-w>v (setup)");
+    poll_until(
+        &waiter,
+        "two windows after the setup <C-w>v",
+        || core.read_snapshot().windows.len() == base + 1,
+        |&ok| ok,
+    );
+
+    for c in keys.chars() {
+        core.send_input(ch(c));
+    }
+    poll_until(
+        &waiter,
+        &format!(
+            "windows.len() to drop back by one after {keys}; staying at two panes means {keys} \
+             closed the whole window through close_window instead of the current pane"
+        ),
+        || core.read_snapshot().windows.len() == base,
+        |&ok| ok,
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// Normal-mode `ZZ` with multiple windows closes only the current pane, as `:q` does above.
+#[test]
+fn zz_closes_pane_when_multiple() {
+    assert_normal_keys_close_one_of_two_panes("ZZ");
+}
+
+/// Normal-mode `ZQ` with multiple windows closes only the current pane, as `:q!` does.
+#[test]
+fn zq_closes_pane_when_multiple() {
+    assert_normal_keys_close_one_of_two_panes("ZQ");
+}
+
 /// Typing `:qa<CR>` (the `cnoreabbrev` -> `WolfQuitAll` path) with multiple
 /// windows must NOT merely drop the pane count — unlike `:q`, which closes just the
 /// active pane (see `ex_q_closes_pane_when_multiple` above). `:qa` always takes the

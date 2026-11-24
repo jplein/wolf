@@ -80,7 +80,7 @@ A leftmost pane is one whose left edge is the pane area's left edge; among sever
 
 `wolf --wait FILE` returns when the buffer it opened is closed, so that `EDITOR="wolf --wait"` lets a program such as git hand a file to Wolf and resume when the user is done. If `F` was already shown in a pane, the wait is on that buffer.
 
-The buffer counts as closed when its last window closes, as with `:q`, `:wq` or `:close`, or when it is deleted or wiped, as with `:bd` or `:bw`. Showing another buffer in its window, as with `:e` or `:b`, only hides it, and the wait goes on; Wolf then shows a toast saying that `wolf --wait` is still waiting for that file.
+The buffer counts as closed when its last window closes, as with `:q`, `:wq`, `ZZ` or `:close`, or when it is deleted or wiped, as with `:bd` or `:bw`. Showing another buffer in its window, as with `:e` or `:b`, only hides it, and the wait goes on; Wolf then shows a toast saying that `wolf --wait` is still waiting for that file.
 
 | Outcome                                                                                                          | Exit status |
 | ---------------------------------------------------------------------------------------------------------------- | ----------- |

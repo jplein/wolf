@@ -868,6 +868,10 @@ function _G.wolf_setup_layout(chan)
 	abbrev("wq", "WolfWriteQuit")
 	abbrev("x", "WolfWriteQuit")
 	abbrev("xit", "WolfWriteQuit")
+	-- Native ZZ/ZQ quit Neovim on a tab's last pane, a crash. ZZ is :x writing only a modified
+	-- buffer; ZQ is :q!.
+	map("n", "ZZ", function() do_quit({ write = vim.bo.modified }) end, silent)
+	map("n", "ZQ", function() do_quit({ force = true }) end, silent)
 	vim.api.nvim_create_user_command("WolfQuitAll", function(o)
 		do_quit({ write = false, force = o.bang, all = true })
 	end, { bang = true, nargs = 0 })
