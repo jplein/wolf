@@ -208,7 +208,8 @@ final class TerminalClosePaneTests: XCTestCase {
   }
 
   /// Close Pane is refused on the tree's last editor leaf while the drawer is open beside
-  /// it, and closing anyway would leave the drawer as the tabpage's only window.
+  /// it, as `wolf_do_close` refuses the tab's last pane, where the drawer does not count, so
+  /// a close made anyway keeps the editor.
   func testCloseIsRefusedOnTheLastEditorPaneBesideTheDrawer() {
     guard let fixture = TerminalViewFixture() else { return }
     defer { fixture.shutdown() }
@@ -229,8 +230,9 @@ final class TerminalClosePaneTests: XCTestCase {
 
     XCTAssertFalse(
       container.canClosePane,
-      "the tree's last editor leaf must refuse Close while the drawer is open: Neovim counts"
-        + " the drawer's window, so :close would take the editor and leave only the drawer")
+      "the tree's last editor leaf must refuse Close while the drawer is open:"
+        + " wolf_do_close refuses the tab's last pane, the drawer not counting, so Close would"
+        + " do nothing; canClosePane is true, so File > Close would be enabled on it")
 
     // The toggles queue behind the close: from the editor the first focuses the drawer, the
     // second closes it. With the editor closed, neither can close the last window.

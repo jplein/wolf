@@ -120,7 +120,7 @@ use wolf_core::{
 };
 
 use crate::picker::{next_selection, FocusTarget};
-use crate::tab_view::{with_core, CoreCell, CoreSource};
+use crate::tab_view::{with_core, CoreCell, CoreSource, FileOpener};
 use crate::tree_gate::TreeRefreshGate;
 use crate::window::TREE_PANE_WIDTH;
 
@@ -755,6 +755,8 @@ struct PanelInner {
     /// Resolves the SELECTED tab's core, which a run starts on and a result opens
     /// in.
     core: CoreSource,
+    /// Opens a result in the selected tab when its drawer is the active pane.
+    opener: FileOpener,
     /// The core [`PanelInner::search`] was started on. A session stays on it across
     /// a tab switch, since a rerun would only repeat it, and
     /// [`SearchPanelHandle::release_core`] drops it when that tab closes.
@@ -1019,7 +1021,8 @@ impl PanelInner {
     }
 
     /// Opens a location through [`activation_route`], then returns focus to the
-    /// editor. A refusal prints its reason and moves nothing.
+    /// editor. A refusal prints its reason and moves nothing; a route it admits hands
+    /// the location to the opener first.
     ///
     /// The snapshot guard is bound to a local inside one scope, dropped before any
     /// core call: `preview_file` and `open_at` take core locks of their own.
@@ -1040,6 +1043,7 @@ impl PanelInner {
                 eprintln!("wolf-gnome: search result not opened: {reason}");
                 return;
             }
+            _ if (self.opener)(&path, Some((line, col))) => {}
             OpenRoute::OpenAt => self.open_at(path, line, col),
             OpenRoute::PreviewFile { win } => {
                 let previewed = match path.to_str() {
@@ -1231,7 +1235,7 @@ impl SearchPanelHandle {
 /// cmdline strip (`notes/wolf-gnome/window-structure.md`). See
 /// [`crate::picker::FocusTarget`] for why it is a closure.
 #[must_use]
-pub fn build(core: CoreSource, area: FocusTarget) -> SearchPanelHandle {
+pub fn build(core: CoreSource, opener: FileOpener, area: FocusTarget) -> SearchPanelHandle {
     let entry = gtk::SearchEntry::builder()
         .placeholder_text(SEARCH_PLACEHOLDER)
         .hexpand(true)
@@ -1315,6 +1319,7 @@ pub fn build(core: CoreSource, area: FocusTarget) -> SearchPanelHandle {
         list: list.clone(),
         area,
         core,
+        opener,
         session_core: RefCell::new(Weak::new()),
         wake,
     });

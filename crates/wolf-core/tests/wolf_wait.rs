@@ -29,6 +29,9 @@
 //!   core's RPC budget while Neovim sleeps marks it `NotResponding`, as `nvim_liveness.rs` shows.
 //! - `git commit` runs its editor in the repository's top directory, where the test runs it, and
 //!   treats an editor's non-zero exit as an abort that makes no commit.
+//! - The drawer is a Neovim window flagged `is_drawer` that no pane tree holds, so beside it the
+//!   tab's only editor window is not the tabpage's last window. Its default shell is pinned to
+//!   `/bin/sh` before any core starts ([`common::pin_default_shell`]).
 
 mod common;
 
@@ -83,6 +86,8 @@ struct Env {
 fn env() -> &'static Env {
     static ENV: OnceLock<Env> = OnceLock::new();
     ENV.get_or_init(|| {
+        // Before any core starts, as setenv races a spawn; the drawer runs the default shell.
+        common::pin_default_shell();
         require_nvim_bin();
         let bin = option_env!("CARGO_BIN_EXE_wolf")
             .map(PathBuf::from)
@@ -427,6 +432,52 @@ fn shut_down_on_close_window(core: WolfCore, what: &str) {
         thread::sleep(POLL_INTERVAL);
     }
     core.shutdown().expect("shutdown after CloseWindow failed");
+}
+
+/// Opens the drawer, waits for its window to carry a session, then makes `editor` current
+/// again, as a front-end's focus move does. Returns the drawer's window.
+fn open_drawer_beside(core: &WolfCore, waiter: &FlushWaiter, editor: i64) -> i64 {
+    core.toggle_terminal();
+    let drawer = common::poll_until(
+        waiter,
+        "toggle_terminal to open a drawer window carrying a session (premise)",
+        || {
+            core.read_snapshot()
+                .win_buffers
+                .iter()
+                .find(|(_, buffer)| buffer.is_drawer && buffer.terminal.is_some())
+                .map(|(win, _)| *win)
+        },
+        Option::is_some,
+    )
+    .expect("poll_until returned only once a drawer window existed");
+    core.focus_win(editor);
+    common::poll_until(
+        waiter,
+        "focus_win to make the editor window current beside the drawer (premise)",
+        || core.read_snapshot().active_win,
+        |active| *active == Some(editor),
+    );
+    drawer
+}
+
+/// Neovim's current window and whether it is the drawer, as `(win_getid(), w:wolf_drawer)`,
+/// once `active_win` has had [`SETTLE`] to follow it; fails when `active_win` names another.
+fn current_beside_drawer(case: &Case, core: &WolfCore, waiter: &FlushWaiter) -> (String, String) {
+    let values = case.probe(
+        core,
+        &["win_getid()", "getwinvar(win_getid(), 'wolf_drawer', 0)"],
+    );
+    settle_for(waiter, SETTLE);
+    let active = core.read_snapshot().active_win.map(|win| win.to_string());
+    assert_eq!(
+        active.as_deref(),
+        Some(values[0].as_str()),
+        "active_win must name Neovim's current window {}; {active:?} means the front-ends would \
+         show another pane, or none, as active.",
+        values[0]
+    );
+    (values[0].clone(), values[1].clone())
 }
 
 /// Polls `liveness()` until it is `want`, failing with `what` after [`FLUSH_TIMEOUT`].
@@ -1046,4 +1097,89 @@ fn zq_on_the_last_pane_exits_0() {
         written, "# seventeen\n",
         "ZQ must discard the typed line and write nothing to msgseventeen.md"
     );
+}
+
+/// W18: `:bd` of the waited buffer in the tab's only editor window, beside the drawer, ends the
+/// wait with `0` and keeps the editor window, current.
+#[test]
+fn bd_beside_the_drawer_exits_0_and_keeps_the_pane() {
+    let case = new_case();
+    case.write("msgeighteen.md", "# eighteen\n");
+    let (core, waiter) = case.start_core();
+    let mut wolf = case.spawn_wait("msgeighteen.md");
+    let path = case.open_waited(&core, &mut wolf);
+    let (shown, _, editor) = case.current(&core);
+    assert_eq!(
+        shown,
+        path.display().to_string(),
+        "premise: msgeighteen.md must be current"
+    );
+    let editor: i64 = editor.parse().expect("win_getid() is a window id");
+    let drawer = open_drawer_beside(&core, &waiter, editor);
+
+    send_ex(&core, "bd");
+    wolf.assert_exits(
+        0,
+        ":bd deleted the waited buffer beside the drawer",
+        "1 means the deletion ended the wait as abnormal; still running means the buffer was \
+         only hidden, so no deletion ran after the window was switched.",
+    );
+    let (current, is_drawer) = current_beside_drawer(&case, &core, &waiter);
+    assert_eq!(
+        (current.as_str(), is_drawer.as_str()),
+        (editor.to_string().as_str(), "0"),
+        ":bd in the tab's only editor window {editor} beside the drawer {drawer} must keep that \
+         window current: (current window, w:wolf_drawer). The drawer current means Neovim closed \
+         the last pane, because the drawer kept it from being the tabpage's last window."
+    );
+    core.shutdown().expect("shutdown failed");
+}
+
+/// W19: `:cq` in the waited window, the tab's only editor window beside the drawer, ends the
+/// wait with `1`, keeps Neovim running and keeps the editor window, current.
+#[test]
+fn cq_beside_the_drawer_exits_1_and_keeps_the_pane() {
+    let case = new_case();
+    case.write("msgnineteen.md", "# nineteen\n");
+    let (core, waiter) = case.start_core();
+    let mut wolf = case.spawn_wait("msgnineteen.md");
+    let path = case.open_waited(&core, &mut wolf);
+    let (shown, buf, editor) = case.current(&core);
+    assert_eq!(
+        shown,
+        path.display().to_string(),
+        "premise: msgnineteen.md must be current"
+    );
+    let editor: i64 = editor.parse().expect("win_getid() is a window id");
+    let drawer = open_drawer_beside(&core, &waiter, editor);
+
+    send_ex(&core, "cq");
+    wolf.assert_exits(
+        1,
+        ":cq in the waited window beside the drawer",
+        "0 means :cq ended the wait as a close.",
+    );
+    settle_for(&waiter, SETTLE);
+    assert_eq!(
+        core.liveness(),
+        Liveness::Alive,
+        ":cq in a waited window beside the drawer must not quit Neovim; Dead means it ran \
+         Neovim's own :cquit."
+    );
+    let (current, is_drawer) = current_beside_drawer(&case, &core, &waiter);
+    assert_eq!(
+        (current.as_str(), is_drawer.as_str()),
+        (editor.to_string().as_str(), "0"),
+        ":cq in the tab's only editor window {editor} beside the drawer {drawer} must keep that \
+         window current: (current window, w:wolf_drawer). The drawer current means its \
+         `bdelete!` closed the last pane, because the drawer kept it from being the tabpage's \
+         last window."
+    );
+    let listed = case.probe(&core, &[&format!("buflisted({buf})")]);
+    assert_eq!(
+        listed,
+        ["0"],
+        ":cq in a waited window beside the drawer must still delete the waited buffer {buf}."
+    );
+    core.shutdown().expect("shutdown failed");
 }

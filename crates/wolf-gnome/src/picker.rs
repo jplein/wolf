@@ -15,7 +15,8 @@
 //!
 //! While the picker is open, all keys are routed to the picker widget (forwarding
 //! to nvim/core is suppressed); `Esc` closes it; `Enter` / row-activation sends
-//! `InputEvent::Open { path }` (MRU is auto-recorded by the core input pump) and
+//! `InputEvent::Open { path }` (MRU is auto-recorded by the core input pump), or
+//! hands the path to the tabs' drawer opener when the drawer is the active pane, and
 //! closes.
 //!
 //! Almost all of this module is GTK widget wiring (an `Overlay` over the
@@ -51,7 +52,7 @@ use gtk::glib;
 
 use wolf_core::{rank_matches, FileSearch, InputEvent, WakeFn};
 
-use crate::tab_view::{with_core, CoreSource};
+use crate::tab_view::{with_core, CoreSource, FileOpener};
 
 /// The maximum number of ranked rows shown in the picker list. The streaming
 /// traversal can collect far more entries than are useful to display, so only the
@@ -164,6 +165,8 @@ struct PickerInner {
     /// Resolves the SELECTED tab's core, which the search runs on and a row opens
     /// in. The picker closes on every tab switch, so one open never spans two.
     core: CoreSource,
+    /// Opens a chosen file in the selected tab when its drawer is the active pane.
+    opener: FileOpener,
     /// The wake closure handed to `start_file_search`; firing it queues a refresh.
     wake: WakeFn,
     /// The query string used by the previous [`PickerInner::refresh`]. It decides
@@ -285,9 +288,9 @@ impl PickerInner {
         }
     }
 
-    /// Resolves the selected row (or the first row if none is selected), sends
-    /// `InputEvent::Open { path }` to the core, then closes the picker. With ZERO
-    /// rows it is a true no-op: it neither sends `Open` nor closes the picker.
+    /// Resolves the selected row (or the first row if none is selected), hands it to
+    /// the opener or else sends `InputEvent::Open { path }` to the core, then closes the
+    /// picker. With ZERO rows it is a true no-op: it neither opens nor closes the picker.
     fn activate_selection(&self) {
         let selected = self.list.selected_row().map(|row| row.index());
         let path = {
@@ -297,9 +300,11 @@ impl PickerInner {
         let Some(path) = path else {
             return;
         };
-        with_core(&self.core, |core| {
-            core.send_input(InputEvent::Open { path })
-        });
+        if !(self.opener)(&path, None) {
+            with_core(&self.core, |core| {
+                core.send_input(InputEvent::Open { path })
+            });
+        }
         self.close();
     }
 }
@@ -337,9 +342,14 @@ impl PickerHandle {
 ///
 /// `area` resolves the focus-return widget at CLOSE time — the SELECTED tab's
 /// cmdline strip, never a pane drawing area (`notes/wolf-gnome/window-structure.md`).
-/// See [`FocusTarget`] for why it is a closure.
+/// See [`FocusTarget`] for why it is a closure. `opener` takes a chosen file first.
 #[must_use]
-pub fn build(overlay: &gtk::Overlay, area: FocusTarget, core: CoreSource) -> PickerHandle {
+pub fn build(
+    overlay: &gtk::Overlay,
+    area: FocusTarget,
+    core: CoreSource,
+    opener: FileOpener,
+) -> PickerHandle {
     let entry = gtk::SearchEntry::new();
     entry.set_hexpand(true);
 
@@ -381,6 +391,7 @@ pub fn build(overlay: &gtk::Overlay, area: FocusTarget, core: CoreSource) -> Pic
         list: list.clone(),
         area,
         core,
+        opener,
         wake,
         last_query: RefCell::new(None),
     });

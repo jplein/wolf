@@ -675,11 +675,24 @@ struct PaneInner {
     pending_terminal_restore: RefCell<Option<Vec<TerminalRestore>>>,
     /// Files opened from outside Wolf ([`PaneHandle::open_file`]), in arrival order, placed by
     /// [`Self::run_pending_file_opens`]. A restart reset keeps them, so they land after it.
-    /// Each keeps its `wolf --wait`, if any, for the core once the file is placed.
-    pending_file_opens: RefCell<VecDeque<(PathBuf, Option<OpenWait>)>>,
+    /// Each keeps its `wolf --wait`, if any, for the core once the file is placed, and the
+    /// `(line, col)` it opens at, if any.
+    pending_file_opens: RefCell<VecDeque<PendingOpen>>,
     /// The pane a placed file made active, with Neovim's current window when it was asked to
     /// move. [`Self::update_active_pane`] keeps that pane until Neovim's window moves.
     pending_focus: Cell<Option<(PaneId, Option<i64>)>>,
+}
+
+/// A queued file open: its path, its `wolf --wait` and the `(line, col)` it opens at.
+type PendingOpen = (PathBuf, Option<OpenWait>, Option<(u64, u64)>);
+
+/// The event that edits `path` in Neovim's current window, at `at` when given.
+fn open_event(path: &Path, at: Option<(u64, u64)>) -> InputEvent {
+    let path = path.to_path_buf();
+    match at {
+        Some((line, col)) => InputEvent::OpenAt { path, line, col },
+        None => InputEvent::Open { path },
+    }
 }
 
 /// A pane [`PaneInner::readiness`] counts: its id, its grid and the size it last requested.
@@ -822,10 +835,10 @@ impl PaneInner {
             let pane_layout::LayoutGather::Ready(live) = self.layout_snapshot() else {
                 return;
             };
-            let Some((path, wait)) = self.pending_file_opens.borrow_mut().pop_front() else {
+            let Some((path, wait, at)) = self.pending_file_opens.borrow_mut().pop_front() else {
                 return;
             };
-            self.place_file(&path, live);
+            self.place_file(&path, live, at);
             // Even after a placement that returned early: Neovim answers 1 when no buffer shows it.
             if let Some(wait) = wait {
                 if let Some(core) = self.core.borrow().as_ref() {
@@ -838,8 +851,9 @@ impl PaneInner {
     /// Places `path` by core's `specs/cli-and-file-open.md` §5.2 choice over `live`, this
     /// tab's gathered layout: unzooms first when zoomed, then focuses the editor pane already
     /// on it, opens it in an editor or preview pane, or splits the whole tab with a new pane on
-    /// the left. The pane it lands in is made active at once ([`Self::focus_placed`]).
-    fn place_file(self: &Rc<Self>, path: &Path, live: LiveLayout) {
+    /// the left. The pane it lands in is made active at once ([`Self::focus_placed`]). With
+    /// `at`, the file opens at that `(line, col)`, even in the pane already on it.
+    fn place_file(self: &Rc<Self>, path: &Path, live: LiveLayout, at: Option<(u64, u64)>) {
         let content = TabContent {
             root: Some(live.root),
             focused: live.focused,
@@ -863,19 +877,21 @@ impl PaneInner {
             return;
         };
         match placement {
-            Placement::Focus(pane) => self.focus_placed(pane, None),
-            Placement::Open(pane) | Placement::Convert(pane) => self.focus_placed(pane, Some(path)),
-            Placement::SplitLeft => self.split_left(path),
+            Placement::Focus(pane) => self.focus_placed(pane, at.map(|_| path), at),
+            Placement::Open(pane) | Placement::Convert(pane) => {
+                self.focus_placed(pane, Some(path), at);
+            }
+            Placement::SplitLeft => self.split_left(path, at),
         }
     }
 
-    /// Moves Neovim to `pane`'s window and opens `open` there when given, both on the ordered
-    /// input channel, and makes `pane` active at once.
+    /// Moves Neovim to `pane`'s window and opens `open` there when given, at `at` when given,
+    /// both on the ordered input channel, and makes `pane` active at once.
     ///
     /// At once, not on the wake Neovim reports the move: until then keys would still reach the
     /// old pane, a terminal's session among them. [`Self::pending_focus`] keeps
     /// [`Self::update_active_pane`] from reading the old window back meanwhile.
-    fn focus_placed(&self, pane: PaneId, open: Option<&Path>) {
+    fn focus_placed(&self, pane: PaneId, open: Option<&Path>, at: Option<(u64, u64)>) {
         let Some(win) = self.panes.borrow().get(&pane).map(|p| p.win) else {
             return;
         };
@@ -887,9 +903,7 @@ impl PaneInner {
             let current = core.read_snapshot().active_win;
             core.focus_win(win);
             if let Some(path) = open {
-                core.send_input(InputEvent::Open {
-                    path: path.to_path_buf(),
-                });
+                core.send_input(open_event(path, at));
             }
             current
         };
@@ -900,16 +914,21 @@ impl PaneInner {
     }
 
     /// Opens `path` in a new Neovim window left of the whole tab and binds it to a new pane
-    /// left of the whole tree. `WolfCore::open_split_left` is a BLOCKING RPC, which
+    /// left of the whole tree, then moves its cursor to `at` when given.
+    /// `WolfCore::open_split_left` is a BLOCKING RPC, which
     /// [`Self::run_pending_file_opens`] issues only against an `Alive` Neovim.
-    fn split_left(self: &Rc<Self>, path: &Path) {
+    fn split_left(self: &Rc<Self>, path: &Path, at: Option<(u64, u64)>) {
         let (current, win) = {
             let core_ref = self.core.borrow();
             let Some(core) = core_ref.as_ref() else {
                 return;
             };
             let current = core.read_snapshot().active_win;
-            (current, core.open_split_left(path))
+            let win = core.open_split_left(path);
+            if win != 0 && at.is_some() {
+                core.send_input(open_event(path, at));
+            }
+            (current, win)
         };
         if win == 0 {
             eprintln!(
@@ -4477,7 +4496,24 @@ impl PaneHandle {
         self.inner
             .pending_file_opens
             .borrow_mut()
-            .push_back((path, wait));
+            .push_back((path, wait, None));
+    }
+
+    /// Whether this tab's terminal drawer is its active pane.
+    #[must_use]
+    pub fn drawer_is_active(&self) -> bool {
+        let drawer = self.inner.drawer.get().id();
+        drawer.is_some() && drawer == self.inner.active_pane.get()
+    }
+
+    /// Queues `path`, chosen in the picker, the sidebar or the open dialog, as
+    /// [`PaneHandle::open_file`] queues a file with no wait, opening it at `at` when given.
+    /// The caller wakes the tab.
+    pub fn open_picked(&self, path: PathBuf, at: Option<(u64, u64)>) {
+        self.inner
+            .pending_file_opens
+            .borrow_mut()
+            .push_back((path, None, at));
     }
 
     /// Hands this tab the terminal restore a crash-restart computed, replacing any earlier

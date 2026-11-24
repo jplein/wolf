@@ -58,7 +58,7 @@
 //! planned tab selects it in turn.
 
 use std::cell::{Cell, RefCell};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
@@ -98,6 +98,11 @@ pub type CoreCell = Rc<RefCell<Option<WolfCore>>>;
 /// time. A closure rather than a cell for [`FocusTarget`]'s reason: a value bound
 /// once goes stale at the first tab switch. `None` means no tab is selected.
 pub type CoreSource = Rc<dyn Fn() -> Option<CoreCell>>;
+
+/// Opens a file the picker, the sidebar or the open dialog chose, at a `(line, col)` when
+/// given, in the selected tab when its terminal drawer is the active pane, and answers whether
+/// it did. On `false` the caller sends its own `InputEvent::Open`.
+pub type FileOpener = Rc<dyn Fn(&Path, Option<(u64, u64)>) -> bool>;
 
 /// Runs `f` on the core `source` resolves, or answers `None` when there is none.
 ///
@@ -859,6 +864,26 @@ impl TabsHandle {
     pub fn core_source(&self) -> CoreSource {
         let weak = Rc::downgrade(&self.inner);
         Rc::new(move || upgrade(&weak).and_then(|tabs| tabs.selected_core()))
+    }
+
+    /// The [`FileOpener`] for the window-level widgets. With the drawer active, Neovim's
+    /// current window is the drawer's, which an `InputEvent::Open` would edit in, so the file
+    /// goes where `specs/cli-and-file-open.md` §5.2 places it instead. The `Weak` is upgraded
+    /// per call, as [`TabsHandle::core_source`]'s is.
+    #[must_use]
+    pub fn drawer_opener(&self) -> FileOpener {
+        let weak = Rc::downgrade(&self.inner);
+        Rc::new(move |path, at| {
+            let Some(tab) = upgrade(&weak).and_then(|tabs| tabs.selected()) else {
+                return false;
+            };
+            if !tab.panes().drawer_is_active() {
+                return false;
+            }
+            tab.panes().open_picked(path.to_path_buf(), at);
+            tab.wake();
+            true
+        })
     }
 
     /// Every live tab, in INSERTION order, for the shell's per-tab fan-outs.

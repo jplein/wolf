@@ -2240,7 +2240,8 @@ impl AppShell {
         );
     }
 
-    /// Opens a native file chooser; on success asks the selected tab's core to `:e` the file.
+    /// Opens a native file chooser; on success hands the file to the tabs' drawer opener, or
+    /// else asks the selected tab's core to `:e` it.
     fn open_file_dialog(&self) {
         let dialog = gtk::FileDialog::builder()
             .title(OPEN_FILE_DIALOG_TITLE)
@@ -2257,7 +2258,9 @@ impl AppShell {
                 // As above: a dismissed dialog is not an error worth printing.
                 if let Ok(file) = result {
                     if let Some(path) = file.path() {
-                        shell.send_input(InputEvent::Open { path });
+                        if !shell.inner.tabs.drawer_opener()(&path, None) {
+                            shell.send_input(InputEvent::Open { path });
+                        }
                     }
                 }
             },

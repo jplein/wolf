@@ -1,21 +1,23 @@
 //! Integration test for `WolfCoreHandle::close_pane()`: the FFI method
-//! backing the macOS "Close" command, which runs `:close` to drop the CURRENT
-//! split (NOT the buffer — that is `:bdelete`, exercised elsewhere).
+//! backing the macOS "Close" command, which runs `init.lua`'s `wolf_do_close` to
+//! drop the CURRENT split (NOT the buffer — that is `:bdelete`, exercised
+//! elsewhere).
 //!
 //! This drives the RUST half against a REAL, hermetic Neovim — NO mocks, per the
 //! project testing policy. It is the sibling of `panes.rs` (same staging /
 //! SKIP-when-unset machinery, reusing `tests/common/mod.rs`, and the same
 //! `windows()` live-grid polling pattern). The method is backed by
-//! `wolf_core::InputEvent::ClosePane` -> `nvim_command("close")`, and the
-//! `//crates/wolf-ffi:close_pane` `rust_test` target runs this file under Bazel.
+//! `wolf_core::InputEvent::ClosePane` -> `wolf_do_close()` over `nvim_exec_lua`,
+//! and the `//crates/wolf-ffi:close_pane` `rust_test` target runs this file under
+//! Bazel.
 //!
 //! ## Why the FFI method, NOT typed `:close`
 //!
-//! The FFI method issues `nvim_command("close")` over RPC, which bypasses the
-//! captive `init.lua` interactive command-line overrides. A typed `:close<CR>` is
-//! intercepted by those overrides, so this test drives `handle.close_pane()`
-//! DIRECTLY (only the setup `:vsplit` is typed — that path emits a layout intent
-//! and is deterministic headless, exactly as in `panes.rs`).
+//! A typed `:close<CR>` reaches the same `wolf_do_close` through the captive
+//! `init.lua`'s command-line abbreviation, so typing it would prove nothing about
+//! the method. This test drives `handle.close_pane()` DIRECTLY (only the setup
+//! `:vsplit` is typed — that path emits a layout intent and is deterministic
+//! headless, exactly as in `panes.rs`).
 //!
 //! ## SKIP-when-unset policy
 //!
@@ -29,7 +31,7 @@
 //! grids; calling `handle.close_pane()` drops one, returning to exactly one live
 //! editor window grid. (The `:close` split-drop coverage that also inspects the
 //! layout intent lives in `panes.rs`; this file proves the FFI method itself
-//! reaches `:close` over RPC.)
+//! closes a split over RPC.)
 
 mod common;
 
@@ -185,8 +187,8 @@ fn close_pane_drops_one_split() {
         "after :vsplit there should be exactly two live editor window grids (got {after_split})"
     );
 
-    // --- 4. close_pane() -> :close over RPC; poll back to one live grid.
-    // Call the method, not a typed `:close<CR>`, which the captive init.lua intercepts.
+    // --- 4. close_pane() -> wolf_do_close() over RPC; poll back to one live grid.
+    // Call the method, not a typed `:close<CR>`, which reaches the same function by abbreviation.
     handle.close_pane();
 
     let deadline = Instant::now() + FLUSH_TIMEOUT;

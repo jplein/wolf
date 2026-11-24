@@ -588,7 +588,14 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     // unmapped after a switch and kills key dispatch. See `picker::FocusTarget`.
     let focus_target = tabs.focus_target();
 
-    let picker = picker::build(&overlay, focus_target.clone(), tabs.core_source());
+    // Files the picker, the tree and the search panel open go past an active drawer.
+    let opener = tabs.drawer_opener();
+    let picker = picker::build(
+        &overlay,
+        focus_target.clone(),
+        tabs.core_source(),
+        opener.clone(),
+    );
     // Switch to Window rows, from the coordinator per open. Weak: a strong ref closes the
     // coordinator -> window -> palette cycle and leaks the graph; a dropped coordinator yields none.
     let palette_windows: palette::WindowSource = {
@@ -614,11 +621,12 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     // knows the root. Per window, not per tab: see notes/wolf-gnome/window-structure.md
     let tree = tree_view::build(
         tabs.core_source(),
+        opener.clone(),
         focus_target.clone(),
         !empty,
         &workspace::root_label(&launch_cwd),
     );
-    let search = search_panel::build(tabs.core_source(), focus_target.clone());
+    let search = search_panel::build(tabs.core_source(), opener, focus_target.clone());
     let sidebar = sidebar::build(&tree, &search);
     let paned = gtk::Paned::new(gtk::Orientation::Horizontal);
     paned.set_start_child(Some(&sidebar.widget()));

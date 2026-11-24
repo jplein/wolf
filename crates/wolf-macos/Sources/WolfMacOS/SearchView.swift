@@ -243,12 +243,10 @@ final class SearchView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate {
   }
 
   /// Routes a single click: a file row toggles expansion (recording the collapse
-  /// preference); a line row opens its file in the active pane, routed by that
-  /// pane's mode — a PREVIEW pane previews the file
-  /// (`WolfCoreHandle.preview_file`, falling back to `open_at` when the file is not
-  /// previewable, which converts the pane to edit mode), an EDIT pane edits it at
-  /// the match's line/column (`WolfCoreHandle.open_at`). A preview has no cursor,
-  /// so the line/column is only honored on the edit path.
+  /// preference); a line row opens its file at the match's line/column through
+  /// `PaneContainerView.openPickedFile`, or `WolfCoreHandle.open_at` when there is
+  /// no container. A preview has no cursor, so the line/column is only honored on
+  /// the edit path.
   @objc private func handleClick() {
     let row = outlineView.clickedRow
     guard row >= 0 else { return }
@@ -262,10 +260,9 @@ final class SearchView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate {
         collapsedFiles.remove(file.absPath)
       }
     } else if let line = item as? SearchLineItem {
-      if let paneContainer, paneContainer.activePaneIsPreview,
-        handle.preview_file(paneContainer.activeWin, line.absPath) != 0
-      {
-        paneContainer.onRenderWake()
+      if let paneContainer {
+        paneContainer.openPickedFile(
+          line.absPath, at: (line: line.lineNumber, col: line.column))
       } else {
         handle.open_at(line.absPath, line.lineNumber, line.column)
       }

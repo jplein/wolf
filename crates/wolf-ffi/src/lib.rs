@@ -690,8 +690,8 @@ mod ffi {
         // `:set background=dark|light` via `InputEvent::SetBackground`. The macOS front-end pushes
         // the resolved appearance at launch and live in `auto` mode. A no-op when the core is gone.
         fn set_background(&self, dark: bool);
-        // Closes the current split (the pane) via `InputEvent::ClosePane`
-        // (`:close`).
+        // Closes the current split (the pane) via `InputEvent::ClosePane`, which refuses the
+        // tab's last pane.
         fn close_pane(&self);
         // Splits the active pane, stacked (`:split`) or side by side (`:vsplit`), through
         // `WolfCore::split_pane`; Neovim's current window decides the new pane's kind.
@@ -3516,8 +3516,8 @@ impl WolfCoreHandle {
         }
     }
 
-    /// Closes the current split (the pane) via [`InputEvent::ClosePane`]
-    /// (`:close`). A no-op once the core has been shut down.
+    /// Closes the current split (the pane) via [`InputEvent::ClosePane`], which refuses the
+    /// tab's last pane. A no-op once the core has been shut down.
     pub fn close_pane(&self) {
         if let Some(core) = self.core.borrow().as_ref() {
             core.send_input(InputEvent::ClosePane);

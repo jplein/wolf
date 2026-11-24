@@ -512,11 +512,8 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
   }
 
   /// Presents a native `NSOpenPanel` (files only) as a sheet on this window and,
-  /// on confirmation, opens the chosen file in this window's Neovim, routed by
-  /// the active pane's mode: a PREVIEW pane previews the file
-  /// (`handle.preview_file`, falling back to `handle.open` when the file is not
-  /// previewable — the pane converts to edit mode); an EDIT pane edits it
-  /// (`handle.open`). Then returns first responder to the editor pane.
+  /// on confirmation, opens the chosen file in this window's Neovim through
+  /// `openChosenFile`. Then returns first responder to the editor pane.
   func presentOpenFileDialog() {
     guard let window else { return }
     let panel = NSOpenPanel()
@@ -534,19 +531,15 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
     }
   }
 
-  /// Opens `path` in the active pane, routed by the pane's mode (preview mode →
-  /// `preview_file` with the `open` fallback on `0`; edit mode → `open`). The
-  /// shared routing behind the open dialog's confirmation.
+  /// Opens `path`, chosen in the open dialog, through
+  /// `PaneContainerView.openPickedFile`, or `handle.open` when there is no container.
   private func openChosenFile(_ path: String) {
     guard let handle else { return }
-    if let paneContainer, paneContainer.activePaneIsPreview {
-      let activeWin = paneContainer.activeWin
-      if handle.preview_file(activeWin, path) != 0 {
-        paneContainer.onRenderWake()
-        return
-      }
+    if let paneContainer {
+      paneContainer.openPickedFile(path)
+    } else {
+      handle.open(path)
     }
-    handle.open(path)
   }
 
   /// Presents a native `NSOpenPanel` (directories only) as a sheet on this window

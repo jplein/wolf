@@ -97,7 +97,7 @@ use wolf_core::{FileEntry, FileSearch, InputEvent, WakeFn, WolfCore};
 
 use crate::picker::FocusTarget;
 use crate::refresh_coalescer::{RefreshCoalescer, REFRESH_INTERVAL};
-use crate::tab_view::{with_core, CoreCell, CoreSource};
+use crate::tab_view::{with_core, CoreCell, CoreSource, FileOpener};
 use crate::tree::{self, TreeNode};
 use crate::tree_gate::TreeRefreshGate;
 
@@ -174,6 +174,8 @@ struct TreeInner {
     /// Resolves the SELECTED tab's core, which a search starts on and a file opens
     /// in.
     core: CoreSource,
+    /// Opens a clicked file in the selected tab when its drawer is the active pane.
+    opener: FileOpener,
     /// The core [`TreeInner::search`] was started on; see the module docs.
     search_core: RefCell<Weak<RefCell<Option<WolfCore>>>>,
     /// Whether a search is owed: its tab closed, or it found no core to start on.
@@ -438,9 +440,11 @@ impl TreeInner {
         };
         match open_path {
             Some(path) => {
-                with_core(&self.core, |core| {
-                    core.send_input(InputEvent::Open { path })
-                });
+                if !(self.opener)(&path, None) {
+                    with_core(&self.core, |core| {
+                        core.send_input(InputEvent::Open { path })
+                    });
+                }
                 if let Some(area) = (self.area)() {
                     area.grab_focus();
                 }
@@ -814,7 +818,13 @@ fn build_factory(
 /// cannot be bound to each other once and for all; see
 /// [`crate::picker::FocusTarget`].
 #[must_use]
-pub fn build(core: CoreSource, area: FocusTarget, start: bool, root_label: &str) -> TreeHandle {
+pub fn build(
+    core: CoreSource,
+    opener: FileOpener,
+    area: FocusTarget,
+    start: bool,
+    root_label: &str,
+) -> TreeHandle {
     install_css();
 
     let entries: Rc<RefCell<Vec<FileEntry>>> = Rc::new(RefCell::new(Vec::new()));
@@ -857,6 +867,7 @@ pub fn build(core: CoreSource, area: FocusTarget, start: bool, root_label: &str)
         scroller,
         list_view: list_view.clone(),
         core,
+        opener,
         search_core: RefCell::new(Weak::new()),
         search_owed: Cell::new(false),
         area,

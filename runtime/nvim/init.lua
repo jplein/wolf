@@ -692,6 +692,91 @@ local function abbrev(word, replacement)
 	))
 end
 
+-- Whether closing `win` leaves its tab a pane: the drawer is in no pane tree, so it never counts.
+-- See specs/terminal-panes.md#the-drawer
+local function closable(win)
+	win = win == 0 and vim.api.nvim_get_current_win() or win
+	local drawer = vim.w[win].wolf_drawer == true
+	for _, w in ipairs(vim.api.nvim_tabpage_list_wins(vim.api.nvim_win_get_tabpage(win))) do
+		if w ~= win and (drawer or vim.w[w].wolf_drawer ~= true) then
+			return true
+		end
+	end
+	return false
+end
+
+-- The buffer Neovim 0.12's do_buffer_ext shows in `win` when `:bd` deletes its buffer, or nil
+-- for a new empty one. `targets` is a set of the buffers being deleted.
+local function bdelete_replacement(win, targets)
+	local x = vim.api.nvim_win_get_buf(win)
+	local function candidate(b)
+		return vim.api.nvim_buf_is_valid(b)
+			and b ~= x
+			and not targets[b]
+			and vim.bo[b].buflisted
+			and vim.bo[b].buftype ~= "quickfix"
+	end
+	local unloaded = nil
+	local jumps, idx = unpack(vim.fn.getjumplist(win))
+	local clean = ("," .. vim.o.jumpoptions .. ","):find(",clean,", 1, true) ~= nil
+	local list = {}
+	for i, j in ipairs(jumps) do
+		-- As mark_jumplist_forget_file, which only 'jumpoptions' clean runs.
+		if clean and targets[j.bufnr] then
+			if idx >= i then
+				idx = idx - 1
+			end
+		else
+			table.insert(list, j.bufnr)
+		end
+	end
+	local n = #list
+	if n > 0 then
+		local start, count
+		if clean then
+			start, count = math.min(idx, n - 1), n
+		else
+			start, count = (idx - 1) % n, idx < n and n - 1 or n
+		end
+		for k = 0, count - 1 do
+			local b = list[(start - k) % n + 1]
+			if candidate(b) then
+				if vim.api.nvim_buf_is_loaded(b) then
+					return b
+				end
+				unloaded = unloaded or b
+			end
+		end
+	end
+	local help = vim.bo[x].buftype == "help"
+	local bufs = vim.api.nvim_list_bufs()
+	local after, before = {}, {}
+	for _, b in ipairs(bufs) do
+		if b > x then
+			table.insert(after, b)
+		elseif b < x then
+			table.insert(before, 1, b)
+		end
+	end
+	for _, b in ipairs(vim.list_extend(after, before)) do
+		if candidate(b) and (vim.bo[b].buftype == "help") == help then
+			if vim.api.nvim_buf_is_loaded(b) then
+				return b
+			end
+			unloaded = unloaded or b
+		end
+	end
+	if unloaded ~= nil then
+		return unloaded
+	end
+	for _, b in ipairs(bufs) do
+		if candidate(b) then
+			return b
+		end
+	end
+	return nil
+end
+
 -- `wolf --wait` ids by waited buffer, and the channel their ends go to; set by wolf_setup_layout.
 local waits = {}
 local wait_chan = nil
@@ -752,9 +837,9 @@ function _G.wolf_setup_layout(chan)
 		})
 	end
 
-	-- CLOSE: guarded against closing the last window in the tab page. No intent.
+	-- CLOSE: guarded against closing the tab's last pane. No intent.
 	local function do_close()
-		if #vim.api.nvim_tabpage_list_wins(0) > 1 then
+		if closable(0) then
 			vim.api.nvim_win_close(0, false)
 		end
 	end
@@ -768,7 +853,7 @@ function _G.wolf_setup_layout(chan)
 				return
 			end
 		end
-		if not opts.all and #vim.api.nvim_tabpage_list_wins(0) > 1 then
+		if not opts.all and closable(0) then
 			pcall(vim.api.nvim_win_close, 0, opts.force or false)
 		else
 			if not opts.force and vim.bo.modified then
@@ -886,13 +971,71 @@ function _G.wolf_setup_layout(chan)
 	abbrev("xa", "WolfWriteQuitAll")
 	abbrev("xall", "WolfWriteQuitAll")
 
+	-- Neovim keeps only a tabpage's last window, which the drawer stops a pane being, so the tab's
+	-- last pane is shown Neovim's pick first. See runtime/nvim/README.md#decisions
+	local function do_bdelete(cmd, o)
+		local cur = vim.api.nvim_get_current_win()
+		local shown = vim.api.nvim_get_current_buf()
+		local targets, doomed = {}, {}
+		local list = #o.fargs == 0 and { tostring(shown) } or o.fargs
+		for _, arg in ipairs(list) do
+			local b = tonumber(arg)
+			if b == nil then
+				b = vim.fn.bufnr(arg)
+			end
+			if b > 0 and vim.api.nvim_buf_is_valid(b) then
+				targets[b] = true
+				doomed[b] = o.bang or not vim.bo[b].modified
+			end
+		end
+		-- Named, since the current buffer is the replacement by the time it runs.
+		local native = cmd .. (o.bang and "!" or "") .. " " .. (#o.fargs == 0 and list[1] or o.args)
+		local drawer, every = false, true
+		for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+			if vim.w[w].wolf_drawer == true then
+				drawer = true
+			elseif not doomed[vim.api.nvim_win_get_buf(w)] then
+				every = false
+			end
+		end
+		if drawer and every and vim.w[cur].wolf_drawer ~= true then
+			local r = bdelete_replacement(cur, targets)
+			local created = r == nil
+			r = r or vim.api.nvim_create_buf(true, false)
+			if not pcall(vim.cmd, (o.bang and "buffer! " or "buffer ") .. r) and created then
+				pcall(vim.api.nvim_buf_delete, r, { force = true })
+			end
+			-- A bufhidden=wipe buffer went with the switch.
+			if #o.fargs == 0 and not vim.api.nvim_buf_is_valid(shown) then
+				return
+			end
+		end
+		local ok, err = pcall(vim.cmd, native)
+		if not ok then
+			local msg = tostring(err)
+			vim.api.nvim_echo({ { msg:match("E%d+:.*") or msg, "ErrorMsg" } }, true, {})
+		end
+	end
+	vim.api.nvim_create_user_command("WolfBdelete", function(o)
+		do_bdelete("bdelete", o)
+	end, { bang = true, nargs = "*", bar = true, complete = "buffer" })
+	vim.api.nvim_create_user_command("WolfBwipeout", function(o)
+		do_bdelete("bwipeout", o)
+	end, { bang = true, nargs = "*", bar = true, complete = "buffer" })
+	for _, word in ipairs({ "bd", "bde", "bdel", "bdele", "bdelet", "bdelete" }) do
+		abbrev(word, "WolfBdelete")
+	end
+	for _, word in ipairs({ "bw", "bwi", "bwip", "bwipe", "bwipeo", "bwipeou", "bwipeout" }) do
+		abbrev(word, "WolfBwipeout")
+	end
+
 	-- In a waited window :cq abandons the wait and keeps Neovim, which quitting would crash.
 	-- See specs/cli-and-file-open.md#6-waiting
 	vim.api.nvim_create_user_command("WolfCquit", function(o)
 		local buf = vim.api.nvim_get_current_buf()
 		if waits[buf] ~= nil then
 			end_waits(buf, 1)
-			pcall(vim.cmd, "bdelete! " .. buf)
+			do_bdelete("bdelete", { bang = true, args = tostring(buf), fargs = { tostring(buf) } })
 		else
 			vim.cmd("cquit" .. (o.bang and "!" or "") .. " " .. o.args)
 		end
@@ -1256,12 +1399,12 @@ function _G.wolf_terminal_exited(id)
 	return count
 end
 
--- Closes a placeholder window, refusing a tabpage's last as wolf_do_close does.
+-- Closes a placeholder window, refusing the tab's last pane as wolf_do_close does.
 function _G.wolf_terminal_close(win)
 	if not vim.api.nvim_win_is_valid(win) then
 		return 0
 	end
-	if #vim.api.nvim_tabpage_list_wins(vim.api.nvim_win_get_tabpage(win)) > 1 then
+	if closable(win) then
 		pcall(vim.api.nvim_win_close, win, false)
 	end
 	return 0

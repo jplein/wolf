@@ -1,6 +1,7 @@
 //! Terminal smokes: the terminal drawer, terminals across a Neovim restart, terminal panes
-//! beside Neovim panes, typed keys reaching a pane's shell, and Ctrl+Shift+W closing the drawer
-//! and a terminal split.
+//! beside Neovim panes, typed keys reaching a pane's shell, Ctrl+Shift+W closing the drawer
+//! and a terminal split, and the tab's last editor pane beside the drawer surviving `:bd` and
+//! taking the files opened from the drawer.
 
 use super::config::FULLWIDTH_SMOKE_FONT_PT;
 use super::panes::TABS_FIRST_TAB_CENTRE_FRACTION;
@@ -2079,6 +2080,519 @@ fn terminal_close_chord_closes_the_drawer_and_a_split_under_cage() {
         "{SMOKE}: the re-opened drawer's shell is pid {reopened}, not the first drawer's \
          {drawer} (the split's was {split}). Another pid means closing the drawer ended its \
          session and Ctrl+` started a new shell."
+    );
+}
+
+// The tab's last pane beside the drawer: `:bd` keeps it, and opened files land in it.
+
+/// S6: the file `:e`d first, which `:bd` of [`BDDRAWER_LATER_FILE`] must show again.
+///
+/// Neither name carries an OCR term: this smoke reads no pixel, and both are registered in
+/// `RELAUNCH_FIXTURE_NAMES` for the generic loop's sake.
+pub(crate) const BDDRAWER_EARLIER_FILE: &str = "bdkearly.md";
+
+/// S6: the file `:e`d second, current when `:bd` runs. See [`BDDRAWER_EARLIER_FILE`].
+pub(crate) const BDDRAWER_LATER_FILE: &str = "bdklate.md";
+
+/// S6: the drawer's shell writes its pid here once Ctrl+` opened it. Every readback of this
+/// smoke lives under `XDG_RUNTIME_DIR`, out of the sidebar, and is registered in
+/// `RELAUNCH_FIXTURE_NAMES` because its absolute path is typed on screen.
+pub(crate) const BDDRAWER_PID_NAME: &str = "wolf_gnome_bdk_pid.txt";
+
+/// S6: Neovim's readback after `Ctrl+W k` out of the drawer, before `:bd`. See
+/// [`BDDRAWER_PID_NAME`].
+pub(crate) const BDDRAWER_BEFORE_NAME: &str = "wolf_gnome_bdk_before.txt";
+
+/// S6: Neovim's readback after `:bd`. See [`BDDRAWER_PID_NAME`].
+pub(crate) const BDDRAWER_AFTER_NAME: &str = "wolf_gnome_bdk_after.txt";
+
+/// S6: the drawer's shell writes its pid here after Ctrl+` from the kept pane. See
+/// [`BDDRAWER_PID_NAME`].
+pub(crate) const BDDRAWER_PID_BACK_NAME: &str = "wolf_gnome_bdk_pid_back.txt";
+
+/// S6: Neovim's readback after `Ctrl+W k` out of the drawer into the kept pane. See
+/// [`BDDRAWER_PID_NAME`].
+pub(crate) const BDDRAWER_REFOCUS_NAME: &str = "wolf_gnome_bdk_refocus.txt";
+
+/// The `:bd` scenario for [`bd_beside_the_drawer_keeps_the_pane_under_cage`].
+///
+/// Readbacks follow the focus as in [`TERMCLOSE_SCENARIO`]: a shell readback writes the shell's
+/// pid, a Neovim one writes the expression it is given, and each appears only where the keys
+/// go. A Neovim readback after `:bd` therefore appears only when an editor pane holds the
+/// focus: with no pane left in the tree, the keys go to the drawer's shell.
+///
+/// ## Exit codes
+///
+/// * `11` — the app died before it was ready for input (the shared convention).
+/// * `51` — no shell answered after Ctrl+`: the drawer did not open focused.
+/// * `52` — Neovim did not answer after `Ctrl+W k` in the drawer, before `:bd`.
+/// * `53` — Neovim did not answer after `:bd`: focus went to the drawer, because no editor
+///   pane was left to take it.
+/// * `54` — no shell answered after Ctrl+` from the editor pane.
+/// * `55` — Neovim did not answer after `Ctrl+W k` in the drawer: the kept pane cannot take
+///   focus.
+const BDDRAWER_SCENARIO: &str = r#"
+set -eu
+
+# SETTLE is the settle between steps; see SCENARIO. DRAWER_SETTLE as TERMCLOSE_SCENARIO's.
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+DRAWER_SETTLE=2.0
+FILE_TRIES=100
+
+cleanup() {
+    set +e
+    if [ -n "${app_pid:-}" ]; then
+        kill "$app_pid" 2>/dev/null
+        wait "$app_pid" 2>/dev/null
+    fi
+}
+trap cleanup EXIT INT TERM HUP
+
+"$WOLF_BIN" &
+app_pid=$!
+wait_ready "$app_pid" 11 "wolf-gnome bd beside the drawer smoke"
+
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome bd beside the drawer smoke: readback file $f never appeared." >&2
+    return 1
+}
+
+# $1 is the readback file, $2 the exit code. Only a shell writes it.
+shell_pid() {
+    wtype -- "echo \$\$ > '$1'"
+    wtype -k Return
+    wait_file "$1" || exit "$2"
+}
+
+# $1 is the readback file, $2 a Vimscript string expression, $3 the exit code.
+nvim_read() {
+    wtype -- ":call writefile([$2], '$1')"
+    wtype -k Return
+    wait_file "$1" || exit "$3"
+}
+
+# --- Step 1: the earlier file, then the later one, in the only pane ---------
+wtype -- ":e $EARLIER_FILE"
+wtype -k Return
+sleep "$SETTLE"
+wtype -- ":e $LATER_FILE"
+wtype -k Return
+sleep "$SETTLE"
+
+# --- Step 2: Ctrl+` opens the drawer, focused --------------------------------
+wtype -M ctrl -k grave -m ctrl
+sleep "$DRAWER_SETTLE"
+shell_pid "$PID_DRAWER" 51
+
+# --- Step 3: Ctrl+W k makes the editor pane active, where :bd runs -----------
+wtype -M ctrl -k w -m ctrl
+wtype -k k
+sleep "$SETTLE"
+nvim_read "$NVIM_BEFORE" "printf('%d %s', get(w:, 'wolf_drawer', 0), expand('%:t'))" 52
+wtype -- ":bd"
+wtype -k Return
+sleep "$DRAWER_SETTLE"
+nvim_read "$NVIM_AFTER" "printf('%d %d %s', winnr('\$'), get(w:, 'wolf_drawer', 0), expand('%:t'))" 53
+
+# --- Step 4: Ctrl+` focuses the drawer, and Ctrl+W k returns to the pane ------
+wtype -M ctrl -k grave -m ctrl
+sleep "$DRAWER_SETTLE"
+shell_pid "$PID_BACK" 54
+wtype -M ctrl -k w -m ctrl
+wtype -k k
+sleep "$SETTLE"
+nvim_read "$NVIM_REFOCUS" "printf('%d %s', get(w:, 'wolf_drawer', 0), expand('%:t'))" 55
+
+exit 0
+"#;
+
+/// `:bd` in the tab's only editor pane beside the open drawer keeps that pane, on the file
+/// shown before, and the pane takes focus again after the drawer has had it.
+///
+/// The drawer is a Neovim window that the pane tree does not hold, so Neovim's own `:bd`
+/// closes the pane's window, which it does not count as the tabpage's last. It reads no
+/// pixel: where the keys go after each step, and what Neovim answers, say everything.
+///
+/// ## Assertions
+///
+/// | # | assertion | kind | falsifying edit | predicted red |
+/// | --- | --- | --- | --- | --- |
+/// | 1 | the scenario exits 0 | discriminator | delete the `bd` abbreviation in `wolf_setup_layout` | exit 53: Neovim closed the pane's window and the drawer took the keys |
+/// | 2 | before `:bd`, Neovim reads `0 bdklate.md` | precondition | none in this task's code | n/a |
+/// | 3 | after `:bd`, Neovim reads `2 0 bdkearly.md` | discriminator | as for 1 | exit 53 first |
+/// | 4 | the drawer's shell answers again after Ctrl+`, with the same pid | precondition | none in this task's code | n/a |
+/// | 5 | after `Ctrl+W k`, Neovim reads `0 bdkearly.md` | discriminator | as for 1 | exit 53 first |
+///
+/// The exit status is asserted first, so an edit goes red at the first step that notices it.
+#[test]
+fn bd_beside_the_drawer_keeps_the_pane_under_cage() {
+    const SMOKE: &str = "bd_beside_the_drawer_keeps_the_pane_under_cage";
+
+    let runtime_dir = require_smoke_env();
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+    let cwd = make_temp_cwd();
+    write_relaunch_fixtures(
+        SMOKE,
+        &cwd,
+        &[
+            (BDDRAWER_EARLIER_FILE, "# earlier"),
+            (BDDRAWER_LATER_FILE, "# later"),
+        ],
+    );
+
+    let pid_drawer = runtime_dir.join(BDDRAWER_PID_NAME);
+    let nvim_before = runtime_dir.join(BDDRAWER_BEFORE_NAME);
+    let nvim_after = runtime_dir.join(BDDRAWER_AFTER_NAME);
+    let pid_back = runtime_dir.join(BDDRAWER_PID_BACK_NAME);
+    let nvim_refocus = runtime_dir.join(BDDRAWER_REFOCUS_NAME);
+    for path in [
+        &pid_drawer,
+        &nvim_before,
+        &nvim_after,
+        &pid_back,
+        &nvim_refocus,
+    ] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let mut cmd = cage_command(BDDRAWER_SCENARIO, &cwd, &runtime_dir);
+    pin_terminal_smoke_shell(&mut cmd)
+        .env("WOLF_BIN", bin)
+        .env("EARLIER_FILE", BDDRAWER_EARLIER_FILE)
+        .env("LATER_FILE", BDDRAWER_LATER_FILE)
+        .env("PID_DRAWER", &pid_drawer)
+        .env("NVIM_BEFORE", &nvim_before)
+        .env("NVIM_AFTER", &nvim_after)
+        .env("PID_BACK", &pid_back)
+        .env("NVIM_REFOCUS", &nvim_refocus);
+    let status = cmd
+        .status()
+        .expect("failed to spawn `cage` for the headless bd beside the drawer scenario");
+
+    // --- Assertion 1: the scenario ran to completion --------------------------
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage scenario exited unsuccessfully ({status}); cage.log's stderr names \
+         the step. Exit 11: the app died before it was ready for input. Exit 51: no shell \
+         answered after Ctrl+`, so the drawer did not open focused. Exit 52: Neovim did not \
+         answer after Ctrl+W k in the drawer, before `:bd`. Exit 53: Neovim did not answer \
+         after `:bd`, so focus went to the drawer: Neovim closed the editor pane's window, \
+         which the drawer kept from being the tabpage's last, and the pane tree was left \
+         empty. Exit 54: no shell answered after Ctrl+` from the editor pane. Exit 55: Neovim \
+         did not answer after Ctrl+W k in the drawer, so the kept pane cannot take focus."
+    );
+
+    // --- Assertion 2: the editor pane was active on the later file -------------
+    let before = read_trimmed(&nvim_before, SMOKE);
+    let want_before = format!("0 {BDDRAWER_LATER_FILE}");
+    assert_eq!(
+        before, want_before,
+        "{SMOKE}: before `:bd`, Neovim's (w:wolf_drawer, current file) reads {before:?}, want \
+         {want_before:?}, so `:bd` did not run on the later file in the editor pane."
+    );
+
+    // --- Assertion 3: `:bd` kept the pane, on the earlier file ----------------
+    let after = read_trimmed(&nvim_after, SMOKE);
+    let want_after = format!("2 0 {BDDRAWER_EARLIER_FILE}");
+    assert_eq!(
+        after, want_after,
+        "{SMOKE}: after `:bd`, Neovim's (window count, w:wolf_drawer, current file) reads \
+         {after:?}, want {want_after:?}. One window means the editor pane's window closed; \
+         another file means the kept window does not show the one Neovim shows with the \
+         drawer closed."
+    );
+
+    // --- Assertion 4: Ctrl+` focused the same drawer ---------------------------
+    let drawer = read_ints(&pid_drawer, 1, SMOKE)[0];
+    let back = read_ints(&pid_back, 1, SMOKE)[0];
+    assert_eq!(
+        back, drawer,
+        "{SMOKE}: after Ctrl+` from the kept pane the shell pid {back} answered, not the \
+         drawer's {drawer}, so the chord started another shell rather than focusing the drawer."
+    );
+
+    // --- Assertion 5: the kept pane took focus again --------------------------
+    let refocus = read_trimmed(&nvim_refocus, SMOKE);
+    let want_refocus = format!("0 {BDDRAWER_EARLIER_FILE}");
+    assert_eq!(
+        refocus, want_refocus,
+        "{SMOKE}: after Ctrl+W k from the drawer, Neovim's (w:wolf_drawer, current file) reads \
+         {refocus:?}, want {want_refocus:?}: the kept pane must take focus again."
+    );
+}
+
+/// S7: the file `:e`d into the editor pane before the drawer opens.
+///
+/// No name of this smoke carries an OCR term: it reads no pixel, and each is registered in
+/// `RELAUNCH_FIXTURE_NAMES` for the generic loop's sake.
+pub(crate) const OPN_BASE_FILE: &str = "opnbase.md";
+
+/// S7: the file the picker opens, found by [`OPN_PICK_QUERY`]. See [`OPN_BASE_FILE`].
+pub(crate) const OPN_PICK_FILE: &str = "opnpicked.md";
+
+/// What S7 types into the picker: only [`OPN_PICK_FILE`] holds it in order, since no other
+/// name in the cwd has a `p` after its `opn`.
+const OPN_PICK_QUERY: &str = "opnpicked";
+
+/// S7: the file the search result opens. See [`OPN_BASE_FILE`].
+pub(crate) const OPN_SEARCH_FILE: &str = "opnsearch.md";
+
+/// What S7 searches the project for. Only line [`OPN_SEARCH_LINE`] of [`OPN_SEARCH_FILE`]
+/// holds it, and nothing typed before the search writes it to the cwd.
+const OPN_SEARCH_QUERY: &str = "zzquokkahit";
+
+/// The 1-based line of [`OPN_SEARCH_FILE`] that holds [`OPN_SEARCH_QUERY`]. Not 1, so a
+/// result opened with no cursor puts the cursor elsewhere.
+const OPN_SEARCH_LINE: usize = 5;
+
+/// [`OPN_SEARCH_FILE`]'s contents: a heading, filler lines, and [`OPN_SEARCH_QUERY`] on line
+/// [`OPN_SEARCH_LINE`].
+fn opn_search_body() -> String {
+    let mut lines = vec!["# opn search".to_owned()];
+    for line in 2..OPN_SEARCH_LINE {
+        lines.push(format!("filler line {line}"));
+    }
+    lines.push(format!("the {OPN_SEARCH_QUERY} line"));
+    lines.push("a last line".to_owned());
+    lines.join("\n")
+}
+
+/// S7: the drawer's shell writes its pid here once Ctrl+` opened it. Every readback of this
+/// smoke lives under `XDG_RUNTIME_DIR`, out of the sidebar and out of the search's reach, and
+/// is registered in `RELAUNCH_FIXTURE_NAMES` because its absolute path is typed on screen.
+pub(crate) const OPN_PID_NAME: &str = "wolf_gnome_opn_pid.txt";
+
+/// S7: Neovim's readback after the picker opened [`OPN_PICK_FILE`]. See [`OPN_PID_NAME`].
+pub(crate) const OPN_PICKED_NAME: &str = "wolf_gnome_opn_picked.txt";
+
+/// S7: the drawer's shell writes its pid here after Ctrl+` from the editor pane. See
+/// [`OPN_PID_NAME`].
+pub(crate) const OPN_PID_BACK_NAME: &str = "wolf_gnome_opn_pid_back.txt";
+
+/// S7: Neovim's readback after the search result opened. See [`OPN_PID_NAME`].
+pub(crate) const OPN_SEARCHED_NAME: &str = "wolf_gnome_opn_searched.txt";
+
+/// The scenario for [`files_opened_from_the_drawer_land_in_the_editor_pane_under_cage`].
+///
+/// Readbacks follow the focus as in [`TERMCLOSE_SCENARIO`]. Each Neovim readback names the
+/// current window's drawer flag, its file, and the number of drawer windows still showing a
+/// session's placeholder, so a file edited into the drawer's window reads as such even when
+/// the keys reach Neovim.
+///
+/// The search leg is `sidebar.rs`' `PROJSEARCH_SCENARIO`'s, with a Markdown target so the panel's default
+/// toggles find it: Ctrl+Shift+F focuses the panel's entry, the first Enter runs the search,
+/// and the second opens the selected row.
+///
+/// ## Exit codes
+///
+/// * `11` — the app died before it was ready for input (the shared convention).
+/// * `61` — no shell answered after Ctrl+`: the drawer did not open focused.
+/// * `62` — Neovim did not answer after the picker's Enter: focus stayed in the drawer.
+/// * `63` — no shell answered after Ctrl+` from the editor pane.
+/// * `64` — Neovim did not answer after the search result opened: focus stayed in the drawer.
+const OPN_SCENARIO: &str = r#"
+set -eu
+
+# SETTLE is the settle between steps; see SCENARIO. DRAWER_SETTLE as TERMCLOSE_SCENARIO's.
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+DRAWER_SETTLE=2.0
+FILE_TRIES=100
+
+cleanup() {
+    set +e
+    if [ -n "${app_pid:-}" ]; then
+        kill "$app_pid" 2>/dev/null
+        wait "$app_pid" 2>/dev/null
+    fi
+}
+trap cleanup EXIT INT TERM HUP
+
+"$WOLF_BIN" &
+app_pid=$!
+wait_ready "$app_pid" 11 "wolf-gnome open from the drawer smoke"
+
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome open from the drawer smoke: readback file $f never appeared." >&2
+    return 1
+}
+
+# $1 is the readback file, $2 the exit code. Only a shell writes it.
+shell_pid() {
+    wtype -- "echo \$\$ > '$1'"
+    wtype -k Return
+    wait_file "$1" || exit "$2"
+}
+
+# $1 is the readback file, $2 a Vimscript string expression, $3 the exit code.
+nvim_read() {
+    wtype -- ":call writefile([$2], '$1')"
+    wtype -k Return
+    wait_file "$1" || exit "$3"
+}
+
+# Drawer windows still on a session's placeholder.
+PLACEHOLDERS="len(filter(getwininfo(), {_, w -> getwinvar(w.winid, 'wolf_drawer', 0) && getbufvar(w.bufnr, 'wolf_terminal_id', 0) > 0}))"
+
+# --- Step 1: a known file in the editor pane --------------------------------
+wtype -- ":e $BASE_FILE"
+wtype -k Return
+sleep "$SETTLE"
+
+# --- Step 2: Ctrl+` opens the drawer, focused --------------------------------
+wtype -M ctrl -k grave -m ctrl
+sleep "$DRAWER_SETTLE"
+shell_pid "$PID_DRAWER" 61
+
+# --- Step 3: the picker leg: Ctrl+Shift+O, the query, Enter -------------------
+wtype -M ctrl -M shift -k o -m shift -m ctrl
+sleep "$SETTLE"
+wtype -- "$PICK_QUERY"
+sleep "$SETTLE"
+wtype -k Return
+sleep "$DRAWER_SETTLE"
+nvim_read "$NVIM_PICKED" "printf('%d %s %d', get(w:, 'wolf_drawer', 0), expand('%:t'), $PLACEHOLDERS)" 62
+
+# --- Step 4: Ctrl+` focuses the drawer again ---------------------------------
+wtype -M ctrl -k grave -m ctrl
+sleep "$DRAWER_SETTLE"
+shell_pid "$PID_BACK" 63
+
+# --- Step 5: the search leg: Ctrl+Shift+F, the query, Enter to run, Enter to open
+wtype -M ctrl -M shift -k f -m shift -m ctrl
+sleep "$SETTLE"
+wtype -- "$SEARCH_QUERY"
+sleep "$SETTLE"
+wtype -k Return
+sleep "$SETTLE"
+wtype -k Return
+sleep "$DRAWER_SETTLE"
+nvim_read "$NVIM_SEARCHED" "printf('%d %s %d %d', get(w:, 'wolf_drawer', 0), expand('%:t'), line('.'), $PLACEHOLDERS)" 64
+
+exit 0
+"#;
+
+/// A file the picker or a search result opens while the drawer is the focused pane lands in
+/// the editor pane, with a search result's cursor on its line, and the drawer keeps its
+/// session's placeholder.
+///
+/// Both send the file to Neovim's current window, the drawer's while it is focused, unless the
+/// front-end routes it through the pane `wolf FILE` would choose. It reads no pixel. The Open
+/// dialog is native and the tree view's click cannot be driven here; both share the route the
+/// picker's leg tests.
+///
+/// ## Assertions
+///
+/// | # | assertion | kind | falsifying edit | predicted red |
+/// | --- | --- | --- | --- | --- |
+/// | 1 | the scenario exits 0 | discriminator | in `picker.rs`, skip the opener and send `InputEvent::Open` | exit 62: the file opened in the drawer's window, whose view kept the keys |
+/// | 2 | after the pick, Neovim reads `0 opnpicked.md 1` | discriminator | as for 1 | exit 62 first, or a drawer flag of 1 and no placeholder |
+/// | 3 | the drawer's shell answers again after Ctrl+`, with the same pid | precondition | as for 1 | exit 62 first |
+/// | 4 | after the search result, Neovim reads `0 opnsearch.md 1` | discriminator | in `search_panel.rs`, skip the opener | exit 64, or a drawer flag of 1 and no placeholder |
+/// | 5 | after the search result, the cursor is on line [`OPN_SEARCH_LINE`] | discriminator | queue the search result with no cursor in `search_panel.rs` | line 1 |
+///
+/// The exit status is asserted first, so an edit goes red at the first step that notices it.
+#[test]
+fn files_opened_from_the_drawer_land_in_the_editor_pane_under_cage() {
+    const SMOKE: &str = "files_opened_from_the_drawer_land_in_the_editor_pane_under_cage";
+
+    let runtime_dir = require_smoke_env();
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+    let cwd = make_temp_cwd();
+    let search_body = opn_search_body();
+    write_relaunch_fixtures(
+        SMOKE,
+        &cwd,
+        &[
+            (OPN_BASE_FILE, "# opn base"),
+            (OPN_PICK_FILE, "# opn picked"),
+            (OPN_SEARCH_FILE, &search_body),
+        ],
+    );
+
+    let pid_drawer = runtime_dir.join(OPN_PID_NAME);
+    let nvim_picked = runtime_dir.join(OPN_PICKED_NAME);
+    let pid_back = runtime_dir.join(OPN_PID_BACK_NAME);
+    let nvim_searched = runtime_dir.join(OPN_SEARCHED_NAME);
+    for path in [&pid_drawer, &nvim_picked, &pid_back, &nvim_searched] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let mut cmd = cage_command(OPN_SCENARIO, &cwd, &runtime_dir);
+    pin_terminal_smoke_shell(&mut cmd)
+        .env("WOLF_BIN", bin)
+        .env("BASE_FILE", OPN_BASE_FILE)
+        .env("PICK_QUERY", OPN_PICK_QUERY)
+        .env("SEARCH_QUERY", OPN_SEARCH_QUERY)
+        .env("PID_DRAWER", &pid_drawer)
+        .env("NVIM_PICKED", &nvim_picked)
+        .env("PID_BACK", &pid_back)
+        .env("NVIM_SEARCHED", &nvim_searched);
+    let status = cmd
+        .status()
+        .expect("failed to spawn `cage` for the headless open from the drawer scenario");
+
+    // --- Assertion 1: the scenario ran to completion --------------------------
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage scenario exited unsuccessfully ({status}); cage.log's stderr names \
+         the step. Exit 11: the app died before it was ready for input. Exit 61: no shell \
+         answered after Ctrl+`, so the drawer did not open focused. Exit 62: Neovim did not \
+         answer after the picker's Enter, so focus stayed in the drawer: the picked file was \
+         edited in the drawer's window rather than placed in the editor pane. Exit 63: no \
+         shell answered after Ctrl+` from the editor pane. Exit 64: Neovim did not answer \
+         after the search result opened, so focus stayed in the drawer."
+    );
+
+    // --- Assertion 2: the picked file landed in the editor pane ---------------
+    let picked = read_trimmed(&nvim_picked, SMOKE);
+    let want_picked = format!("0 {OPN_PICK_FILE} 1");
+    assert_eq!(
+        picked, want_picked,
+        "{SMOKE}: after the picker opened {OPN_PICK_FILE} from the drawer, Neovim's \
+         (w:wolf_drawer, current file, drawer windows on a placeholder) reads {picked:?}, want \
+         {want_picked:?}. A drawer flag of 1, or no drawer on a placeholder, means the file \
+         was edited in the drawer's window; another file means the pick opened nothing."
+    );
+
+    // --- Assertion 3: Ctrl+` focused the same drawer ---------------------------
+    let drawer = read_ints(&pid_drawer, 1, SMOKE)[0];
+    let back = read_ints(&pid_back, 1, SMOKE)[0];
+    assert_eq!(
+        back, drawer,
+        "{SMOKE}: after Ctrl+` from the editor pane the shell pid {back} answered, not the \
+         drawer's {drawer}, so the search leg did not start from the same drawer."
+    );
+
+    // --- Assertions 4 and 5: the search result landed at its line --------------
+    let searched = read_trimmed(&nvim_searched, SMOKE);
+    let want_searched = format!("0 {OPN_SEARCH_FILE} {OPN_SEARCH_LINE} 1");
+    assert_eq!(
+        searched, want_searched,
+        "{SMOKE}: after a search result in {OPN_SEARCH_FILE} opened from the drawer, Neovim's \
+         (w:wolf_drawer, current file, cursor line, drawer windows on a placeholder) reads \
+         {searched:?}, want {want_searched:?}. A drawer flag of 1, or no drawer on a \
+         placeholder, means the result was edited in the drawer's window; line 1 means it was \
+         opened with no cursor."
     );
 }
 

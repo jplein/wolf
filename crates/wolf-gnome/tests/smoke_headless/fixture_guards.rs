@@ -88,19 +88,22 @@ use super::sidebar_toggles::{
     TG_HEADING, TG_OCR_KEEP, TG_OCR_TREE_ROW, TG_OPEN_FILE, TG_TREE_FILE,
 };
 use super::terminal::{
-    drawer_fixture_body, near_fixture_body, DRAWER_DOWN_NAME, DRAWER_FIXTURE_FILE,
-    DRAWER_FIXTURE_LINE_COUNT, DRAWER_FOCUS_NAME, DRAWER_FOCUS_PRE_NAME,
-    DRAWER_GEOMETRY_READBACK_NAME, DRAWER_HIDDEN_NAME, DRAWER_MARKER, DRAWER_OCR_EDITOR_ABSENT,
-    DRAWER_OCR_MARKER, DRAWER_REOPEN_NAME, DRAWER_SESSION_SIZE_NAME, DRAWER_SPLITCHORD_NAME,
-    DRAWER_SPLITCHORD_STAY_NAME, DRAWER_UP_NAME, DRAWER_VSPLIT_NAME, DRAWER_VSPLIT_WINS_NAME,
-    NEAR_FIXTURE_FILE, NEAR_FIXTURE_LINE_COUNT, NEAR_G1_PID_NAME, NEAR_G2_NVIM_NAME,
-    NEAR_G3_PID_NAME, NEAR_G4_NVIM_NAME, NEAR_G5_PID_NAME, NEAR_G5_TAB_NAME, NEAR_G6_NVIM_NAME,
-    NEAR_G7_NVIM_NAME, NEAR_G7_PID_NAME, NEAR_OCR_FILL, TERMCLOSE_NVIM_DRAWER_NAME,
-    TERMCLOSE_NVIM_SPLIT_NAME, TERMCLOSE_PID_DRAWER_NAME, TERMCLOSE_PID_REOPEN_NAME,
-    TERMCLOSE_PID_SPLIT_NAME, TERMFLOW_NVIM_NAME, TERMFLOW_PID_BACK_NAME, TERMFLOW_PID_OPENED_NAME,
-    TERMFLOW_PID_SPLIT_NAME, TERMRESTART_OCR_DRAWER, TERMRESTART_OCR_PANE,
-    TERMRESTART_PID_AFTER_NAME, TERMRESTART_PID_DRAWER_NAME, TERMRESTART_PID_SPLIT_NAME,
-    TOAST_OCR_TERM, TOAST_PROBE_NAME, TP_OCR_WORD,
+    drawer_fixture_body, near_fixture_body, BDDRAWER_AFTER_NAME, BDDRAWER_BEFORE_NAME,
+    BDDRAWER_EARLIER_FILE, BDDRAWER_LATER_FILE, BDDRAWER_PID_BACK_NAME, BDDRAWER_PID_NAME,
+    BDDRAWER_REFOCUS_NAME, DRAWER_DOWN_NAME, DRAWER_FIXTURE_FILE, DRAWER_FIXTURE_LINE_COUNT,
+    DRAWER_FOCUS_NAME, DRAWER_FOCUS_PRE_NAME, DRAWER_GEOMETRY_READBACK_NAME, DRAWER_HIDDEN_NAME,
+    DRAWER_MARKER, DRAWER_OCR_EDITOR_ABSENT, DRAWER_OCR_MARKER, DRAWER_REOPEN_NAME,
+    DRAWER_SESSION_SIZE_NAME, DRAWER_SPLITCHORD_NAME, DRAWER_SPLITCHORD_STAY_NAME, DRAWER_UP_NAME,
+    DRAWER_VSPLIT_NAME, DRAWER_VSPLIT_WINS_NAME, NEAR_FIXTURE_FILE, NEAR_FIXTURE_LINE_COUNT,
+    NEAR_G1_PID_NAME, NEAR_G2_NVIM_NAME, NEAR_G3_PID_NAME, NEAR_G4_NVIM_NAME, NEAR_G5_PID_NAME,
+    NEAR_G5_TAB_NAME, NEAR_G6_NVIM_NAME, NEAR_G7_NVIM_NAME, NEAR_G7_PID_NAME, NEAR_OCR_FILL,
+    OPN_BASE_FILE, OPN_PICKED_NAME, OPN_PICK_FILE, OPN_PID_BACK_NAME, OPN_PID_NAME,
+    OPN_SEARCHED_NAME, OPN_SEARCH_FILE, TERMCLOSE_NVIM_DRAWER_NAME, TERMCLOSE_NVIM_SPLIT_NAME,
+    TERMCLOSE_PID_DRAWER_NAME, TERMCLOSE_PID_REOPEN_NAME, TERMCLOSE_PID_SPLIT_NAME,
+    TERMFLOW_NVIM_NAME, TERMFLOW_PID_BACK_NAME, TERMFLOW_PID_OPENED_NAME, TERMFLOW_PID_SPLIT_NAME,
+    TERMRESTART_OCR_DRAWER, TERMRESTART_OCR_PANE, TERMRESTART_PID_AFTER_NAME,
+    TERMRESTART_PID_DRAWER_NAME, TERMRESTART_PID_SPLIT_NAME, TOAST_OCR_TERM, TOAST_PROBE_NAME,
+    TP_OCR_WORD,
 };
 use super::titlebar::TB_READ_NAME;
 use super::*;
@@ -1436,6 +1439,77 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         TERMCLOSE_PID_REOPEN_NAME,
         "TERMCLOSE_PID_REOPEN_NAME",
         "terminal_close_chord_closes_the_drawer_and_a_split_under_cage",
+    ),
+    // The last-pane smokes capture no image; their rows serve the generic loop only.
+    (
+        BDDRAWER_EARLIER_FILE,
+        "BDDRAWER_EARLIER_FILE",
+        "bd_beside_the_drawer_keeps_the_pane_under_cage",
+    ),
+    (
+        BDDRAWER_LATER_FILE,
+        "BDDRAWER_LATER_FILE",
+        "bd_beside_the_drawer_keeps_the_pane_under_cage",
+    ),
+    (
+        BDDRAWER_PID_NAME,
+        "BDDRAWER_PID_NAME",
+        "bd_beside_the_drawer_keeps_the_pane_under_cage",
+    ),
+    (
+        BDDRAWER_BEFORE_NAME,
+        "BDDRAWER_BEFORE_NAME",
+        "bd_beside_the_drawer_keeps_the_pane_under_cage",
+    ),
+    (
+        BDDRAWER_AFTER_NAME,
+        "BDDRAWER_AFTER_NAME",
+        "bd_beside_the_drawer_keeps_the_pane_under_cage",
+    ),
+    (
+        BDDRAWER_PID_BACK_NAME,
+        "BDDRAWER_PID_BACK_NAME",
+        "bd_beside_the_drawer_keeps_the_pane_under_cage",
+    ),
+    (
+        BDDRAWER_REFOCUS_NAME,
+        "BDDRAWER_REFOCUS_NAME",
+        "bd_beside_the_drawer_keeps_the_pane_under_cage",
+    ),
+    (
+        OPN_BASE_FILE,
+        "OPN_BASE_FILE",
+        "files_opened_from_the_drawer_land_in_the_editor_pane_under_cage",
+    ),
+    (
+        OPN_PICK_FILE,
+        "OPN_PICK_FILE",
+        "files_opened_from_the_drawer_land_in_the_editor_pane_under_cage",
+    ),
+    (
+        OPN_SEARCH_FILE,
+        "OPN_SEARCH_FILE",
+        "files_opened_from_the_drawer_land_in_the_editor_pane_under_cage",
+    ),
+    (
+        OPN_PID_NAME,
+        "OPN_PID_NAME",
+        "files_opened_from_the_drawer_land_in_the_editor_pane_under_cage",
+    ),
+    (
+        OPN_PICKED_NAME,
+        "OPN_PICKED_NAME",
+        "files_opened_from_the_drawer_land_in_the_editor_pane_under_cage",
+    ),
+    (
+        OPN_PID_BACK_NAME,
+        "OPN_PID_BACK_NAME",
+        "files_opened_from_the_drawer_land_in_the_editor_pane_under_cage",
+    ),
+    (
+        OPN_SEARCHED_NAME,
+        "OPN_SEARCHED_NAME",
+        "files_opened_from_the_drawer_land_in_the_editor_pane_under_cage",
     ),
     // The restart smoke's pid readback paths are typed into shells the capture shows.
     (

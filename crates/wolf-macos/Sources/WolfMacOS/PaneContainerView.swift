@@ -203,8 +203,9 @@ final class PaneContainerView: NSView {
   /// Files opened from outside Wolf (`openFile`), in arrival order, waiting for the view to be
   /// ready: a bound first pane, and no layout rebuild, drawer restore or terminal restore
   /// pending, any of which would replace the pane a file lands in. A restart reset keeps them.
-  /// Each keeps the drained item holding its `wolf --wait`, if any.
-  private var pendingFileOpens: [(path: String, wait: FfiOpenItem?)] = []
+  /// Each keeps the drained item holding its `wolf --wait`, if any, and the cursor to open at.
+  private var pendingFileOpens:
+    [(path: String, wait: FfiOpenItem?, cursor: (line: UInt64, col: UInt64)?)] = []
 
   /// Invoked whenever the pane layout changes in a way that must be persisted (a
   /// divider drag ends, or a restore rebuild completes). Set by the window
@@ -774,16 +775,17 @@ final class PaneContainerView: NSView {
 
   /// Whether Close Pane may close the active pane: true for the drawer, or when the tree has
   /// more than one leaf. The drawer is outside `tree` but is never its tabpage's last window;
-  /// the tree's last leaf is refused even beside the drawer, because Neovim counts the
-  /// drawer's window and `:close` would leave the drawer as the tabpage's only window.
+  /// the tree's last leaf is refused even beside the drawer, as `wolf_do_close` refuses the
+  /// tab's last pane, so the menu item is disabled where the close would do nothing.
   var canClosePane: Bool {
     // Spelled out: with no drawer, `activePane == drawerPaneId` is `nil == nil`, true.
     (drawerPaneId != nil && activePane == drawerPaneId) || tree.leaves().count > 1
   }
 
-  /// Close Pane: closes the active pane with `:close`, or does nothing when `canClosePane`
-  /// is false. It focuses the active pane's window first, on core's ordered input channel,
-  /// so `:close` closes the pane the gate read even while a focus move is still in flight.
+  /// Close Pane: closes the active pane through `close_pane`, or does nothing when
+  /// `canClosePane` is false. It focuses the active pane's window first, on core's ordered
+  /// input channel, so the close acts on the pane the gate read even while a focus move is
+  /// still in flight.
   func closeActivePane() {
     guard canClosePane else { return }
     let win = activeWin
@@ -2465,10 +2467,33 @@ final class PaneContainerView: NSView {
   /// editor or preview pane, or splitting the whole tab with a new editor pane on the left. A
   /// missing file opens as a new buffer. It waits in `pendingFileOpens` until the view is ready.
   /// `wait`, a drained item holding a `wolf --wait`, is handed to the core once the file is
-  /// placed, so its command ends when the file's buffer closes.
-  func openFile(_ path: String, wait: FfiOpenItem? = nil) {
-    pendingFileOpens.append((path, wait))
+  /// placed, so its command ends when the file's buffer closes. `cursor`, when set, is where
+  /// the file opens, as `open_at` places it.
+  func openFile(
+    _ path: String, wait: FfiOpenItem? = nil, at cursor: (line: UInt64, col: UInt64)? = nil
+  ) {
+    pendingFileOpens.append((path, wait, cursor))
     runPendingFileOpens()
+  }
+
+  /// Opens `path`, chosen in the file picker, the sidebar or the Open dialog, at `cursor` when
+  /// set. A preview pane previews it, falling back to an edit when it is not previewable. With
+  /// the drawer active it goes where `openFile` places it, since Neovim's current window, which
+  /// `open` edits in, is the drawer's. See specs/terminal-panes.md#the-drawer
+  func openPickedFile(_ path: String, at cursor: (line: UInt64, col: UInt64)? = nil) {
+    if drawerPaneId != nil && activePane == drawerPaneId {
+      openFile(path, at: cursor)
+      return
+    }
+    if activePaneIsPreview, handle.preview_file(activeWin, path) != 0 {
+      onRenderWake()
+      return
+    }
+    if let cursor {
+      handle.open_at(path, cursor.line, cursor.col)
+    } else {
+      handle.open(path)
+    }
   }
 
   /// Opens every waiting file in order once the view is ready, each choosing its pane from the
@@ -2480,8 +2505,8 @@ final class PaneContainerView: NSView {
     else { return }
     let opens = pendingFileOpens
     pendingFileOpens.removeAll()
-    for (path, wait) in opens {
-      placeFile(path)
+    for (path, wait, cursor) in opens {
+      placeFile(path, at: cursor)
       // Even after a placement that returned early: Neovim answers 1 when no buffer shows it.
       if let wait { handle.wait_on(wait) }
     }
@@ -2490,8 +2515,8 @@ final class PaneContainerView: NSView {
     onLayoutChanged?()
   }
 
-  /// Places one file by core's choice over the live layout.
-  private func placeFile(_ path: String) {
+  /// Places one file by core's choice over the live layout, at `cursor` when set.
+  private func placeFile(_ path: String, at cursor: (line: UInt64, col: UInt64)?) {
     let leaves = tree.leaves()
     var paths: [PaneId: String] = [:]
     var previews = Set<PaneId>()
@@ -2520,14 +2545,23 @@ final class PaneContainerView: NSView {
     func win(_ index: Int) -> Int64 {
       leaves.indices.contains(index) ? panes[leaves[index]]?.win ?? 0 : 0
     }
+    func open() {
+      if let cursor {
+        handle.open_at(path, cursor.line, cursor.col)
+      } else {
+        handle.open(path)
+      }
+    }
     switch choice.placement {
     case .focus(let index):
       if win(index) != 0 { handle.focus_win(win(index)) }
+      if cursor != nil { open() }
     case .open(let index), .convert(let index):
       if win(index) != 0 { handle.focus_win(win(index)) }
-      handle.open(path)
+      open()
     case .splitLeft:
       let newWin = handle.open_split_left(path)
+      if newWin != 0, cursor != nil { open() }
       guard newWin != 0, paneForWin(newWin) == nil else { return }
       let newId = allocPaneId()
       tree.splitRootLeft(newId)

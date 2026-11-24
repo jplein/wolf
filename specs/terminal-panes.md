@@ -97,6 +97,8 @@ There is one drawer session per core, and so one per tab on both front-ends. `Wo
 
 Both front-ends keep the drawer outside their pane trees, as their existing decisions say. Core's router ignores split chords from the drawer's session, and `<C-w>c` or `<C-w>q` in the drawer closes it.
 
+A file the file picker, the sidebar or the Open dialog opens while the drawer is the active pane goes to the pane [§5.2](cli-and-file-open.md#52-choosing-the-pane) chooses, as a file from `wolf FILE` does, never into the drawer.
+
 The drawer opens at a third of the pane area. Dragging its top edge resizes it, and neither the drawer nor the editor tree goes below one pane's minimum height. The dragged share is remembered per window for the session: closing and reopening the drawer and a window resize keep it, a new window starts at a third, and a relaunch restores the tab's saved share ([application-state.md](application-state.md#tab)).
 
 ## The render contract

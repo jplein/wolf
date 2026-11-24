@@ -55,7 +55,7 @@ Both faces converge on the same drain path.
 
 `crates/wolf-core/src/api.rs::drain_commands` consumes the queue in arrival order, and the FFI's `WolfCoreHandle::drain_commands` maps each entry through `FfiCommand::from_command` into its discriminant. On macOS, `WolfWindowController.drainAndDispatchCommands` runs on each render wake, decodes every `FfiCommand.kind()` with `CommandKind(ffi:)`, and dispatches against its own window.
 
-The layout helper's `:q` and `:qa` interception is a third, internal source of the same notification: on the last pane `do_quit` fires `wolf_command "close_window"`, and the `:qa` family (`all = true`) fires it regardless of pane count, closing the whole window. Both reuse the existing `close_window` registry command and add no command, no FFI constant, and no discriminant — see [`runtime/nvim/README.md`](../runtime/nvim/README.md).
+The layout helper's `:q` and `:qa` interception is a third, internal source of the same notification: on the tab's last pane, where the terminal drawer does not count, `do_quit` fires `wolf_command "close_window"`, and the `:qa` family (`all = true`) fires it regardless of pane count, closing the whole window. Both reuse the existing `close_window` registry command and add no command, no FFI constant, and no discriminant — see [`runtime/nvim/README.md`](../runtime/nvim/README.md).
 
 **Face B (the native menu).** `AppDelegate.handleCommandMenuItem` reads the clicked item's `NSMenuItem.tag`, decodes it with `CommandKind(ffi:)`, finds the key window's controller, and dispatches. There is no round trip through nvim — the discriminant was already in the tag.
 
