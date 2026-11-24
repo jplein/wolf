@@ -409,6 +409,15 @@ pub(crate) const DRAWER_SPLITCHORD_STAY_NAME: &str = "wolf_gnome_drawer_splitcho
 /// leg g, the split chord splitting nothing. See [`DRAWER_UP_NAME`].
 pub(crate) const DRAWER_SPLITCHORD_NAME: &str = "wolf_gnome_drawer_splitchord.txt";
 
+/// S1: Neovim's readback after `<C-w>k` out of the drawer that leg e focused — leg i's
+/// precondition, that an editor window is current with the drawer open. See
+/// [`DRAWER_UP_NAME`].
+pub(crate) const DRAWER_FOCUS_PRE_NAME: &str = "wolf_gnome_drawer_focus_pre.txt";
+
+/// S1: the drawer's shell writes here after the chord is pressed from that editor window —
+/// leg i, the chord focusing the open drawer rather than hiding it. See [`DRAWER_UP_NAME`].
+pub(crate) const DRAWER_FOCUS_NAME: &str = "wolf_gnome_drawer_focus.txt";
+
 /// What the drawer's shell writes into a shell readback.
 ///
 /// Only a shell can write it: typed into Neovim instead, `echo …` is a run of
@@ -418,11 +427,14 @@ const DRAWER_SHELL_READBACK: &str = "in-drawer";
 /// The window count `winnr('$')` must report once the chord has HIDDEN the drawer:
 /// the editor window alone.
 ///
-/// **A PRECONDITION for leg h**: a count of two says the hiding press never arrived,
-/// and leg h's discriminator would then re-prove leg d's bridge rather than the
-/// re-open. It cannot discriminate the front-end arm leg h is about:
-/// `wolf_toggle_terminal` closes the drawer window inside Neovim, so Neovim reports
-/// one window whatever the front-end makes of the vanished grid.
+/// The hiding press is made from the drawer leg i focused, so this is also the check
+/// that a second chord closes the drawer the first one focused: a count of two says the
+/// chord focused the active drawer again, or never arrived.
+///
+/// **A PRECONDITION for leg h**: with two windows, leg h's discriminator would re-prove
+/// leg d's bridge rather than the re-open. It cannot discriminate the front-end arm leg
+/// h is about: `wolf_toggle_terminal` closes the drawer window inside Neovim, so Neovim
+/// reports one window whatever the front-end makes of the vanished grid.
 const DRAWER_WINS_AFTER_HIDE: i64 = 1;
 
 /// The window count `winnr('$')` reports with the drawer open beside one editor pane.
@@ -583,8 +595,16 @@ nvim_probe "$PROBE_UP" d
 chord_w j
 shell_probe "$PROBE_DOWN" e
 
+# --- Step 7a: leg i -- the chord from an editor FOCUSES the open drawer ------
+chord_w k
+nvim_probe "$PROBE_FOCUS_PRE" i-pre
+wtype -M ctrl -k grave -m ctrl
+sleep "$DRAWER_SETTLE"
+shell_probe "$PROBE_FOCUS" i
+
 # --- Step 8: leg h -- hide the drawer, re-open it, and <C-w>k out of it -----
 #
+# The first chord is made from the drawer leg i focused, so it must hide it.
 # Hiding emits no intent at all (wolf_core::layout records why), so the vanished
 # grid is the whole signal the front-end gets. This pair must stay above the
 # :vsplit below; see DRAWER_SCENARIO's doc comment.
@@ -621,8 +641,8 @@ exit 0
 "#;
 
 /// The GTK terminal drawer opens on `<Control>grave` on a core terminal session,
-/// paints its shell, keeps the focus bridge working in both directions, hides and
-/// re-opens on the same chord, keeps its binding through a pane-area rebuild, is
+/// paints its shell, keeps the focus bridge working in both directions, takes focus on
+/// the chord from an editor while open, hides and re-opens on the same chord, keeps its binding through a pane-area rebuild, is
 /// never split by a split chord — and never becomes a leaf of a saved tab's root.
 ///
 /// ## What it is the only evidence for
@@ -642,6 +662,7 @@ exit 0
 /// | e | after `<C-w>j`, the drawer's shell answers | delete the `dir == Down` bridge arm from `drawer::focus_target` | exit 15 at leg e: focus never left the editor |
 /// | f | after a `:vsplit` added a window, `<C-w>j` still reaches the drawer's shell, so the drawer's binding survived the split's rebuild | `self.clear_drawer()` in `apply_split`, before its `rebuild_pane_area()` | exit 15 at leg f |
 /// | g | after `<C-w>s` in the drawer, its shell still answers and Neovim counts no new window | delete the drawer guard in `wolf_core::terminal::TerminalRegistry::router_split` | one window more than after the `:vsplit`, or exit 14 at leg g |
+/// | i | after `<C-w>k` to an editor, the chord leaves the drawer open and its shell answers | in `wolf_toggle_terminal`, change `if drawer == vim.api.nvim_get_current_win() then` to `if true then` | exit 15 at leg i: the chord hid the drawer, so Neovim got the `echo` |
 /// | h | after the chord HIDES the drawer and another press re-opens it, `<C-w>k` out of the NEW drawer reaches an editor window | delete BOTH the `if let Some(drawer_id) = closed_drawer { … }` block and the loop's `.filter(…)` from `detect_closes` | exit 14 at leg f-vsplit: leg h's readbacks still appear, and the scenario stops at the `:vsplit`'s readback |
 ///
 /// Leg f proves the drawer's binding survives the split's rebuild, not where the strip
@@ -651,14 +672,16 @@ exit 0
 /// Leg g's front-end second line, `apply_split`'s drawer guard, is not reachable
 /// from a key: core's router is what refuses the split, so the falsifier is core's.
 ///
-/// **Leg h runs between legs e and f**, not after leg g — the scenario's step 8. It
-/// is lettered last; the scenario's step comments are the authority on order.
+/// **Legs i and h run between legs e and f**, not after leg g — the scenario's steps 7a
+/// and 8. They are lettered last; the scenario's step comments are the authority on
+/// order. Leg h's first chord comes from the drawer leg i focused, so its precondition is
+/// also the check that a second chord closes the drawer the first one focused.
 ///
 /// ## Ordering
 ///
 /// The legs are ordered and later ones presuppose earlier ones: leg e is typed from
-/// wherever leg d left focus, leg h from wherever leg e did, and legs f and g from
-/// wherever leg h did. The scenario stops at the first focus leg whose readback
+/// wherever leg d left focus, leg i from wherever leg e did, leg h from wherever leg i
+/// did, and legs f and g from wherever leg h did. The scenario stops at the first focus leg whose readback
 /// never appears, and its exit code and stderr name it.
 ///
 /// The exit status is asserted first, before the band, the saved state or any readback
@@ -697,6 +720,8 @@ fn terminal_drawer_opens_and_is_not_persisted_under_cage() {
     let band_png = runtime_dir.join("wolf_gnome_drawer_band.png");
     let probe_up = runtime_dir.join(DRAWER_UP_NAME);
     let probe_down = runtime_dir.join(DRAWER_DOWN_NAME);
+    let probe_focus_pre = runtime_dir.join(DRAWER_FOCUS_PRE_NAME);
+    let probe_focus = runtime_dir.join(DRAWER_FOCUS_NAME);
     let probe_hidden = runtime_dir.join(DRAWER_HIDDEN_NAME);
     let probe_reopen = runtime_dir.join(DRAWER_REOPEN_NAME);
     let probe_vsplit_wins = runtime_dir.join(DRAWER_VSPLIT_WINS_NAME);
@@ -708,6 +733,8 @@ fn terminal_drawer_opens_and_is_not_persisted_under_cage() {
         &band_png,
         &probe_up,
         &probe_down,
+        &probe_focus_pre,
+        &probe_focus,
         &probe_hidden,
         &probe_reopen,
         &probe_vsplit_wins,
@@ -730,6 +757,8 @@ fn terminal_drawer_opens_and_is_not_persisted_under_cage() {
         .env("DRAWER_STATE_COPY", &frozen)
         .env("PROBE_UP", &probe_up)
         .env("PROBE_DOWN", &probe_down)
+        .env("PROBE_FOCUS_PRE", &probe_focus_pre)
+        .env("PROBE_FOCUS", &probe_focus)
         .env("PROBE_HIDDEN", &probe_hidden)
         .env("PROBE_REOPEN", &probe_reopen)
         .env("PROBE_VSPLIT_WINS", &probe_vsplit_wins)
@@ -749,11 +778,13 @@ fn terminal_drawer_opens_and_is_not_persisted_under_cage() {
          appeared because focus was in a terminal pane — at leg d the drawer kept focus after \
          `<C-w>k` (`apply_focus` not resolving through `drawer::focus_target`), or no drawer \
          pane was bound at all (`apply_intent` dropping `LayoutIntent::DrawerOpen`), so the \
-         drawer's keys had gone to Neovim; at leg h the drawer was made a pane-tree leaf \
+         drawer's keys had gone to Neovim; at leg i-pre `<C-w>k` did not leave the drawer; at leg h \
+         the drawer was made a pane-tree leaf \
          (`tree.split` in `apply_drawer_open`); at leg f-vsplit the hidden drawer's pane was \
          never unbound (`detect_closes`' drawer arm); at leg g `<C-w>s` split the drawer. Exit \
          15: a shell readback never appeared because focus was in an editor pane — at leg e the \
-         bridge arm did not answer `<C-w>j`, at leg f the `:vsplit`'s split unbound the drawer, \
+         bridge arm did not answer `<C-w>j`, at leg i the chord from an editor hid the open \
+         drawer instead of focusing it (or the front-end did not follow Neovim into it), at leg f the `:vsplit`'s split unbound the drawer, \
          at leg g-stay something moved focus out \
          of the drawer. Exit 16: the app had created no wolf.sqlite while the drawer was open, \
          so it opened no state store, which is upstream of anything about the drawer. Otherwise \
@@ -887,15 +918,41 @@ fn terminal_drawer_opens_and_is_not_persisted_under_cage() {
          something ran the `echo`; another content means the line was mangled on the way."
     );
 
-    // Assertion 7 (leg h, precondition): the chord hid the drawer; a lost chord leaves two windows.
+    // --- Assertion 6a (leg i): the chord from an editor FOCUSES the open drawer ----
+    let (drawer, wins) = read_drawer_probe(
+        &probe_focus_pre,
+        SMOKE,
+        "after <C-w>k out of the drawer leg e focused",
+    );
+    assert_eq!(
+        (drawer, wins),
+        (0, DRAWER_WINS_WITH_DRAWER),
+        "{SMOKE}: leg i's precondition: after `<C-w>k` out of the drawer, Neovim's \
+         (w:wolf_drawer, window count) is ({drawer}, {wins}), want (0, \
+         {DRAWER_WINS_WITH_DRAWER}): an editor window current with the drawer open. Without it \
+         the chord below is not made from an editor beside an open drawer, and leg i proves \
+         nothing."
+    );
+    let focus = read_trimmed(&probe_focus, SMOKE);
+    assert_eq!(
+        focus, DRAWER_SHELL_READBACK,
+        "{SMOKE}: after the chord from an editor with the drawer open, the readback reads \
+         {focus:?}, want the drawer shell's {DRAWER_SHELL_READBACK:?}. The file appeared, so \
+         something ran the `echo`; another content means the line was mangled on the way."
+    );
+
+    // Assertion 7 (leg h, precondition): the chord from the focused drawer hid it; two windows
+    // mean it focused the drawer again or never arrived.
     let (drawer, wins) = read_drawer_probe(&probe_hidden, SMOKE, "after the chord hid the drawer");
     assert_eq!(
         (drawer, wins),
         (0, DRAWER_WINS_AFTER_HIDE),
         "{SMOKE}: after a second `<Control>grave` Neovim's (w:wolf_drawer, window count) is \
          ({drawer}, {wins}), want (0, {DRAWER_WINS_AFTER_HIDE}) — the editor window on its own. \
-         TWO windows mean the drawer window is still open: the chord never arrived, or \
-         `wolf_toggle_terminal` stopped finding the tabpage's `w:wolf_drawer` window. Both are \
+         The chord was made from the drawer leg i focused. TWO windows mean the drawer window \
+         is still open: the chord never arrived, `wolf_toggle_terminal` focused the active \
+         drawer again instead of closing it, or it stopped finding the tabpage's \
+         `w:wolf_drawer` window. Both are \
          Neovim-side, and both make leg h below VACUOUS rather than red."
     );
 

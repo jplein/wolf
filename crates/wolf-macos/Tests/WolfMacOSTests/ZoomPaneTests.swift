@@ -388,41 +388,55 @@ final class ZoomPaneTests: XCTestCase {
 
   // MARK: - Z7 to Z9: Toggle Terminal and focus moves while zoomed
 
-  /// Toggle Terminal while a tree pane is zoomed unzooms, then closes the open, hidden drawer
-  /// as it would unzoomed.
-  func testToggleTerminalWhileAPaneIsZoomedUnzoomsAndClosesTheOpenDrawer() {
+  /// Toggle Terminal while a tree pane is zoomed unzooms, then focuses the open, hidden drawer
+  /// as it would unzoomed, leaving every pane, the drawer included, at its size.
+  func testToggleTerminalWhileAPaneIsZoomedUnzoomsAndFocusesTheOpenDrawer() {
     guard let fixture = TerminalViewFixture() else { return }
     defer { fixture.shutdown() }
     let handle = fixture.handle
     let container = fixture.container
-    guard let l = buildLayout(fixture), zoom(fixture, on: l.wA) else { return }
+    guard let l = buildLayout(fixture) else { return }
+    let frames0 = container.visiblePaneFrames
+    let drawerSize0 = sessionSize(fixture, l.sD)
+    XCTAssertEqual(
+      Set(frames0.keys), [l.wA, l.wB, l.wC, l.wD], "premise: all four panes must show: \(frames0)")
+    guard zoom(fixture, on: l.wA) else { return }
 
     container.toggleTerminal()
     XCTAssertFalse(
       container.isZoomed,
       "toggleTerminal() while A is zoomed must unzoom at once; zoomed means the toggle reaches"
         + " a drawer the user cannot see, or does nothing")
-    let closed = fixture.wake {
-      !handle.windows().contains { $0.win() == l.wD } && container.visiblePaneFrames[l.wD] == nil
+    let focused = fixture.wake {
+      container.activeWin == l.wD && handle.active_win() == l.wD
+        && container.activeTerminal == l.sD
     }
     XCTAssertTrue(
-      closed,
-      "toggleTerminal() while A is zoomed must close the open drawer, as unzoomed: windows"
-        + " \(handle.windows().map { $0.win() }), frames \(container.visiblePaneFrames)")
-    guard closed else { return }
+      focused,
+      "toggleTerminal() while A is zoomed must focus the open drawer (\(l.wD)), as unzoomed:"
+        + " view \(container.activeWin), Neovim \(handle.active_win()), active terminal"
+        + " \(String(describing: container.activeTerminal)), windows"
+        + " \(handle.windows().map { $0.win() }). A in both means the toggle closed the drawer or"
+        + " did nothing; Neovim on the drawer and the view on A, that the view does not follow")
+    guard focused else { return }
 
+    settle(fixture, 1)
+    XCTAssertTrue(
+      handle.windows().contains { $0.win() == l.wD },
+      "the focused drawer must keep its window \(l.wD): \(handle.windows().map { $0.win() })")
+    XCTAssertFalse(container.isZoomed, "the view must stay unzoomed with the drawer focused")
     let frames = container.visiblePaneFrames
     XCTAssertEqual(
-      Set(frames.keys), [l.wA, l.wB, l.wC],
-      "with the drawer closed, the three tree panes must show: \(frames). A alone means the"
-        + " view stayed zoomed, as closing a hidden pane keeps a zoom")
-    XCTAssertFalse(container.isZoomed, "the view must stay unzoomed once the drawer is closed")
+      Set(frames.keys), [l.wA, l.wB, l.wC, l.wD],
+      "unzoomed with the drawer open, all four panes must show: \(frames). No drawer means the"
+        + " toggle closed it; A alone, that the view stayed zoomed")
+    for win in [l.wA, l.wB, l.wC, l.wD] {
+      assertRect(
+        frames[win], frames0[win], "pane \(win) must be back at its frame from before the zoom")
+    }
     XCTAssertEqual(
-      frames.values.map { $0.maxY }.max() ?? 0, container.bounds.height, accuracy: accuracy,
-      "with the drawer closed, the tree must reach the bottom of the area: \(frames)")
-    XCTAssertTrue(
-      Array(handle.live_terminals()).contains(l.sD),
-      "the drawer's session must outlive its toggle: \(Array(handle.live_terminals()))")
+      sessionSize(fixture, l.sD), drawerSize0,
+      "focusing the drawer must leave its session at its size from before the zoom")
   }
 
   /// A focus move with no target in the unzoomed layout changes nothing, in Neovim or in the

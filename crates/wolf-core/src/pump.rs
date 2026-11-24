@@ -176,7 +176,7 @@ pub(crate) async fn dismiss_toast_and_wake(snapshot: &SharedSnapshot, wake: &Wak
     }
 }
 
-/// Whether `event` takes the user into a terminal pane: a drawer toggle, either way, or a
+/// Whether `event` takes the user into a terminal pane: a drawer toggle, whatever it does, or a
 /// `FocusWin` into a window that shows a session.
 fn enters_terminal(event: &InputEvent, snap: &Snapshot) -> bool {
     match event {

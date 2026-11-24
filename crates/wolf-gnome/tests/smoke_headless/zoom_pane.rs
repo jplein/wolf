@@ -47,7 +47,11 @@ const NEW_SPLIT_FRACTION: f64 = 0.5;
 
 /// The inclusive band of exit codes [`ZOOM_PANE_BODY`] adds to [`POINTER_PREAMBLE`]'s 11-15
 /// and 40.
-const OWN_EXITS: std::ops::RangeInclusive<i32> = 82..=94;
+const OWN_EXITS: std::ops::RangeInclusive<i32> = 82..=95;
+
+/// What the drawer's shell writes into H's shell readback. Typed into Neovim instead, the
+/// `echo` is a run of Normal-mode keys, which writes no file.
+const ZOOM_SHELL_READBACK: &str = "in-zoom-drawer";
 
 /// The exit codes of [`ZOOM_LAYOUT`]'s readbacks, the first of [`OWN_EXITS`].
 const LAYOUT_EXITS: std::ops::RangeInclusive<i32> = 82..=85;
@@ -99,6 +103,13 @@ chord_w() {
 toggle_drawer() {
     wtype -M ctrl -k grave -m ctrl
     sleep "$DRAWER_SETTLE"
+}
+
+# $1 is the readback file, $2 the exit code. Only the drawer's keys reach its shell.
+shell_readback() {
+    wtype -- "echo $ZOOM_SHELL_READBACK > '$1'"
+    wtype -k Return
+    wait_file "$1" || exit "$2"
 }
 
 # $1 is the query; Enter runs the palette's top row.
@@ -154,9 +165,10 @@ nvim_geom "$READ_P" 85
 /// Body of [`zoom_pane_hides_restores_and_unzooms_under_cage`], appended to
 /// [`POINTER_PREAMBLE`] and [`ZOOM_LAYOUT`].
 ///
-/// Every readback is a Neovim one, typed into an editor pane. A readback typed where Neovim
-/// does not answer, into the drawer's shell or into a palette still open, never appears, and
-/// its exit code names the leg.
+/// Every readback but H's shell one is a Neovim one, typed into an editor pane. A readback
+/// typed where Neovim does not answer, into the drawer's shell or into a palette still open,
+/// never appears, and its exit code names the leg. H's shell readback is typed into the
+/// drawer, and never appears when the keys reach Neovim instead.
 ///
 /// ## Exit codes it adds to [`POINTER_PREAMBLE`]'s 11-15
 ///
@@ -167,14 +179,15 @@ nvim_geom "$READ_P" 85
 /// | `84` | Q | Neovim did not answer in C before the drags, in [`ZOOM_LAYOUT`] |
 /// | `85` | P | Neovim did not answer after the drags and `<C-w>k`, in [`ZOOM_LAYOUT`]: a press left focus off the editor |
 /// | `86` | Z | Neovim did not answer after the palette's `zoom`: no row matched and the palette kept the keys |
-/// | `87` | H | Neovim did not answer after Ctrl+` closed the drawer while B was zoomed |
+/// | `87` | H | Neovim did not answer after Ctrl+` focused the drawer while B was zoomed and `<C-w>k` left it |
 /// | `88` | F | Neovim did not answer after `<C-w>h` while zoomed |
 /// | `89` | W | Neovim did not answer after `<C-w>w`: focus stayed on a pane that is not Neovim's, such as the drawer |
 /// | `90` | U | Neovim did not answer after the unzoom |
 /// | `91` | S | Neovim did not answer after the zoom and `<C-w>v` |
-/// | `92` | C | Neovim did not answer after the zoom, `<C-w>c` and Ctrl+` |
+/// | `92` | C | Neovim did not answer after the zoom, `<C-w>c` and Ctrl+` twice |
 /// | `93` | O | Neovim did not answer after the zoom and Preview in Another Pane |
 /// | `94` | N | Neovim did not answer after Ctrl+` opened the drawer while B was zoomed and `<C-w>k` left it |
+/// | `95` | H-shell | the drawer's shell did not answer after Ctrl+` while B was zoomed: the toggle closed the drawer or left the keys on B |
 const ZOOM_PANE_BODY: &str = r#"
 # Preview in Another Pane starts a WebKit view.
 PREVIEW_SETTLE=3.0
@@ -199,13 +212,20 @@ palette "$ZOOM_QUERY"
 chord_w w
 nvim_geom "$READ_W" 89 ' %d' ', g:zwnext'
 
-# --- H: zoom B, then Toggle Terminal with the drawer open and hidden ----------------
+# --- H: zoom B, then Toggle Terminal with the drawer open and hidden focuses it -----
 nvim_ex "call win_gotoid(g:zwb)"
 palette "$ZOOM_QUERY"
 toggle_drawer
+shell_readback "$READ_H_SHELL" 95
+chord_w k
 nvim_geom "$READ_H" 87
 
+# --- Toggle Terminal twice: from B it focuses the drawer, from the drawer it closes it ---
+toggle_drawer
+toggle_drawer
+
 # --- N: zoom B, then Toggle Terminal with no drawer; <C-w>k leaves the new drawer ---
+nvim_ex "call win_gotoid(g:zwb)"
 palette "$ZOOM_QUERY"
 toggle_drawer
 chord_w k
@@ -218,9 +238,10 @@ palette "$ZOOM_QUERY"
 chord_w v
 nvim_geom "$READ_S" 91 ' %d %d' ', winwidth(0), winheight(0)'
 
-# --- C: zoom the new pane, close it, then Toggle Terminal ----------------------------
+# --- C: zoom the new pane, close it, then Toggle Terminal to focus and close the drawer ---
 palette "$ZOOM_QUERY"
 chord_w c
+toggle_drawer
 toggle_drawer
 nvim_focus "$READ_C" 92
 
@@ -597,7 +618,12 @@ fn assert_layout(
 /// told apart from one re-derived at the default weight or share by at least two cells.
 ///
 /// L is the launch pane alone, which has the whole pane area. Z-b holds because a zoomed
-/// pane gets that same area, and H's A spans that same height once the drawer is gone.
+/// pane gets that same area.
+///
+/// Toggle Terminal with the drawer open and another pane active focuses the drawer, and a
+/// second press, from the drawer, closes it. H reads the drawer's shell after the first press,
+/// then `<C-w>k` takes the drawer's bridge to its most recent editor pane, B. Before N and at C
+/// the scenario presses twice, so the drawer is closed.
 ///
 /// ## The legs
 ///
@@ -616,7 +642,7 @@ fn assert_layout(
 /// | F2 | F-b: four windows; A, B, C and D equal P | in `zoomed_after`, `ZoomEvent::FocusMove { .. } => zoomed` | F-b: B still at L's size |
 /// | — | precondition W: `g:zwnext` is A or C | none | n/a |
 /// | W2 | W: four windows, current `g:zwnext`; A, B, C and D equal P | in `update_active_pane`, delete the `FocusMove` application and its rebuild | W: B still at L's size |
-/// | H1 | H: three windows, current B, A at P's width and L's height, B at P's width | in `zoomed_after`, `ZoomEvent::ToggleTerminal { .. } => zoomed` | H: B still at L's size |
+/// | H1 | H-a: the drawer's shell answers; H-b: four windows, current B; A, B, C and D equal P, D still the window I recorded | in `wolf_toggle_terminal`, change `if drawer == vim.api.nvim_get_current_win() then` to `if true then` | exit 95: the toggle closed the drawer, so Neovim got the `echo` |
 /// | N1 | N: four windows, the last tagged `w:wolf_drawer`; A, B, C and D equal P | at the top of `PaneInner::toggle_terminal`, return while `self.zoomed.get().is_some() && self.drawer.get().id().is_none()` | N: three windows |
 /// | — | S: five windows; B halved in width at P's height; A, C and D equal P; the new pane current | none of its own; see below | n/a |
 /// | — | precondition C: three windows, the closed pane not current | none | n/a |
@@ -638,6 +664,11 @@ fn assert_layout(
 /// and `update_active_pane` reads that as a focus move, which unzooms. Deleting the
 /// `ZoomEvent::PanesChanged` call in `detect_closes` therefore turns nothing here red;
 /// `tests/pane_zoom.rs`'s K5 pins that rule.
+///
+/// H's unzoom is masked the same way. Toggle Terminal makes the drawer Neovim's current window,
+/// and `update_active_pane` reads its `WinEnter` as a focus move, which unzooms, so
+/// `ZoomEvent::ToggleTerminal { .. } => zoomed` in `zoomed_after` leaves H green;
+/// `tests/pane_zoom.rs`'s K7 pins that rule.
 ///
 /// S has no falsifier of its own. `<C-w>v` makes the new window Neovim's current one, and
 /// `update_active_pane` reads that as a focus move, which unzooms, so deleting the `Split`
@@ -671,15 +702,29 @@ fn zoom_pane_hides_restores_and_unzooms_under_cage() {
     let read_u = read("unzoomed");
     let read_f = read("focus_move");
     let read_w = read("wincmd_w");
-    let read_h = read("drawer_close");
+    let read_h_shell = read("drawer_focus_shell");
+    let read_h = read("drawer_focus");
     let read_n = read("drawer_open");
     let read_s = read("split");
     let read_c = read("close");
     let read_o = read("other_pane");
     let out_png = runtime_dir.join("wolf_gnome_zoom_pane_smoke.png");
     let evidence = [
-        &read_l, &read_i, &read_q, &read_p, &read_z, &read_u, &read_f, &read_w, &read_h, &read_n,
-        &read_s, &read_c, &read_o, &out_png,
+        &read_l,
+        &read_i,
+        &read_q,
+        &read_p,
+        &read_z,
+        &read_u,
+        &read_f,
+        &read_w,
+        &read_h_shell,
+        &read_h,
+        &read_n,
+        &read_s,
+        &read_c,
+        &read_o,
+        &out_png,
     ];
     for path in evidence {
         clear_evidence(path, SMOKE);
@@ -693,6 +738,7 @@ fn zoom_pane_hides_restores_and_unzooms_under_cage() {
         .env("ZOOM_SOURCE", ZOOM_SOURCE_FILE)
         .env("ZOOM_QUERY", ZOOM_QUERY)
         .env("PREVIEW_OTHER_PANE_QUERY", PREVIEW_OTHER_PANE_QUERY)
+        .env("ZOOM_SHELL_READBACK", ZOOM_SHELL_READBACK)
         .env("READ_L", &read_l)
         .env("READ_I", &read_i)
         .env("READ_Q", &read_q)
@@ -701,6 +747,7 @@ fn zoom_pane_hides_restores_and_unzooms_under_cage() {
         .env("READ_U", &read_u)
         .env("READ_F", &read_f)
         .env("READ_W", &read_w)
+        .env("READ_H_SHELL", &read_h_shell)
         .env("READ_H", &read_h)
         .env("READ_N", &read_n)
         .env("READ_S", &read_s)
@@ -872,29 +919,43 @@ fn zoom_pane_hides_restores_and_unzooms_under_cage() {
         p.d
     );
 
-    // --- H (H1): Toggle Terminal with the drawer open and hidden unzooms, then closes it ---
+    // --- H (H1): Toggle Terminal with the drawer open and hidden unzooms, then focuses it ---
+    leg(&[read_h_shell.as_path()], "H-shell");
+    let shell = read_trimmed(&read_h_shell, SMOKE);
+    assert_eq!(
+        shell, ZOOM_SHELL_READBACK,
+        "{SMOKE}: after zooming B and Ctrl+` with the drawer open and hidden, the readback reads \
+         {shell:?}, want the drawer shell's {ZOOM_SHELL_READBACK:?}. The file appeared, so \
+         something ran the `echo`; another content means the line was mangled on the way."
+    );
     leg(&[read_h.as_path()], "H");
     let (h, _) = read_geom(&read_h, 0, SMOKE);
     assert!(
-        h.count == 3 && h.current == id_b,
-        "{SMOKE}: after zooming B and Ctrl+` with the drawer open and hidden, Neovim reports {} \
-         windows with current {}; want 3, the drawer closed, with B ({id_b}) current. Four \
-         means Toggle Terminal did not close the drawer; another current means it moved focus.",
+        h.count == 4 && h.current == id_b,
+        "{SMOKE}: after zooming B, Ctrl+` with the drawer open and hidden, and `<C-w>k` out of \
+         the drawer, Neovim reports {} windows with current {}; want 4, the drawer still open, \
+         with B ({id_b}) current, the drawer's most recent editor pane. Three means the toggle \
+         closed the drawer after focusing it; another current means `<C-w>k` left the drawer \
+         for another pane.",
         h.count,
         h.current
     );
     assert!(
-        h.b.0 == p.b.0 && h.a == (p.a.0, lsize.1),
-        "{SMOKE}: after zooming B and Ctrl+`, B is {:?} and A {:?}; want B at P's width {} and A \
-         at P's width {} and L's height {}, the tree over the whole pane area with the dragged \
-         divider kept. B at L's {lsize:?} means Toggle Terminal closed the drawer and left B \
-         zoomed; A at P's {:?} means the drawer's space was not given back to the tree.",
-        h.b,
+        h.a == p.a && h.b == p.b && h.c == p.c && h.d == p.d,
+        "{SMOKE}: after zooming B and Ctrl+` focusing the drawer, (A, B, C, D) is ({:?}, {:?}, \
+         {:?}, {:?}); want P's ({:?}, {:?}, {:?}, {:?}), unzoomed with the drawer at its size. B \
+         at L's {lsize:?} means the view stayed zoomed on B while the drawer took the keys; D at \
+         (-1, -1) means the drawer window D ({id_d}) is gone, closed and reopened rather than \
+         focused; D at its pre-drag {:?} means its share was reset.",
         h.a,
-        p.b.0,
-        p.a.0,
-        lsize.1,
-        p.a
+        h.b,
+        h.c,
+        h.d,
+        p.a,
+        p.b,
+        p.c,
+        p.d,
+        q.d
     );
 
     // --- N (N1): Toggle Terminal with no drawer unzooms, then opens it ----------------
@@ -965,10 +1026,11 @@ fn zoom_pane_hides_restores_and_unzooms_under_cage() {
     let c = read_focus(&read_c, SMOKE);
     assert!(
         c.count == 3 && c.current != s.current,
-        "{SMOKE}: after zooming the new pane, `<C-w>c` and Ctrl+`, Neovim reports {} windows \
-         with current {}; want 3, A, B and C, with the closed pane {} not current. Four windows \
-         means the drawer stayed open; five means `<C-w>c` closed nothing. O starts from this \
-         layout.",
+        "{SMOKE}: after zooming the new pane, `<C-w>c` and Ctrl+` twice, Neovim reports {} \
+         windows with current {}; want 3, A, B and C, with the closed pane {} not current. Four \
+         windows means the drawer stayed open: the first Ctrl+` closed it and the second \
+         reopened it, or the second, made from the drawer the first focused, did not close it. \
+         Five means `<C-w>c` closed nothing. O starts from this layout.",
         c.count,
         c.current,
         s.current
@@ -996,9 +1058,11 @@ fn zoom_pane_hides_restores_and_unzooms_under_cage() {
 }
 
 /// [`ZOOM_PANE_BODY`]'s exit codes past [`ZOOM_LAYOUT`]'s, for [`require_leg`].
-const ZOOM_PANE_EXITS: &str = "86 Z (the palette has no Zoom Pane row), 87 H, 88 F, 89 W \
-     (Neovim was left on the drawer after `<C-w>w`), 90 U, 91 S, 92 C, 93 O, 94 N (`<C-w>k` out \
-     of the drawer reached no editor)";
+const ZOOM_PANE_EXITS: &str = "86 Z (the palette has no Zoom Pane row), 87 H (`<C-w>k` out of \
+     the drawer reached no editor), 88 F, 89 W (Neovim was left on the drawer after `<C-w>w`), 90 \
+     U, 91 S, 92 C, 93 O, 94 N (`<C-w>k` out of the drawer reached no editor), 95 H-shell (the \
+     drawer's shell never answered: Toggle Terminal closed the drawer or left the keys on B, so \
+     Neovim got the `echo`)";
 
 /// Ends the run on the scenario's exit status when any of `paths` is missing, so the leg
 /// that needs them is never asserted on a readback the scenario did not reach. `codes`
@@ -1012,8 +1076,8 @@ fn require_leg(smoke: &str, status: ExitStatus, paths: &[&Path], leg: &str, code
     assert!(
         missing.is_empty(),
         "{smoke}: leg {leg}'s readbacks {missing:?} do not exist, and the scenario exited \
-         {status}. Every readback is a Neovim one, so a missing one means the keys went \
-         elsewhere: into the drawer's shell, or into a palette that matched no row. 82 L, 83 I \
+         {status}. A missing Neovim readback means the keys went elsewhere: into the drawer's \
+         shell, or into a palette that matched no row. 82 L, 83 I \
          (`<C-w>k` out of the drawer reached no editor), 84 Q, 85 P (a press took keyboard \
          focus off the editor), {codes}. An exit 0 with a file missing means it was written \
          somewhere else."

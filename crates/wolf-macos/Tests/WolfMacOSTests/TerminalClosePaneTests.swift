@@ -232,18 +232,21 @@ final class TerminalClosePaneTests: XCTestCase {
       "the tree's last editor leaf must refuse Close while the drawer is open: Neovim counts"
         + " the drawer's window, so :close would take the editor and leave only the drawer")
 
-    // The toggle is queued behind the close on core's input channel.
+    // The toggles queue behind the close: from the editor the first focuses the drawer, the
+    // second closes it. With the editor closed, neither can close the last window.
     container.closeActivePane()
+    handle.toggle_terminal()
     handle.toggle_terminal()
     let hidden = fixture.wake {
       fixture.view(showing: session) == nil && fixture.window(showing: session) == 0
     }
     XCTAssertTrue(
       hidden,
-      "the toggle after closeActivePane() must hide the drawer: window"
+      "the two toggles after closeActivePane() must focus and then hide the drawer: window"
         + " \(fixture.window(showing: session)) still shows session \(session), Neovim reports"
         + " \(windows(fixture)). A drawer that stays means closeActivePane() closed the editor"
-        + " despite the refused gate, leaving the drawer as the last window")
+        + " despite the refused gate, leaving the drawer as the last window, or the second"
+        + " toggle, made from the focused drawer, did not close it")
     guard hidden else { return }
     XCTAssertTrue(
       windows(fixture).contains(editorWin),

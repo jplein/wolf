@@ -2361,7 +2361,7 @@ impl AppShell {
         }
     }
 
-    /// Opens or hides the terminal drawer through [`WolfCore::toggle_terminal`], which
+    /// Opens, focuses or hides the terminal drawer through [`WolfCore::toggle_terminal`], which
     /// starts its session (a pty and a fork, no RPC) before it queues the toggle. It unzooms
     /// the selected tab first unless the drawer is the zoomed pane
     /// ([`pane_view::PaneHandle::toggle_terminal`]).

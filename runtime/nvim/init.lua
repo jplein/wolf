@@ -1109,7 +1109,7 @@ local function find_placeholder(id)
 	return nil
 end
 
--- Opens or hides the drawer on session id. See specs/terminal-panes.md#the-drawer.
+-- Opens, focuses or hides the drawer on session id. See specs/terminal-panes.md#the-drawer.
 function _G.wolf_toggle_terminal(id)
 	local drawer = nil
 	for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
@@ -1118,9 +1118,14 @@ function _G.wolf_toggle_terminal(id)
 			break
 		end
 	end
-	-- Hiding keeps the session: the drawer's placeholder is bufhidden=hide.
 	if drawer ~= nil and vim.b[vim.api.nvim_win_get_buf(drawer)].wolf_terminal_id == id then
-		pcall(vim.api.nvim_win_close, drawer, false)
+		if drawer == vim.api.nvim_get_current_win() then
+			-- Hiding keeps the session: the drawer's placeholder is bufhidden=hide.
+			pcall(vim.api.nvim_win_close, drawer, false)
+		else
+			-- As a FocusWin does: its WinEnter reports it, and both front-ends follow the current window.
+			vim.api.nvim_set_current_win(drawer)
+		end
 		return
 	end
 	-- Suppressed: the build's synchronous WinNew / BufEnter would report an untagged window.

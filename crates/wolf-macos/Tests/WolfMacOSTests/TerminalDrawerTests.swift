@@ -1,4 +1,4 @@
-// Opens, paints, hides and reopens the terminal drawer over a real core and its shell session.
+// Opens, paints, focuses, hides and reopens the terminal drawer over a real core and its shell.
 
 import AppKit
 import WolfKeyMap
@@ -92,5 +92,87 @@ final class TerminalDrawerTests: XCTestCase {
       "a third toggle must show the SAME session \(session) in the drawer strip again; live"
         + " sessions \(Array(handle.live_terminals())). A stale drawer pane id refuses the"
         + " reopen; another session means the drawer started a new shell")
+  }
+
+  /// With the drawer open and an editor pane active, `PaneContainerView.toggleTerminal()`, the
+  /// call the palette and `:WolfTerminal` reach, makes the drawer the active pane, with its
+  /// session taking the keys, and leaves it open at its frame; a second call closes it and keeps
+  /// the session.
+  func testToggleTerminalFocusesTheOpenDrawerFromAnEditorPaneAndASecondClosesIt() {
+    guard let fixture = TerminalViewFixture() else { return }
+    defer { fixture.shutdown() }
+    let handle = fixture.handle
+    let container = fixture.container
+    let editor = container.activeWin
+    XCTAssertNotEqual(editor, 0, "premise: the editor pane must be active before the drawer opens")
+
+    container.toggleTerminal()
+    var session: UInt64 = 0
+    var drawer: Int64 = 0
+    let opened = fixture.wake {
+      session = Array(handle.live_terminals()).first ?? 0
+      guard session != 0, let view = fixture.view(showing: session), fixture.isInDrawerStrip(view)
+      else { return false }
+      drawer = fixture.window(showing: session)
+      return drawer != 0 && drawer != editor && container.activeWin == drawer
+    }
+    XCTAssertTrue(
+      opened,
+      "premise: toggleTerminal() with no drawer must open it in the strip, active: session"
+        + " \(session), window \(drawer), view \(container.activeWin)")
+    guard opened else { return }
+
+    handle.focus_win(editor)
+    let onEditor = fixture.wake { container.activeWin == editor && handle.active_win() == editor }
+    XCTAssertTrue(
+      onEditor,
+      "premise: focus_win(\(editor)) must make the editor active in Neovim and the view, with"
+        + " the drawer open: Neovim \(handle.active_win()), view \(container.activeWin)")
+    guard onEditor, let before = fixture.view(showing: session)?.frame else {
+      XCTFail("premise: the drawer's view must still show \(session) once the editor is active")
+      return
+    }
+    XCTAssertNotEqual(
+      container.activeTerminal, session,
+      "premise: with the editor active, the drawer's session must not take the keys")
+
+    container.toggleTerminal()
+    let focused = fixture.wake {
+      container.activeWin == drawer && handle.active_win() == drawer
+        && container.activeTerminal == session
+    }
+    XCTAssertTrue(
+      focused,
+      "toggleTerminal() with the drawer open and the editor active must make the drawer"
+        + " (\(drawer)) the active pane, its session \(session) taking the keys: view"
+        + " \(container.activeWin), Neovim \(handle.active_win()), active terminal"
+        + " \(String(describing: container.activeTerminal)). The editor in both means the toggle"
+        + " closed the drawer or did nothing; Neovim on the drawer and the view on the editor,"
+        + " that the view does not follow Neovim to the drawer")
+    guard focused else { return }
+    let view = fixture.view(showing: session)
+    XCTAssertTrue(
+      view.map { fixture.isInDrawerStrip($0) } ?? false,
+      "the focused drawer must stay open in the strip; no view means the toggle closed it")
+    XCTAssertEqual(
+      view?.frame, before,
+      "focusing the drawer must leave its frame as it was")
+    XCTAssertTrue(
+      handle.windows().contains { $0.win() == drawer },
+      "the focused drawer must keep its window \(drawer); another means it was closed and"
+        + " reopened: \(handle.windows().map { $0.win() })")
+
+    container.toggleTerminal()
+    let closed = fixture.wake {
+      fixture.view(showing: session) == nil && !handle.windows().contains { $0.win() == drawer }
+    }
+    XCTAssertTrue(
+      closed,
+      "a second toggleTerminal(), made from the focused drawer, must close it: windows"
+        + " \(handle.windows().map { $0.win() }). Still open means a toggle from the active"
+        + " drawer focuses it again instead of closing it")
+    XCTAssertTrue(
+      Array(handle.live_terminals()).contains(session),
+      "closing the drawer must keep its session live: \(Array(handle.live_terminals()))")
   }
 }

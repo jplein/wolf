@@ -1,7 +1,7 @@
-//! Integration tests of the terminal drawer in `wolf-core`: `toggle_terminal` opening, hiding
-//! and reopening a drawer window on one core session, the shell's exit closing it, the router
-//! ignoring split chords inside it, and the session surviving a Neovim restart. A real shell runs
-//! in a real pty beside a real, hermetic Neovim that holds the drawer window.
+//! Integration tests of the terminal drawer in `wolf-core`: `toggle_terminal` opening, focusing,
+//! hiding and reopening a drawer window on one core session, the shell's exit closing it, the
+//! router ignoring split chords inside it, and the session surviving a Neovim restart. A real
+//! shell runs in a real pty beside a real, hermetic Neovim that holds the drawer window.
 //!
 //! The drawer runs the user's default shell, so every case pins `SHELL=/bin/sh` first
 //! ([`common::pin_default_shell`]).
@@ -13,6 +13,8 @@
 //! - `/bin/sh` on a tty is interactive and echoes what it is typed, so a test looks for the
 //!   output of an expression (`$((2+5))`) that the typed text does not contain. Started as a
 //!   login shell (`-l`, macOS) it is still interactive.
+//! - Neovim's current window is the active pane on both front-ends, and `active_win` reports it
+//!   on every `WinEnter` and once at startup, so it names the startup window before any toggle.
 //! - `getbufinfo()` lists every buffer, unlisted and hidden ones included, with its `b:`
 //!   variables under `variables`, so it finds a hidden drawer placeholder that no window shows.
 //! - `lua (vim.uv or vim.loop).kill(vim.fn.getpid(), 9)` kills the captive Neovim, which the
@@ -179,6 +181,13 @@ fn toggle_opens_the_drawer_on_a_core_session() {
         opened, win,
         "the DrawerOpen intent must name the drawer window {win}, not {opened}."
     );
+    poll_until(
+        &waiter,
+        "Neovim's current window (active_win) to be the drawer window the toggle opened; \
+         another window means the open leaves Neovim, and so the active pane, off the drawer",
+        || core.read_snapshot().active_win,
+        |active| *active == Some(win),
+    );
 
     let buf = format!("winbufnr({win})");
     let exprs = [
@@ -246,6 +255,90 @@ fn hiding_keeps_the_session_and_reopening_reuses_it() {
         frame_text(&frame).contains("kept-7"),
         "the reopened drawer's session must still show its earlier output; the frame reads:\n{}",
         frame_text(&frame)
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// With the drawer open and another window current, `toggle_terminal` makes the drawer window
+/// current and leaves it open, showing the same session; a second toggle, now from the drawer,
+/// closes it and keeps the session.
+#[test]
+fn toggle_focuses_an_open_drawer_from_another_window_and_a_second_toggle_closes_it() {
+    let (core, waiter, _cwd) = start_core();
+    let editor = poll_until(
+        &waiter,
+        "active_win to name the startup window",
+        || core.read_snapshot().active_win,
+        Option::is_some,
+    )
+    .expect("poll_until returned only once active_win was Some");
+    let (drawer, id) = open_drawer(&core, &waiter, "the drawer to open on a session");
+    assert_ne!(
+        drawer, editor,
+        "the drawer must open in a window of its own, not the startup window {editor}."
+    );
+
+    core.focus_win(editor);
+    poll_until(
+        &waiter,
+        "focus_win to make the startup window current again (premise: the drawer is open and \
+         another window is the active pane)",
+        || core.read_snapshot().active_win,
+        |active| *active == Some(editor),
+    );
+    settle_for(&waiter, RESTART_SETTLE);
+    let windows_before = core.read_snapshot().win_buffers.len();
+    assert_eq!(
+        drawer_window(&core),
+        Some((drawer, Some(id))),
+        "premise: the drawer window {drawer} must still be open on {id:?} once the editor is \
+         current."
+    );
+
+    core.toggle_terminal();
+    poll_until(
+        &waiter,
+        "the toggle to make the open drawer window current. Staying on the editor means the \
+         toggle closed the drawer or did nothing; a third window means it closed and reopened \
+         the drawer instead of focusing it",
+        || (core.read_snapshot().active_win, drawer_window(&core)),
+        |(active, _)| *active == Some(drawer),
+    );
+    settle_for(&waiter, NEGATIVE_SETTLE);
+    assert_eq!(
+        drawer_window(&core),
+        Some((drawer, Some(id))),
+        "the focused drawer must stay open as the same window {drawer} on the same session \
+         {id:?}. None means the toggle closed it after focusing it; another window means it \
+         closed and reopened it."
+    );
+    assert_eq!(
+        (
+            core.read_snapshot().active_win,
+            core.read_snapshot().win_buffers.len()
+        ),
+        (Some(drawer), windows_before),
+        "focusing the drawer must leave (active window, window count) at ({drawer}, \
+         {windows_before}). Another count means the toggle split or closed a window."
+    );
+    assert_eq!(
+        core.live_terminals(),
+        vec![id],
+        "focusing the drawer must start no second session and end none."
+    );
+
+    hide_drawer(
+        &core,
+        &waiter,
+        "the second toggle, made from the focused drawer, to close it; the drawer staying open \
+         means a toggle from the drawer focuses it again instead of closing it",
+    );
+    settle_for(&waiter, RESTART_SETTLE);
+    assert_eq!(
+        core.live_terminals(),
+        vec![id],
+        "closing the focused drawer must keep its session live."
     );
 
     core.shutdown().expect("shutdown should be Ok");

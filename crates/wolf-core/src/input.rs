@@ -332,9 +332,10 @@ pub enum InputEvent {
         /// `true` selects `background=dark`, `false` selects `background=light`.
         dark: bool,
     },
-    /// Open or hide the terminal drawer on session `id` (delegated to the init.lua
+    /// Open, focus or hide the terminal drawer on session `id` (delegated to the init.lua
     /// `wolf_toggle_terminal` helper, which shows the session's placeholder in a bottom
-    /// split, or closes that split when it already shows it). Sent by
+    /// split, makes that split current when it shows it and another window is current, or
+    /// closes it when it shows it and is current). Sent by
     /// [`crate::WolfCore::toggle_terminal`], which starts the session first.
     ToggleTerminal {
         /// The drawer's session.
@@ -841,8 +842,9 @@ async fn set_window_cursor(
 
 /// Toggles the terminal drawer on session `id` via the init.lua `wolf_toggle_terminal`
 /// helper, invoked over `nvim_exec_lua`. The helper shows the session's placeholder in a
-/// bottom split of the current tabpage, or closes that split when it already shows it;
-/// the placeholder is `bufhidden=hide`, so the session outlives the window.
+/// bottom split of the current tabpage; when that split already shows it, the helper makes it
+/// current if another window is, and closes it if it is current. The placeholder is
+/// `bufhidden=hide`, so the session outlives the window.
 async fn toggle_terminal(nvim: &mut impl Rpc, id: TerminalId) -> Result<(), Box<CallError>> {
     let _ = nvim
         .request(

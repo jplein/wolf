@@ -1999,7 +1999,8 @@ impl PaneInner {
     }
 
     /// Toggle Terminal: unzooms first unless the drawer is the zoomed pane, then asks core to
-    /// open or hide the drawer, exactly as unzoomed.
+    /// open, focus or hide the drawer, exactly as unzoomed. The helper decides by Neovim's
+    /// current window, which `update_active_pane` follows, so the view adds no check of its own.
     fn toggle_terminal(&self) {
         let drawer = self.drawer.get().id();
         if self.apply_zoom_event(ZoomEvent::ToggleTerminal { drawer }) {
@@ -4455,7 +4456,7 @@ impl PaneHandle {
     }
 
     /// Toggle Terminal on this tab: unzooms first unless the drawer is the zoomed pane, then
-    /// opens or hides the drawer through `WolfCore::toggle_terminal`.
+    /// opens, focuses or hides the drawer through `WolfCore::toggle_terminal`.
     pub fn toggle_terminal(&self) {
         self.inner.toggle_terminal();
     }

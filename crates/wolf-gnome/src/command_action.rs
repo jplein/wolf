@@ -114,7 +114,7 @@ pub enum UiAction {
     /// Toggle the focused buffer's content width between the column cap and the
     /// whole pane.
     ToggleFullWidth,
-    /// Show or hide the terminal drawer, the full-width shell Neovim opens along
+    /// Show, focus or hide the terminal drawer, the full-width shell Neovim opens along
     /// the bottom of the pane area.
     ToggleTerminal,
     /// Bind the Markdown preview for the focused buffer into its own pane, at the

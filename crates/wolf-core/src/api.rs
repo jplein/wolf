@@ -1297,8 +1297,8 @@ impl WolfCore {
         self.send_input(InputEvent::SwitchBuffer { win, bufnr });
     }
 
-    /// Opens or hides the terminal drawer in the current tabpage (fire-and-forget via
-    /// [`InputEvent::ToggleTerminal`]).
+    /// Opens, focuses or hides the terminal drawer in the current tabpage (fire-and-forget via
+    /// [`InputEvent::ToggleTerminal`]), by the cases `specs/terminal-panes.md#the-drawer` gives.
     ///
     /// Starts the drawer's session first when none is live: the user's shell, in the
     /// current tabpage's cwd. That is a pty and a fork/exec on the calling thread, never an

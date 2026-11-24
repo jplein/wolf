@@ -747,8 +747,9 @@ final class PaneContainerView: NSView {
   }
 
   /// Toggle Terminal: unzooms first, unless the drawer is the zoomed pane
-  /// (`PaneZoom.Event.toggleTerminal`), then opens or closes the drawer as it would
-  /// unzoomed.
+  /// (`PaneZoom.Event.toggleTerminal`), then opens, focuses or closes the drawer as it would
+  /// unzoomed. The helper decides by Neovim's current window, which `updateActivePane()`
+  /// follows, so the view adds no check of its own.
   func toggleTerminal() {
     applyZoom(.toggleTerminal(drawer: drawerPaneId))
     handle.toggle_terminal()

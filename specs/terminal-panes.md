@@ -91,7 +91,9 @@ Terminal panes default to full width, and the existing full-width command toggle
 
 ## The drawer
 
-There is one drawer session per core, and so one per tab on both front-ends. `WolfCore::toggle_terminal()` starts a drawer session if none is live, in the current tabpage's cwd, before it queues `ToggleTerminal { id }`; starting one is a pty and a fork, never an RPC, and the event carries the id because the input pump has no registry. `drawer_terminal()` names the live drawer session. `wolf_toggle_terminal(id)` then opens or closes the drawer window in the current tabpage: a `botright` split a third of the height, tagged `w:wolf_drawer`, showing the drawer's placeholder, focused, and emitting the `drawer_open` intent. Closing the drawer window never ends the session.
+There is one drawer session per core, and so one per tab on both front-ends. `WolfCore::toggle_terminal()` starts a drawer session if none is live, in the current tabpage's cwd, before it queues `ToggleTerminal { id }`; starting one is a pty and a fork, never an RPC, and the event carries the id because the input pump has no registry. `drawer_terminal()` names the live drawer session.
+
+`wolf_toggle_terminal(id)` then decides by the drawer window in the current tabpage and by Neovim's current window, which is the active pane on both front-ends. With no drawer window, it opens one and focuses it: a `botright` split a third of the height, tagged `w:wolf_drawer`, showing the drawer's placeholder, and emitting the `drawer_open` intent. With the drawer window open and current, it closes it. With the drawer window open and not current, it makes it the current window, as a `FocusWin` would, and leaves it open at its size, and the front-end then makes it the active pane, keyboard focus included. Closing the drawer window never ends the session.
 
 Both front-ends keep the drawer outside their pane trees, as their existing decisions say. Core's router ignores split chords from the drawer's session, and `<C-w>c` or `<C-w>q` in the drawer closes it.
 
