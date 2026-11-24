@@ -95,8 +95,8 @@ declare_commands! {
         Paste,
         /// Open the buffer-picker overlay to fuzzy-switch among open buffers.
         BufferPicker,
-        /// Open a new tab in the current window (a new captive Neovim in the same
-        /// directory).
+        /// Open a new tab in the current window: the empty tab New Window opens, with a
+        /// captive Neovim of its own (`specs/application-state.md#7-new-windows-and-tabs`).
         NewTab,
         /// Render the active Markdown buffer as HTML and show it in a preview pane
         /// (only available when the active buffer is a Markdown file).
