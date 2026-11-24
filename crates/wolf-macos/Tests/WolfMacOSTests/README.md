@@ -191,7 +191,7 @@ Purpose: The vendored Lighthouse's expected colours, for the tests that render u
 
 **Covers** — Zoom Pane through `PaneContainerView.toggleZoom()` over a live core and `/bin/sh`, from two editor panes and a terminal pane with the drawer open. A zoomed pane fills the area and its grid or session grows, while the others keep their windows, sessions and sizes, and unzoom restores every frame and weight after drags and a window resize while zoomed. A hidden preview keeps its web view, hidden, until unzoom.
 
-A split, a close and the shell exiting each unzoom, and so does Toggle Terminal, closing an open drawer or opening and focusing a closed one, or closing a zoomed drawer. `<C-w>l` unzooms onto the neighbour with every frame and weight restored, `:wincmd w` unzooms, the view following Neovim, and `<C-w>h` from the leftmost pane changes nothing. A zoom survives a save and restore through `gatherTab`, `WindowStateCodec`, `FfiAppTab.restored()` and `rebuild_tab`.
+A split, a close and the shell exiting each unzoom, and so does Toggle Terminal, focusing an open drawer with every frame and session size kept, opening and focusing a closed one, or closing a zoomed drawer. `<C-w>l` unzooms onto the neighbour with every frame and weight restored, `:wincmd w` unzooms, the view following Neovim, and `<C-w>h` from the leftmost pane changes nothing. A zoom survives a save and restore through `gatherTab`, `WindowStateCodec`, `FfiAppTab.restored()` and `rebuild_tab`.
 
 **Gotchas**
 
@@ -260,7 +260,7 @@ A `wolf --wait` popped into `Request(owning:)` exits `0` at `:q` in its pane.
 
 #### `TerminalDrawerTests.swift`
 
-**Covers** — `toggle_terminal()` showing a terminal view in the drawer strip on the drawer window's session, painting a truecolour background the shell prints, hiding with the session kept, and showing the same session again on the next toggle.
+**Covers** — `toggle_terminal()` showing a terminal view in the drawer strip on the drawer window's session, painting a truecolour background the shell prints, hiding with the session kept, and showing the same session again on the next toggle. Through `PaneContainerView.toggleTerminal()`, with the drawer open and an editor pane active, a toggle making the drawer the active pane, its session taking the keys, at its frame, and a second closing it with the session kept.
 
 #### `TerminalToastTests.swift`
 

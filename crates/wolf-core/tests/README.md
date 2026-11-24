@@ -781,7 +781,8 @@ Real Neovim and the default shell, pinned to `/bin/sh`, in a pty (`//crates/wolf
 
 **Covers**
 
-- `toggle_terminal` opening the drawer on a core session: the `is_drawer` window carries the session `drawer_terminal` names, a `DrawerOpen` intent names it, and the placeholder is `nofile`, `bufhidden=hide` and full width.
+- `toggle_terminal` opening the drawer on a core session and leaving Neovim on it: the `is_drawer` window carries the session `drawer_terminal` names, a `DrawerOpen` intent names it, and the placeholder is `nofile`, `bufhidden=hide` and full width.
+- With the drawer open and another window current, `toggle_terminal` making the same drawer window current with no new window, and a second toggle closing it with the session kept.
 - Hiding keeping the session and reopening reusing it; the shell's exit closing the drawer and leaving no placeholder, so the next toggle starts a new shell.
 - Split chords in the drawer doing nothing, and `<C-w>c` hiding it.
 - The drawer's session surviving a Neovim kill and `restart_nvim`, and the next toggle showing it again.

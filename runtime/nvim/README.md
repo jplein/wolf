@@ -188,7 +188,9 @@ It first scans `nvim_list_bufs()` for an ordinary file buffer (`buftype == ""`) 
 
 #### `wolf_toggle_terminal(id)`
 
-Toggles the drawer on core session `id`, which [`WolfCore::toggle_terminal`](../../specs/terminal-panes.md#the-drawer) starts before it queues the call. The drawer window is per-tabpage and tagged `w:wolf_drawer`. If the current tabpage's drawer window shows `id`'s placeholder, it closes that window only: the drawer's placeholder is `bufhidden=hide`, so the session survives.
+Opens, focuses or hides the drawer on core session `id`, which [`WolfCore::toggle_terminal`](../../specs/terminal-panes.md#the-drawer) starts before it queues the call. The drawer window is per-tabpage and tagged `w:wolf_drawer`. When the current tabpage's drawer window shows `id`'s placeholder, it closes that window if it is Neovim's current window, keeping the session, since the drawer's placeholder is `bufhidden=hide`. If another window is current, it only makes the drawer current and emits nothing: the drawer's own `WinEnter` reports it, as after a `FocusWin`.
+
+The helper, not a front-end, decides whether the drawer is the active pane, by Neovim's current window. Every focus change a view makes is a `focus_win` on core's ordered input channel ahead of the toggle, and both views adopt Neovim's own moves from `active_win`, so the current window is the active pane when the call runs. A front-end check of its own active pane would race the asynchronous `wolf_active_win`.
 
 Otherwise, inside `wolf_suppress_buffers`, it reuses the drawer window or opens a tagged `botright` split one third of the screen tall, and shows `id`'s placeholder there, creating it with `bufhidden=hide` when none exists. Afterwards it calls `_G.wolf_emit_drawer` (the intent that makes the drawer visible), then `_G.wolf_emit_current_file` and `_G.wolf_emit_full_width`, all guarded.
 

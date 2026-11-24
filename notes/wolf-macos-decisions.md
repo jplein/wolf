@@ -259,7 +259,7 @@ A focus move unzooms through one event, `.focusMove(target:)`. `applyFocus` star
 
 The view trusts Neovim's current window. `updateActivePane()` applies `.focusMove` to the pane it resolves to, so leaving the zoomed pane by a path the view does not intercept, such as `<C-w>w`, `<C-w>p` or `:wincmd`, unzooms and the view follows. There is deliberately no guard for focus still in flight: only a zoom made within one Neovim round trip of a click reads a stale window, which unzooms harmlessly and which no human input reaches. Zooming sends `focus_win` for the zoomed pane's window, as `closeActivePane()` does, so Neovim's current window is the pane the view shows.
 
-Toggle Terminal applies `.toggleTerminal(drawer:)` and then always toggles the drawer. It unzooms first unless the drawer is the zoomed pane, whose zoom lasts until `.panesChanged` sees the drawer close: unzooming on the toggle would show the hidden panes for a round trip before the close.
+Toggle Terminal applies `.toggleTerminal(drawer:)` and then always calls `toggle_terminal()`, whose helper opens, focuses or closes the drawer by Neovim's current window, which `updateActivePane()` follows; the view adds no check of its own. It unzooms first unless the drawer is the zoomed pane, whose zoom lasts until `.panesChanged` sees the drawer close: unzooming on the toggle would show the hidden panes for a round trip before the close.
 
 The save path marks the zoomed leaf through `zoomedPaneId`, `SessionSeam.gatherTab` and `PaneLayoutCodec.encode`, and `WindowStateCodec` writes the mark as the tab's `zoomed` pane, by the leaf's depth-first index. The drawer is no layout leaf, so its zoom persists as `SavedDrawer.zoomed`. A zoom on a pane `restored()` empties is dropped before the rebuild.
 

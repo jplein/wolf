@@ -103,7 +103,7 @@ The `extern "C"` wake registrations, `wolf_ffi_set_wake` and its siblings, live 
 - `open_terminal(&self, win: i64, target: u8, command: String) -> u64` — `target` per `mod terminal_target`, and a `win` of 0 is Neovim's current window. `""` runs the user's shell and anything else runs as `/bin/sh -c <command>`, so the session's `shell` reads `sh`. The command is one string because only tests pass one and swift-bridge is not known to accept a `Vec<String>` parameter. Blocks briefly; 0 on failure, for an unknown `target` or after shutdown.
 - `bind_terminal(&self, id: u64, win: i64, target: u8) -> bool` — Shows a running session as `open_terminal` places a new one; false for an unknown id or `target`.
 - `queue_bind_terminal(&self, id: u64, win: i64, target: u8) -> bool` — `bind_terminal` through the input queue, behind everything queued before it, for the rebind after a restart. Never blocks; false for an id with no running session, an unknown `target` or a gone core.
-- `toggle_terminal(&self)` — Opens or hides the drawer, starting its session when none is live.
+- `toggle_terminal(&self)` — Opens, focuses or hides the drawer, by the cases [the spec](../../../specs/terminal-panes.md#the-drawer) gives, starting its session when none is live.
 - `terminal_cwd(&self, id: u64) -> String` — The directory to persist as a terminal leaf's path; `""` when unknown.
 - `terminal_frame(&self, id: u64) -> FfiTerminalFrame` — The empty frame, version 0 and `0x0`, for an unknown id or after shutdown.
 - `terminal_key(&self, id: u64, ev: FfiKeyEvent)` — Goes through core's `<C-w>` router, so a chord may act on Neovim's windows instead of reaching the program.
