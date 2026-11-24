@@ -51,7 +51,7 @@ No assertion reads a tab title. `tabs_ui::tab_title` draws the current file's na
   project/                    TEMP_CWD_BASENAME -- the launch cwd and search root
     fill*.md                  nine fillers, page density
     tbxray.md                 TABS_FIRST_FILE, opened in tab 1
-    tbsub/                    TABS_SUBDIR -- tab 1's `:tcd` target, where tab 2 starts
+    tbsub/                    TABS_SUBDIR -- tab 1's `:tcd` target, and tab 2's `:cd` target
       tbyankee.md             TABS_SECOND_FILE, opened in tab 2
     tb_read{a,c,e,f}.txt      the four Neovim readbacks
 ```

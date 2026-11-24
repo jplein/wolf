@@ -95,10 +95,16 @@ pub fn step(
 /// whatever [`crate::workspace::launch_decision`] would say of it, since opening a
 /// folder is an explicit act.
 ///
-/// From `project`, its saved tab at `directory` and its stored size; without one,
-/// a fresh tab and no size.
+/// From `project`, its saved tab at `directory` and its stored size, so the stored
+/// sidebar setting wins. Without one, a fresh tab and no size, whose sidebar shows
+/// by `new_tab_sidebar`, the visibility New Tab captured when it made the tab being
+/// filled, and by default when that is `None`.
 #[must_use]
-pub fn plan(directory: &Path, project: Option<&ProjectState>) -> RestorePlan {
+pub fn plan(
+    directory: &Path,
+    project: Option<&ProjectState>,
+    new_tab_sidebar: Option<bool>,
+) -> RestorePlan {
     let cwd = directory.to_path_buf();
     let (tab, window_size) = match project {
         Some(project) => {
@@ -111,7 +117,13 @@ pub fn plan(directory: &Path, project: Option<&ProjectState>) -> RestorePlan {
                 state_seam::restored_window_size(project.frame.width, project.frame.height),
             )
         }
-        None => (state_seam::fresh_tab_plan(cwd, false), None),
+        None => {
+            let mut tab = state_seam::fresh_tab_plan(cwd, false);
+            if let Some(visible) = new_tab_sidebar {
+                tab.sidebar_visible = visible;
+            }
+            (tab, None)
+        }
     };
     RestorePlan {
         tabs: vec![tab],

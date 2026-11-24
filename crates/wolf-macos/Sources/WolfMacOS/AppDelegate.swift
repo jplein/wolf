@@ -317,15 +317,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     return tabCore
   }
 
-  /// Starts a fresh empty-state tab (nvim at home) in a window of its own at `placement`.
-  /// Returns the view, or `nil` when the core fails to start. The caller appends it.
-  private func startEmptyStateWindow(placement: WindowPlacement = .system)
-    -> WolfWindowController?
-  {
+  /// Starts a fresh empty-state tab (nvim at home) in a window of its own at `placement`,
+  /// carrying `newTabSidebar` for a tab New Tab makes. Returns the view, or `nil` when the core
+  /// fails to start. The caller appends it.
+  private func startEmptyStateWindow(
+    placement: WindowPlacement = .system, newTabSidebar: Bool? = nil
+  ) -> WolfWindowController? {
     guard let tabCore = startTabCore(launchCwd: homeDir()) else { return nil }
     let controller = makeController(
       tabId: mintTabId(), tabCore: tabCore, restoredTab: nil, placement: placement,
-      hasFolder: false)
+      hasFolder: false, newTabSidebar: newTabSidebar)
     controller.build()
     return controller
   }
@@ -500,20 +501,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     scheduleStateSnapshot()
   }
 
-  /// The ⌘T / `:WolfNewTab` entry point: opens a new TAB in `key`'s window
-  /// group, inheriting `key`'s open folder (a new tab ≈ a new window in the same
-  /// directory) in a Neovim of its own, launched there, or at home when `key` has
-  /// no folder. The new window is `addTabbedWindow`-ed into `key`'s group and
-  /// selected. A no-op before launch or if the core fails to start.
+  /// The ⌘T / `:WolfNewTab` entry point: opens New Window's empty tab
+  /// (`specs/application-state.md#7-new-windows-and-tabs`), `addTabbedWindow`-ed into `key`'s
+  /// window group and selected. It carries `key`'s sidebar visibility, read before the tab is
+  /// built, for a folder later opened into it. A no-op before launch or if the core fails to
+  /// start.
   func makeNewTab(from key: WolfWindowController) {
     guard metrics != nil, config != nil else { return }
-    let inheritedCwd = key.hasFolder ? key.currentCwd : ""
-    let (launchCwd, hasFolder) = Self.dir(launchDecision(restoredCwd: inheritedCwd))
-    guard let tabCore = startTabCore(launchCwd: launchCwd) else { return }
-    let controller = makeController(
-      tabId: mintTabId(), tabCore: tabCore, restoredTab: nil, placement: .system,
-      hasFolder: hasFolder)
-    controller.build()
+    guard let controller = startEmptyStateWindow(newTabSidebar: key.sidebarVisible) else {
+      return
+    }
     if let keyWindow = key.nsWindow, let newWindow = controller.nsWindow {
       keyWindow.addTabbedWindow(newWindow, ordered: .above)
       newWindow.makeKeyAndOrderFront(nil)
@@ -809,7 +806,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     let project = WindowStateCodec.loadProject(wolf_ffi_app_state_project_state(directory))
     let controller = makeController(
       tabId: mintTabId(), tabCore: tabCore, restoredTab: Self.restoredTab(project, at: directory),
-      placement: .system, hasFolder: true)
+      placement: .system, hasFolder: true, newTabSidebar: empty.newTabSidebar)
     controller.build()
     if let newWindow = controller.nsWindow {
       emptyWindow.addTabbedWindow(newWindow, ordered: .above)
@@ -1149,7 +1146,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   /// shared metrics/config.
   private func makeController(
     tabId: Int, tabCore: TabCore, restoredTab: RestoredTabState?, placement: WindowPlacement,
-    hasFolder: Bool
+    hasFolder: Bool, newTabSidebar: Bool? = nil
   ) -> WolfWindowController {
     // `metrics` / `config` are set in `applicationDidFinishLaunching` before
     // any controller is built.
@@ -1159,30 +1156,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
       restoredTab: restoredTab,
       placement: placement,
       hasFolder: hasFolder,
+      newTabSidebar: newTabSidebar,
       metrics: metrics!,
       config: config!
     )
     controller.coordinator = self
     return controller
-  }
-
-  /// Maps a `LaunchDecision` to the controller's `(launchCwd, hasFolder)`: a
-  /// `.folder` opens that directory (`hasFolder = true`); an `.emptyState`
-  /// launches nvim at home with no folder (`hasFolder = false`).
-  private static func dir(_ decision: StateSeam.LaunchDecision) -> (cwd: String, hasFolder: Bool) {
-    switch decision {
-    case .folder(let cwd): return (cwd, true)
-    case .emptyState(let nvimCwd): return (nvimCwd, false)
-    }
-  }
-
-  /// Decides how a window launches from its restored cwd: reopen the folder when
-  /// `restoredCwd` still names a directory, else the "no folder open" empty state
-  /// with nvim launched at home. NEVER the process working directory, which would
-  /// pollute the recent-dirs MRU.
-  private func launchDecision(restoredCwd: String) -> StateSeam.LaunchDecision {
-    StateSeam.launchDecision(
-      restored: restoredCwd, home: homeDir(), isDirectory: isDirectoryCheck())
   }
 
   /// Shows a fatal alert when the core fails to start, then terminates.

@@ -69,8 +69,13 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
   /// fresh first run, a Cmd-N window, or a restored window whose saved cwd was
   /// empty/deleted): the sidebar stays hidden, the file tree is not started, and
   /// the centered "Open folder…" overlay is shown until a folder opens. Flipped
-  /// to `true` (once) by `didOpenFolder()`. Exposed so a new tab inherits it.
+  /// to `true` (once) by `didOpenFolder()`.
   private(set) var hasFolder: Bool
+
+  /// Whether the sidebar showed in the tab New Tab was invoked from, for a tab New Tab made or
+  /// the tab a fill opens in its place; `nil` otherwise. In memory only: a folder tab with no
+  /// project state shows its sidebar by it (`OpenFolderSeam.sidebarVisible`).
+  let newTabSidebar: Bool?
 
   /// This window's cell metrics — seeded from the shared, once-measured launch
   /// metrics and RE-MEASURED per-window on a font-size change (View menu). A
@@ -161,6 +166,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
     restoredTab: RestoredTabState?,
     placement: WindowPlacement,
     hasFolder: Bool,
+    newTabSidebar: Bool?,
     metrics: CellMetrics,
     config: FfiConfig
   ) {
@@ -169,6 +175,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
     self.restoredTab = restoredTab
     self.placement = placement
     self.hasFolder = hasFolder
+    self.newTabSidebar = newTabSidebar
     self.metrics = metrics
     self.config = config
     // The passed-in shared metrics were already measured at this size, so seed
@@ -272,13 +279,14 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
     case .cascaded(let topLeft, let size): window.cascade(fromTopLeft: topLeft, size: size)
     }
 
-    // An empty-state window always hides the sidebar, ignoring the stored `sidebar_visible`; a
-    // restored folder tab honors it, and a fresh folder keeps it visible.
+    // An empty-state window always hides the sidebar. A folder tab takes the stored setting, else
+    // New Tab's captured one, else shows it.
     if !hasFolder {
       window.sidebarItem.isCollapsed = true
-    } else if let restoredTab {
-      window.sidebarItem.isCollapsed = !restoredTab.saved.sidebarVisible
-      window.restoreSidebar(restoredTab.saved.sidebar)
+    } else {
+      window.sidebarItem.isCollapsed = !OpenFolderSeam.sidebarVisible(
+        stored: restoredTab?.saved.sidebarVisible, newTab: newTabSidebar)
+      if let restoredTab { window.restoreSidebar(restoredTab.saved.sidebar) }
     }
     // A mode change, a toggle click and Return wake no core, so each schedules a write itself.
     sidebarContainer.onChange = { [weak self] in self?.coordinator?.scheduleStateSnapshot() }
@@ -701,8 +709,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
   }
 
   /// This window's LIVE working directory (empty when the core is not running);
-  /// inherited by a new window/tab opened from this one (Cmd-N / ⌘T / drained
-  /// `:WolfNewWindow` / `:WolfNewTab`).
+  /// the originating cwd a menu command is dispatched with.
   var currentCwd: String {
     handle?.cwd().toString() ?? ""
   }

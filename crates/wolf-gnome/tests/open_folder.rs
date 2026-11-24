@@ -1,6 +1,7 @@
 //! Table-driven tests for `wolf_gnome::open_folder`, the seam of `specs/application-state.md` §6:
 //! which step Open Folder takes for a directory `D` over the live windows (`step`), the plan of
-//! the tab it fills or opens (`plan`), and the size a fill applies (`fill_size`).
+//! the tab it fills or opens (`plan`), with the sidebar New Tab captured for a tab it made, and
+//! the size a fill applies (`fill_size`).
 //!
 //! Pure: no display, no Neovim and no filesystem. Window ids and tab ids are chosen so no id
 //! equals an index of the lists asserted on, and every live window list is passed out of
@@ -198,7 +199,7 @@ fn project() -> ProjectState {
 #[test]
 fn a_project_state_plans_its_saved_tab_at_the_directory() {
     let project = project();
-    let planned = plan(Path::new(D), Some(&project));
+    let planned = plan(Path::new(D), Some(&project), None);
 
     assert_eq!(
         planned.tabs.len(),
@@ -261,7 +262,7 @@ fn a_project_state_plans_its_saved_tab_at_the_directory() {
 /// G7.
 #[test]
 fn no_project_state_plans_a_fresh_folder_tab() {
-    let planned = plan(Path::new(D), None);
+    let planned = plan(Path::new(D), None, None);
     assert_eq!(
         planned.tabs.len(),
         1,
@@ -293,7 +294,7 @@ fn no_project_state_plans_a_fresh_folder_tab() {
 /// G8.
 #[test]
 fn a_fill_applies_the_stored_size_only_to_a_lone_tab() {
-    let sized = plan(Path::new(D), Some(&project()));
+    let sized = plan(Path::new(D), Some(&project()), None);
     assert_eq!(
         sized.window_size,
         Some(STORED),
@@ -310,8 +311,51 @@ fn a_fill_applies_the_stored_size_only_to_a_lone_tab() {
         "a fill of one of two tabs keeps the window's size; a size means window_tabs is ignored"
     );
     assert_eq!(
-        fill_size(&plan(Path::new(D), None), 1),
+        fill_size(&plan(Path::new(D), None, None), 1),
         None,
         "with no stored size there is nothing to apply"
+    );
+}
+
+/// OP1.
+#[test]
+fn a_fill_of_a_new_tab_with_no_project_state_takes_its_captured_sidebar() {
+    let planned = plan(Path::new(D), None, Some(false));
+    let tab = &planned.tabs[0];
+    assert_eq!(
+        tab.saved, None,
+        "premise: with no project state the tab is a fresh one, so nothing stored decides"
+    );
+    assert!(
+        !tab.sidebar_visible,
+        "New Tab captured a hidden sidebar and D has no project state, so §6 plans the sidebar \
+         hidden. true means plan ignored new_tab_sidebar and planned the fresh tab's default"
+    );
+}
+
+/// OP2.
+#[test]
+fn a_stored_sidebar_wins_over_a_captured_one() {
+    let project = project();
+    assert!(
+        !project.tab.sidebar.visible,
+        "premise: the fixture's project hides its sidebar, the opposite of the captured value"
+    );
+    let planned = plan(Path::new(D), Some(&project), Some(true));
+    assert!(
+        !planned.tabs[0].sidebar_visible,
+        "D's project state hides the sidebar and New Tab captured it shown, so the stored \
+         setting wins. true means the captured value was applied over the project's saved tab"
+    );
+}
+
+/// OP3.
+#[test]
+fn with_nothing_captured_a_fresh_tab_shows_the_sidebar() {
+    let planned = plan(Path::new(D), None, None);
+    assert!(
+        planned.tabs[0].sidebar_visible,
+        "a fill of an empty tab New Tab did not make, or a new window, with no project state \
+         keeps the fresh tab's default, shown. false means a missing capture was read as hidden"
     );
 }

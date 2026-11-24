@@ -425,7 +425,7 @@ Of `CloseBurst`: a tab group closed in one turn keeps the tree read once, at its
 
 #### `StateSeamTests.swift`
 
-**Covers**: three tables and the [§7](../../../../specs/application-state.md#7-new-windows) cases. `normalFrame` keeps the previous normal frame while zoomed or full screen, and is nil with none. `restoredWindowFrame` accepts a frame intersecting any screen's visible frame (second display, partly past an edge) and returns nil for non-positive width or height (the unset sentinel), a fully offscreen frame, and an empty screen list. `launchDecision` returns `.folder` only for a restored path the injected `isDirectory` closure accepts, and `.emptyState(nvimCwd: home)` for empty, deleted, plain-file, and missing paths.
+**Covers**: three tables and the [§7](../../../../specs/application-state.md#7-new-windows-and-tabs) cases. `normalFrame` keeps the previous normal frame while zoomed or full screen, and is nil with none. `restoredWindowFrame` accepts a frame intersecting any screen's visible frame (second display, partly past an edge) and returns nil for non-positive width or height (the unset sentinel), a fully offscreen frame, and an empty screen list. `launchDecision` returns `.folder` only for a restored path the injected `isDirectory` closure accepts, and `.emptyState(nvimCwd: home)` for empty, deleted, plain-file, and missing paths.
 
 `newWindowFrame` applies a stored frame on a screen, and otherwise cascades at the active window's normal size, never a zoomed or full-screen one, from the top-left of its live frame; with no active window it answers `.system`.
 

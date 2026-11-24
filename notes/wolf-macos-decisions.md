@@ -155,7 +155,7 @@ The palette lists every recent directory. The invoking tab's own folder focuses 
 
 ## New windows
 
-[§7](../specs/application-state.md#7-new-windows) is the rule. New Window, and an Open Folder new window with no stored frame that intersects a screen, take the active window's normal size and cascade from it, through `AppDelegate.newWindowPlacement(stored:)`. With no window open, a new window keeps the default size and AppKit's placement.
+[§7](../specs/application-state.md#7-new-windows-and-tabs) is the rule. New Window, and an Open Folder new window with no stored frame that intersects a screen, take the active window's normal size and cascade from it, through `AppDelegate.newWindowPlacement(stored:)`. With no window open, a new window keeps the default size and AppKit's placement.
 
 **The active window is the stacking order's first, never the key window**, as §2 defines it. [`StateSeam.newWindowFrame`](../crates/wolf-macos/Sources/WolfKeyMap/Persistence/README.md#stateseamswift) takes its size through `normalFrame`, so a zoomed or full-screen window lends its earlier size, and starts the cascade from the top-left of its live frame, so the new window cascades from where that window is on screen.
 

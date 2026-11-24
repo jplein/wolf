@@ -2254,8 +2254,9 @@ pub(crate) const TABCRASH_READ_NAME: &str = "cr_after.txt";
 /// one `sh -c` string inside `cage`, keyboard only, composed with [`with_nvim_pid_helper`].
 ///
 /// Tab 1 opens [`TABCRASH_FILE_A`] and its Neovim's pid is recorded while it is the only one;
-/// Ctrl+Shift+T starts tab 2's Neovim, whose pid is the other live `nvim` child, and tab 2
-/// opens [`TABCRASH_FILE_B`]. With tab 2 selected, tab 1's Neovim is SIGKILLed. A third pid
+/// Ctrl+Shift+T starts tab 2's Neovim, whose pid is the other live `nvim` child, in an empty
+/// tab, which a `:cd` makes a folder tab on the project before it opens [`TABCRASH_FILE_B`].
+/// With tab 2 selected, tab 1's Neovim is SIGKILLed. A third pid
 /// must appear, tab 2's must stay live and the app with it; then tab 2's buffer is read back,
 /// `:qa` saves the session and the state database is frozen.
 ///
@@ -2355,6 +2356,10 @@ if [ -z "$pid_b" ]; then
 fi
 echo "wolf-gnome per-tab crash smoke: tab 1's Neovim is $pid_a, tab 2's is $pid_b" >&2
 sleep "$TABS_BAR_SETTLE"
+# New Tab's tab is empty, its Neovim at HOME; the relative :cd makes it a folder tab.
+wtype -- ":cd $TABCRASH_PROJECT_BASE"
+wtype -k Return
+sleep "$SETTLE"
 
 # --- Step 3: tab 2, the selected tab, opens its own file ---------------------
 wtype -- ":e $TABCRASH_FILE_B"
@@ -2480,6 +2485,7 @@ fn one_tabs_neovim_crash_restarts_only_that_tab_under_cage() {
         .env("WOLF_BIN", bin)
         .env("TABCRASH_FILE_A", TABCRASH_FILE_A)
         .env("TABCRASH_FILE_B", TABCRASH_FILE_B)
+        .env("TABCRASH_PROJECT_BASE", TEMP_CWD_BASENAME)
         .env("TABCRASH_READ", &read)
         .env("TABCRASH_STATE_SRC", &state_src)
         .env("TABCRASH_STATE_COPY", &state_dir)

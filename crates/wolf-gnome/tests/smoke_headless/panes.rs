@@ -193,16 +193,15 @@ const CHORD_CLOSE_HEADING_GONE: &str = "# CHORDGONE";
 /// Lowercased substring OCR must NOT find: the closed pane's file.
 pub(crate) const CHORD_CLOSE_OCR_GONE: &str = "chordgone";
 
-/// The `<linux/input-event-codes.h>` `BTN_MIDDLE` code, in the same grammar. Used by
-/// [`native_tabs_open_switch_and_close_under_cage`] alone, to close a tab the way a
-/// user does.
+/// The `<linux/input-event-codes.h>` `BTN_MIDDLE` code, in the same grammar, with which
+/// the tab smokes close a tab the way a user does.
 ///
 /// That middle-click closes an `adw::TabBar` tab was a PREDICTION from libadwaita's
 /// documented default and is now MEASURED under `cage`: a probe injecting button 274
 /// over a two-page bar dropped `n_pages` to 1 and fired `close-page`. Without that
 /// measurement the smoke's leg (f) would have been dropped and the close glue would
 /// have shipped with no end-to-end coverage at all.
-const POINTER_BUTTON_MIDDLE: &str = "274";
+pub(crate) const POINTER_BUTTON_MIDDLE: &str = "274";
 
 /// The VERTICAL-SPLIT scenario, run as a single `sh -c` string INSIDE `cage` (same
 /// structure as `SCENARIO`): launch the app, wait until it is ready for input
@@ -2085,16 +2084,14 @@ pub(crate) const TABS_FIRST_HEADING: &str = "# ZZTABALFA";
 /// `restore_fixture_names_cannot_satisfy_their_own_assertions`).
 pub(crate) const TABS_OCR_FIRST: &str = "zztabalfa";
 
-/// Native-tabs smoke: the subdirectory leg (b) `:tcd`s tab 1's Neovim into, and
-/// where leg (c)'s new tab must then start.
+/// Native-tabs smoke: the subdirectory leg (b) `:tcd`s tab 1's Neovim into, where leg
+/// (c)'s new tab must NOT start, and which the new tab then `:cd`s into for leg (d).
 ///
-/// The new tab's Neovim is a process of its own, started at the directory
-/// `tabs_ui::new_tab_cwd` picks from the selected tab's `WolfCore::live_cwd`. That
-/// value follows a `:tcd` through the `wolf_cwd` notification `DirChanged` sends,
-/// as its doc comment says. So a new tab sitting in this directory is one whose
-/// core was started where the selected tab's Neovim is, and a new tab at the
-/// project root is one started at the launch directory instead: exit 23 tells the
-/// two apart, since the new Neovim inherits nothing from the first.
+/// New Tab opens an empty tab, whose Neovim starts at `HOME` (`specs/application-state.md`
+/// §7). The selected tab's `WolfCore::live_cwd` follows a `:tcd` through the `wolf_cwd`
+/// notification `DirChanged` sends, so a new tab sitting in this directory is one whose
+/// core was started where the selected tab's Neovim is: exit 23 names that, since this
+/// directory is neither the launch directory nor `HOME`.
 pub(crate) const TABS_SUBDIR: &str = "tbsub";
 
 /// Native-tabs smoke: the file opened in the SECOND tab, as a path RELATIVE TO THE
@@ -2109,10 +2106,9 @@ pub(crate) const TABS_SECOND_FILE: &str = "tbsub/tbyankee.md";
 /// working directory.
 ///
 /// Typed bare rather than as a path on purpose: it only opens the fixture if the
-/// new tab's Neovim really started in [`TABS_SUBDIR`], so a build whose new tab
-/// landed in the project root gets an empty scratch buffer and capture B's
-/// must-CONTAIN half fails too. Leg (c)'s readback reaches that failure first and
-/// names it precisely; this is the belt to its braces.
+/// new tab's `:cd` really moved its Neovim into [`TABS_SUBDIR`], so a `:cd` that
+/// landed elsewhere gets an empty scratch buffer and capture B's must-CONTAIN half
+/// fails.
 pub(crate) const TABS_SECOND_NAME: &str = "tbyankee.md";
 
 /// Heading written into [`TABS_SECOND_FILE`]; lowercased it contains
@@ -2166,9 +2162,10 @@ pub(crate) const TABS_FIRST_TAB_CENTRE_FRACTION: f64 = 0.25;
 /// [`POINTER_PREAMBLE`] and composed with `recovery::with_nvim_pid_helper`.
 ///
 /// Six legs over ONE launch: open a file in tab 1, `:tcd` its Neovim into a
-/// subdirectory, open a second tab with Ctrl+Shift+T, open the second file into it,
-/// click tab 1's entry in the bar, then middle-click it to close it. Three captures,
-/// four Neovim readbacks and three counts of the app's live `nvim` children.
+/// subdirectory, open a second, empty tab with Ctrl+Shift+T and `:cd` it into that
+/// subdirectory, open the second file into it, click tab 1's entry in the bar, then
+/// middle-click it to close it. Three captures, four Neovim readbacks and three counts
+/// of the app's live `nvim` children.
 ///
 /// ## Exit codes it adds to [`POINTER_PREAMBLE`]'s 11-15
 ///
@@ -2176,7 +2173,7 @@ pub(crate) const TABS_FIRST_TAB_CENTRE_FRACTION: f64 = 0.25;
 /// | --- | --- | --- |
 /// | `21` | a | the app did not START with exactly one live Neovim, so every count below would be measuring the wrong baseline |
 /// | `22` | c | Ctrl+Shift+T started no second Neovim |
-/// | `23` | c | the new tab's Neovim is not rooted in [`TABS_SUBDIR`], where the selected tab's Neovim was |
+/// | `23` | c | the new tab's Neovim is rooted in [`TABS_SUBDIR`], where the selected tab's Neovim was |
 /// | `24` | c | the editor did not lose a row: either the tab bar took no height, or the new page was never selected and its grid kept the core's initial size |
 /// | `25` | e | after the click on tab 1's bar entry, the keys reached a Neovim whose buffer is not [`TABS_FIRST_FILE`] |
 /// | `26` | f | the middle-click did not leave exactly one live Neovim |
@@ -2225,9 +2222,8 @@ grim "$OUT_PNG_A"
 
 # --- Leg (b): move tab 1's Neovim into a subdirectory ------------------------
 #
-# The new tab's core starts at the selected tab's live cwd, which follows a :tcd
-# (see TABS_SUBDIR), so this is what exit 23 discriminates: a subdirectory that is
-# NOT the launch directory, which a core started anywhere else cannot be sitting in.
+# The selected tab's live cwd follows a :tcd (see TABS_SUBDIR), so exit 23 can tell a
+# new tab started there from the empty tab New Tab opens at HOME.
 #
 # RELATIVE on purpose, the typed-`:cd` smoke's reason: an absolute `:tcd <path>`
 # would put the whole temp path into the command line the cmdline strip draws.
@@ -2241,9 +2237,8 @@ sleep "$SETTLE"
 # --- Leg (c): Ctrl+Shift+T starts a second Neovim ---------------------------
 #
 # GTK captures the chord before the window key controller and activates
-# `win.new-tab`; the shell picks the new tab's directory from the selected tab's
-# live cwd, and TabsInner::open_tab starts a core of its own there and selects the
-# new page.
+# `win.new-tab`; the shell opens an empty tab, and TabsInner::open_tab starts a core
+# of its own at HOME and selects the new page.
 wtype -M ctrl -M shift -k t -m shift -m ctrl
 wait_nvim_count 2 22 "after Ctrl+Shift+T opened a second tab"
 sleep "$TABS_BAR_SETTLE"
@@ -2261,12 +2256,10 @@ echo "wolf-gnome native-tabs smoke: leg (c) winheight=$h2 getcwd=$cwd_c" >&2
 # /tmp may resolve through a symlink on this host, so getcwd() need not be
 # string-equal to the path this harness built, while the basename survives every
 # symlink. The Rust side asserts the same thing against its own fixture path.
-if [ "${cwd_c##*/}" != "$TABS_SUBDIR" ]; then
-    echo "wolf-gnome native-tabs smoke: the NEW tab's Neovim started in $cwd_c, whose final" >&2
-    echo "  component is not $TABS_SUBDIR, the directory leg (b) moved tab 1's Neovim into." >&2
-    echo "  AppShell::new_tab must hand new_tab_cwd the selected tab's live_cwd; a tab at the" >&2
-    echo "  project root means it was handed nothing (or the launch cwd), and leg (d)'s bare" >&2
-    echo "  :e would then open an empty scratch buffer instead of the second fixture." >&2
+if [ "${cwd_c##*/}" = "$TABS_SUBDIR" ]; then
+    echo "wolf-gnome native-tabs smoke: the NEW tab's Neovim started in $cwd_c, the directory" >&2
+    echo "  leg (b) moved tab 1's Neovim into. New Tab opens an empty tab, whose Neovim starts" >&2
+    echo "  at HOME, so AppShell::new_tab still roots the tab at the selected tab's live cwd." >&2
     exit 23
 fi
 
@@ -2283,8 +2276,11 @@ fi
 
 # --- Leg (d): the second file, into the second tab ---------------------------
 #
-# BARE name, resolved against the new tab's own working directory: see
-# TABS_SECOND_NAME.
+# The empty tab's Neovim is at HOME, so this relative :cd reaches the subdirectory and leaves
+# the empty state. The bare :e resolves against it: see TABS_SECOND_NAME.
+wtype -- ":cd $TABS_CD_TARGET"
+wtype -k Return
+sleep "$SETTLE"
 wtype -- ":e $TABS_SECOND_NAME"
 wtype -k Return
 sleep "$SETTLE"
@@ -2373,7 +2369,7 @@ exit 0
 /// ## What it proves that nothing else can
 ///
 /// Every headless tab test can only see values the front-end itself computed. This
-/// is the observation that a second tab starts a second Neovim process, where the
+/// is the observation that a second tab starts a second Neovim process, not where the
 /// selected tab's Neovim is, that the keys follow the GTK selection to the selected
 /// tab's core, that the bar costs the editor grid real rows, that `close-page`'s veto
 /// is answered, and that closing a tab shuts its Neovim down and leaves the other's.
@@ -2402,7 +2398,7 @@ exit 0
 /// | 2 | three captures present, the injected point inside the reported extents | precondition | none | n/a |
 /// | 3 | leg (a): exactly one live Neovim at launch | precondition — the baseline of every later count | none | n/a |
 /// | 4 | leg (c): exactly two live Neovims after Ctrl+Shift+T | **discriminator** | NT1a: in `AppShell::new_tab`, delete the `open_tab` call | scenario exit 22 |
-/// | 5 | leg (c)'s `getcwd()` ends in [`TABS_SUBDIR`] | **discriminator** | NT2a: in `AppShell::new_tab`, pass `None` as `live_cwd` to `new_tab_cwd` | scenario exit 23 |
+/// | 5 | leg (c)'s `getcwd()` does not end in [`TABS_SUBDIR`] | **discriminator** | NT2b: in `AppShell::new_tab`, set the planned tab's `cwd` to the selected tab's `WolfCore::live_cwd` | scenario exit 23 |
 /// | 6 | `H2 < H1` | **discriminator** | NT3a: in `window::build`, drop `content.append(&tabs.bar_widget())` | scenario exit 24 |
 /// | 7 | leg (e)'s buffer tail is [`TABS_FIRST_FILE`] | **discriminator** | NT4a: in `TabsHandle::selected_core`, answer `entries().last()` instead of the selected tab | scenario exit 25, naming [`TABS_SECOND_NAME`] |
 /// | 8 | leg (f): exactly one live Neovim after the middle-click | **discriminator** | NT5a: in the `CloseTab` arm, delete both `deregister(page)` and `entry.shutdown()` | scenario exit 26 |
@@ -2448,7 +2444,7 @@ fn native_tabs_open_switch_and_close_under_cage() {
     );
 
     // Assertion 0 (precondition): if the second fixture also existed at the root, leg (d)'s bare `:e`
-    // would find it whether or not the new tab started in the subdirectory.
+    // would find it whether or not the new tab's `:cd` reached the subdirectory.
     let second_in_subdir = cwd.join(TABS_SECOND_FILE);
     assert!(
         second_in_subdir.is_file(),
@@ -2460,8 +2456,8 @@ fn native_tabs_open_switch_and_close_under_cage() {
     assert!(
         !second_at_root.exists(),
         "{SMOKE}: {} exists, so leg (d)'s bare `:e {TABS_SECOND_NAME}` resolves to a real file \
-         against the PROJECT ROOT as well as against {TABS_SUBDIR:?}. That disarms the belt half \
-         of leg (c)'s directory check: a new tab started at the launch directory would still \
+         against the PROJECT ROOT as well as against {TABS_SUBDIR:?}. That disarms leg (d)'s \
+         check of the new tab's `:cd`: a `:cd` that reached only the project root would still \
          open a document and still draw a heading. A SIDEBAR_FILLER_FILES entry or another \
          smoke's fixture renamed to {TABS_SECOND_NAME:?} is the likely cause; rename that rather \
          than moving this smoke's fixture out of {TABS_SUBDIR:?}.",
@@ -2494,6 +2490,8 @@ fn native_tabs_open_switch_and_close_under_cage() {
     );
     let click_x_env = click_x.to_string();
     let click_y_env = click_y.to_string();
+    // The new tab's Neovim starts at HOME, the temp cwd's parent.
+    let cd_target = format!("{TEMP_CWD_BASENAME}/{TABS_SUBDIR}");
 
     let body = with_nvim_pid_helper(POINTER_TABS_BODY);
     let status = run_pointer_scenario(
@@ -2505,6 +2503,7 @@ fn native_tabs_open_switch_and_close_under_cage() {
             ("TABS_FIRST_FILE", OsStr::new(TABS_FIRST_FILE)),
             ("TABS_SECOND_NAME", OsStr::new(TABS_SECOND_NAME)),
             ("TABS_SUBDIR", OsStr::new(TABS_SUBDIR)),
+            ("TABS_CD_TARGET", OsStr::new(&cd_target)),
             ("TABS_READ_A", read_a.as_os_str()),
             ("TABS_READ_C", read_c.as_os_str()),
             ("TABS_READ_E", read_e.as_os_str()),
@@ -2529,8 +2528,9 @@ fn native_tabs_open_switch_and_close_under_cage() {
          `Command::NewTab` demoted back to `Deferred` leaves the chord falling through to Neovim \
          as `<C-t>`), or `AppShell::new_tab` never reached `TabsInner::open_tab`, or the new \
          tab's `WolfCore::start` failed (its stderr line says so).\n\
-         Exit 23: the new tab's Neovim is not rooted in the subdirectory leg (b) moved tab 1's \
-         Neovim into, so `new_tab_cwd` was not handed the selected tab's `live_cwd`.\n\
+         Exit 23: the new tab's Neovim is rooted in the subdirectory leg (b) moved tab 1's \
+         Neovim into, so New Tab roots its tab at the selected tab's `live_cwd` rather than \
+         opening an empty tab.\n\
          Exit 24: the editor did not lose a row, and the number the scenario printed says which \
          cause. EQUAL: the `adw::TabBar` took no height — check that `window::build` still appends \
          it between the header bar and the `gtk::Paned`. GREATER: the new page was never \
@@ -2587,12 +2587,11 @@ fn native_tabs_open_switch_and_close_under_cage() {
     // Assertion 5 (discriminator): compared on the last component, since /tmp may resolve
     // through a symlink.
     let got_tail = leg_c_cwd.rsplit('/').next().unwrap_or_default();
-    assert_eq!(
+    assert_ne!(
         got_tail, TABS_SUBDIR,
-        "{SMOKE}: the new tab's Neovim reports `getcwd()` = {leg_c_cwd:?}, whose final component \
-         is {got_tail:?} rather than {TABS_SUBDIR:?}, where leg (b) moved tab 1's Neovim. A \
-         component of {TEMP_CWD_BASENAME:?} means the new core started at the launch directory: \
-         `AppShell::new_tab` did not hand `new_tab_cwd` the selected tab's `live_cwd`. The \
+        "{SMOKE}: the new tab's Neovim reports `getcwd()` = {leg_c_cwd:?}, in {TABS_SUBDIR:?}, \
+         where leg (b) moved tab 1's Neovim. New Tab opens an empty tab, whose Neovim starts at \
+         HOME, so `AppShell::new_tab` still roots its tab at the selected tab's `live_cwd`. The \
          scenario exits 23 on this, so reaching the assertion means the readback shape changed."
     );
 
@@ -2724,8 +2723,9 @@ pub(crate) const RELOAD_READ_NAME: &str = "ar_read.txt";
 /// [`POINTER_PREAMBLE`] and composed with `recovery::with_nvim_pid_helper`.
 ///
 /// Tab 1 opens [`RELOAD_FILE`] and turns `CursorHold` off with a huge `'updatetime'`; Ctrl+Shift+T
-/// starts tab 2's Neovim, which opens the same file, rewrites line 1 and saves; the scenario
-/// waits for the write on disk, clicks tab 1 and reads tab 1's buffer back. Tab 1 enters no
+/// starts tab 2's Neovim in an empty tab, which `:cd`s into the project, opens the same file,
+/// rewrites line 1 and saves; the scenario waits for the write on disk, clicks tab 1 and reads
+/// tab 1's buffer back. Tab 1 enters no
 /// buffer after the write, so `BufEnter` cannot reload it either: the focus gain the switch
 /// sends is the one trigger left.
 ///
@@ -2759,6 +2759,10 @@ wait_file "$RELOAD_PID_ONE" || exit 14
 wtype -M ctrl -M shift -k t -m shift -m ctrl
 wait_nvim_count 2 21 "after Ctrl+Shift+T opened a second tab"
 sleep "$TABS_BAR_SETTLE"
+# New Tab's tab is empty, its Neovim at HOME: this relative :cd puts it where step 3's :e resolves.
+wtype -- ":cd $RELOAD_PROJECT_BASE"
+wtype -k Return
+sleep "$SETTLE"
 
 # --- Step 3: tab 2 opens the same file, rewrites line 1 and saves -----------
 #
@@ -2883,6 +2887,7 @@ fn a_file_saved_in_one_tab_reloads_in_another_on_switch_under_cage() {
         &[
             ("RELOAD_FILE", OsStr::new(RELOAD_FILE)),
             ("RELOAD_FILE_ABS", file.as_os_str()),
+            ("RELOAD_PROJECT_BASE", OsStr::new(TEMP_CWD_BASENAME)),
             ("RELOAD_HEADING_AFTER", OsStr::new(RELOAD_HEADING_AFTER)),
             ("RELOAD_PID_ONE", pid_one.as_os_str()),
             ("RELOAD_PID_TWO", pid_two.as_os_str()),

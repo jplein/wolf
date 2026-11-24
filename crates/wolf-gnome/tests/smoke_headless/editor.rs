@@ -1441,7 +1441,7 @@ fn empty_state_shows_open_folder_button_under_cage() {
     }
 
     // `HOME` equal to the cwd fires `launch_decision`'s `cwd == home` branch. Chained after the helper
-    // so it overrides the default (last write wins); the title is the constant `~`.
+    // so it overrides the default (last write wins); the title is the constant `Wolf`.
     let status = cage_command(EMPTY_STATE_SCENARIO, &cwd, &runtime_dir)
         .env("HOME", &cwd)
         .env("WOLF_BIN", bin)

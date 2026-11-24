@@ -11,7 +11,8 @@ private typealias LiveWindow = OpenFolderSeam.LiveWindow
 
 /// `OpenFolderSeam` decides `specs/application-state.md` §6's step for a directory `D`: focus the
 /// tab §4's rule picks when one is open on `D`, else fill an empty current tab, else open a new
-/// window. It also canonicalizes `D` and picks the frame a fill applies.
+/// window. It also canonicalizes `D`, picks the frame a fill applies, and picks whether the folder
+/// tab shows its sidebar.
 ///
 /// A `LiveWindow`'s `selected` is the selected tab's id, and `.focus(tab:)` answers a tab id.
 /// Tab ids here are never equal to a tab index, so an answer that confuses the two names no tab.
@@ -210,5 +211,28 @@ final class OpenFolderSeamTests: XCTestCase {
       OpenFolderSeam.liveDirectory(hasFolder: false, reportedCwd: dirE, launchCwd: dirD), "",
       "an empty tab has no directory, whatever its Neovim reports; a path means an empty tab "
         + "counts as open on it")
+  }
+
+  // MARK: - OS1-OS3: the sidebar of a folder opened into New Tab's empty tab
+
+  func testWithNoProjectStateAFillTakesTheCapturedSidebar() {
+    XCTAssertFalse(
+      OpenFolderSeam.sidebarVisible(stored: nil, newTab: false),
+      "New Tab captured a hidden sidebar and the folder has no project state, so §6 hides it; "
+        + "true means the captured value was ignored for the default")
+  }
+
+  func testAStoredSidebarWinsOverTheCapturedOne() {
+    XCTAssertFalse(
+      OpenFolderSeam.sidebarVisible(stored: false, newTab: true),
+      "the folder's project state hides the sidebar and New Tab captured it shown, so the "
+        + "stored setting wins; true means the captured value was applied over it")
+  }
+
+  func testWithNothingCapturedAFolderTabShowsTheSidebar() {
+    XCTAssertTrue(
+      OpenFolderSeam.sidebarVisible(stored: nil, newTab: nil),
+      "a folder opened into an empty tab New Tab did not make, with no project state, shows "
+        + "the sidebar by default; false means a missing capture was read as hidden")
   }
 }

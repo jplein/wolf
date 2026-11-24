@@ -548,6 +548,10 @@ sleep "$SETTLE"
 # Tab 1: the MIDDLE tab, which the next launch will restore and never select.
 wtype -M ctrl -M shift -k t -m shift -m ctrl
 sleep "$TABS_BAR_SETTLE"
+# New Tab's tab is empty, its Neovim at HOME; the relative :cd makes it a folder tab.
+wtype -- ":cd $TABS_PROJECT_BASE"
+wtype -k Return
+sleep "$SETTLE"
 wtype -- ":e $TABS_FILE_TWO"
 wtype -k Return
 sleep "$SETTLE"
@@ -555,6 +559,10 @@ sleep "$SETTLE"
 # Tab 2: the last tab created, selected at the quit.
 wtype -M ctrl -M shift -k t -m shift -m ctrl
 sleep "$TABS_BAR_SETTLE"
+# New Tab's tab is empty, its Neovim at HOME; the relative :cd makes it a folder tab.
+wtype -- ":cd $TABS_PROJECT_BASE"
+wtype -k Return
+sleep "$SETTLE"
 wtype -- ":e $TABS_FILE_THREE"
 wtype -k Return
 sleep "$SETTLE"
@@ -1384,6 +1392,8 @@ wait_ready "$app_pid" 11 "wolf-gnome two-window smoke"
 nvim_ex "e $TWOWIN_A_FIRST_FILE"
 wtype -M ctrl -M shift -k t -m shift -m ctrl
 sleep "$TABS_BAR_SETTLE"
+# New Tab's tab is empty, its Neovim at HOME; the :cd makes it a folder tab on the project.
+nvim_ex "cd $TWOWIN_PROJECT_ABS"
 nvim_ex "e $TWOWIN_A_LEFT_FILE"
 # VERTICAL split: the new pane opens to the RIGHT and takes focus.
 wtype -M ctrl -k w -m ctrl
@@ -1424,8 +1434,7 @@ sleep "$RESTORE_SETTLE"
 # Keys go to the window cage is showing, which is the NEWEST toplevel (measured:
 # cage keeps the newest on top and declines a present() on any other), i.e. window
 # B. New Window builds its plan from no saved state AND no process cwd, so B starts
-# in the empty state at $HOME; inheriting the invoking window's cwd is what New TAB
-# does and is not this row's behaviour.
+# in the empty state at $HOME, inheriting nothing from the invoking window.
 #
 # It reads bufname('%') as well as getcwd(), and that second value is not
 # decoration: it is what separates "the new window inherited a project" from "these
@@ -1470,9 +1479,9 @@ if [ "${b_cwd##*/}" = "$TWOWIN_PROJECT_BASE" ]; then
     echo "  project directory ($b_cwd)." >&2
     echo "  New Window must build its plan from no saved state and NO PROCESS CWD, which by" >&2
     echo "  construction is the empty state at \$HOME with no layout. Passing the process cwd" >&2
-    echo "  (or the invoking window's) inherits a project -- the behaviour New TAB has, and" >&2
-    echo "  the one that looks right exactly half the time it is tried by hand, because from" >&2
-    echo "  a desktop launcher the process cwd IS \$HOME." >&2
+    echo "  (or the invoking window's) inherits a project -- the behaviour that looks right" >&2
+    echo "  exactly half the time it is tried by hand, because from a desktop launcher the" >&2
+    echo "  process cwd IS \$HOME." >&2
     exit 22
 fi
 
@@ -1480,13 +1489,14 @@ fi
 #
 # A typed `:cd` moves the empty tab's Neovim, which takes that tab -- and only that
 # tab -- out of the empty state, so it saves a directory and a root. ABSOLUTE,
-# because B's cwd is $HOME at this point. The new tab inherits the selected tab's
-# directory, so both of B's tabs are in the project too, and B's second tab is the
-# one selected when the chord quits: the last keys of run 1 go to window B.
+# because B's cwd is $HOME at this point. New Tab's tab is empty too, so a second :cd
+# puts both of B's tabs in the project, and B's second tab is the one selected when
+# the chord quits: the last keys of run 1 go to window B.
 nvim_ex "cd $TWOWIN_PROJECT_ABS"
 nvim_ex "e $TWOWIN_B_FIRST_FILE"
 wtype -M ctrl -M shift -k t -m shift -m ctrl
 sleep "$TABS_BAR_SETTLE"
+nvim_ex "cd $TWOWIN_PROJECT_ABS"
 nvim_ex "e $TWOWIN_B_ACTIVE_FILE"
 wait_nvim_count 4 28 "after Ctrl+Shift+T in window B"
 
@@ -2418,6 +2428,7 @@ fn three_tabs_survive_a_relaunch_under_cage() {
     .env("TABS_STATE_SRC", &smoke_state)
     .env("TABS_STATE_COPY_1", &run1_state_dir)
     .env("TABS_STATE_COPY_2", &run2_state_dir)
+    .env("TABS_PROJECT_BASE", TEMP_CWD_BASENAME)
     .status()
     .expect("failed to spawn `cage` for the headless three-tab relaunch scenario");
     // Assertion 1, the SAVE side, before the status: a save that drops tabs also exits 24.

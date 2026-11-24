@@ -256,7 +256,7 @@ A `wolf --wait` popped into `Request(owning:)` exits `0` at `:q` in its pane.
 
 #### `NewWindowPlacementTests.swift`
 
-**Covers** — `NSWindow.cascade(fromTopLeft:size:)`, the [§7](../../../../specs/application-state.md#7-new-windows) placement: the window has the new size before its first `cascadeTopLeft(from:)` call and after the cascade, and that call starts at the active window's top-left and the second at the point the first answers, where the window's top-left ends.
+**Covers** — `NSWindow.cascade(fromTopLeft:size:)`, the [§7](../../../../specs/application-state.md#7-new-windows-and-tabs) placement: the window has the new size before its first `cascadeTopLeft(from:)` call and after the cascade, and that call starts at the active window's top-left and the second at the point the first answers, where the window's top-left ends.
 
 **Decisions**
 

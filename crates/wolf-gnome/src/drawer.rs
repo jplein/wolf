@@ -36,9 +36,9 @@ pub const DRAWER_WEIGHT: f64 = 1.0 / 3.0;
 /// The drawer's share of the pane area: the fraction of the drawer divider's
 /// `gtk::Paned` span that the drawer, its end child, takes.
 ///
-/// One per tab, held by that tab's pane view, so a drag changes its own tab alone. New
-/// Tab inherits the selected tab's share, a new window starts at [`DRAWER_WEIGHT`], and
-/// a restored tab starts at its saved share through [`DrawerShare::restored`]. It is a
+/// One per tab, held by that tab's pane view, so a drag changes its own tab alone. A new
+/// tab and a new window start at [`DRAWER_WEIGHT`], and a restored tab starts at its
+/// saved share through [`DrawerShare::restored`]. It is a
 /// separate value from [`DrawerState`] so that [`DrawerState::clear`] (the drawer
 /// closing, a restart) leaves it alone.
 ///

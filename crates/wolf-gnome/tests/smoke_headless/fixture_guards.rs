@@ -336,6 +336,10 @@ use super::*;
 ///   writes no fixture and reads only `stty size` readbacks and a frozen state.
 ///   `a_restored_search_sidebar_runs_its_query_under_cage` asserts on the case smoke's terms
 ///   over the case smoke's fixtures, so it is covered through that smoke's rows.
+/// * The New Tab smokes in `new_tab.rs` assert on [`EMPTY_STATE_OCR`] and
+///   [`TG_OCR_TREE_ROW`], covered through their owners' rows, and on the empty tab's title,
+///   `new_tab::NT_OCR_TITLE`, which has no row: [`TEMP_CWD_PREFIX`] spells it, so the
+///   temp-cwd guard would refuse it. That module's own guard checks what its captures draw.
 ///
 /// The other pointer smokes DO OCR and their terms are listed below. For
 /// `click_then_close_keeps_keyboard_input_alive_under_cage` the OCR pair is
@@ -2232,8 +2236,8 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// depend on — the second fixture's path being its subdirectory joined to the bare
 /// name leg (d) types, the first being a bare name `bufname('%')` can equal, and
 /// [`TABS_SUBDIR`] being a single component that is not [`TEMP_CWD_BASENAME`], which
-/// is what keeps a new tab started where the selected tab's Neovim is distinguishable
-/// from one started at the project root.
+/// keeps exit 23 naming a new tab started where the selected tab's Neovim is, rather
+/// than one started at the project root.
 ///
 /// [`NEAR_FIXTURE_FILE`] carries [`near_fixture_body`], whose word the neighbour-pane
 /// smoke asserts PRESENT in every capture, so the block that checks it pins the line
@@ -3544,7 +3548,7 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         "TABS_SECOND_FILE = {TABS_SECOND_FILE:?} is not TABS_SUBDIR = {TABS_SUBDIR:?} joined to \
          TABS_SECOND_NAME = {TABS_SECOND_NAME:?}. The three are used separately — the joined path \
          is where the fixture is WRITTEN, the directory is what leg (b) `:tcd`s into and what the \
-         new tab must inherit, and the bare name is what leg (d) types at `:e` — so a disagreement \
+         new tab `:cd`s into, and the bare name is what leg (d) types at `:e` — so a disagreement \
          means the file is written at one path and opened at another."
     );
     assert!(
@@ -3558,19 +3562,17 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         !TABS_SUBDIR.is_empty() && !TABS_SUBDIR.contains('/'),
         "TABS_SUBDIR = {TABS_SUBDIR:?} must be a single non-empty path component: the scenario \
          `:tcd`s into it RELATIVELY (so the temp path never reaches the command line the cmdline \
-         strip draws) and then compares the FINAL COMPONENT of the new tab's `getcwd()` against \
-         it. An empty value leaves the tab rooted at the project root, whose final component is \
-         TEMP_CWD_BASENAME, so assertion 5 would compare against a name no correct run can \
-         produce; a value carrying a separator is never the final component at all."
+         strip draws) and then requires the FINAL COMPONENT of the new tab's `getcwd()` to differ \
+         from it. An empty value is no final component of any path, and a value carrying a \
+         separator is never one either, so assertion 5 would hold whatever the new tab's cwd."
     );
     assert_ne!(
         TABS_SUBDIR, TEMP_CWD_BASENAME,
         "TABS_SUBDIR and TEMP_CWD_BASENAME are the same name ({TABS_SUBDIR:?}). Where the new \
          tab's Neovim starts is checked on the final component of its `getcwd()`, and the wrong \
-         answer that assertion exists to catch — a core started at the PROJECT ROOT, because the \
-         selected tab's live cwd never reached `new_tab_cwd` — has TEMP_CWD_BASENAME as its final \
-         component. With one name for both, that key stops separating them and assertion 5 \
-         discriminates nothing."
+         answer that assertion exists to catch is a core started at the selected tab's live cwd, \
+         this subdirectory. With one name for both, a core started at the PROJECT ROOT fails it \
+         too, and exit 23 names the selected tab's cwd for what is a launch-directory fault."
     );
 
     // The tab-persistence exemption, the two-window shape: its names match the compared strings, which

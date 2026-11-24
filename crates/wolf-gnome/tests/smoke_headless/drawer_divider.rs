@@ -1,6 +1,6 @@
 //! The terminal drawer's divider smokes: a pointer drag on the handle between the editor tree
 //! and the drawer resizes both, reaches the drawer's session, survives the drawer closing and
-//! reopening, stops at both floors, and carries into a new tab opened from that tab. A dragged
+//! reopening, stops at both floors, and stays out of a new tab opened from that tab. A dragged
 //! share also survives a window shrink that clamps the editor and a grow back, and each tab of
 //! a window keeps its own share across a relaunch.
 
@@ -114,6 +114,10 @@ shell_size "$READ_M" 79
 chord_w k
 wtype -M ctrl -M shift -k t -m shift -m ctrl
 sleep "$TABS_BAR_SETTLE"
+# New Tab's tab is empty, its Neovim at HOME; the relative :cd makes it a folder tab.
+wtype -- ":cd $TAB_CD_TARGET"
+wtype -k Return
+sleep "$SETTLE"
 nvim_tab "$READ_TAB" 80
 toggle_drawer
 shell_size "$READ_T" 81
@@ -153,8 +157,8 @@ drag_handle() {
 
 /// The drawer's divider is a draggable `gtk::Paned` handle whose position lives in the tab's
 /// drawer share: a drag resizes the editor and the drawer and the drawer's session, the share
-/// survives the drawer closing and reopening and reaches a new tab opened from it, both floors
-/// hold, and with the drawer closed the editor has the whole pane area back.
+/// survives the drawer closing and reopening and stays out of a new tab opened from it, both
+/// floors hold, and with the drawer closed the editor has the whole pane area back.
 ///
 /// ## The scenario
 ///
@@ -181,13 +185,14 @@ drag_handle() {
 /// | C7 | A3: C is L, the editor's `winheight(0)` and one window [11] | in `rebuild_pane_area`, with no drawer bound but a moved share, still append `build_drawer_paned` over an empty `gtk::Box` | C's `winheight(0)` is 3 |
 /// | C8 | A4: R equals D, rows and columns, and G-R's drawer `winheight` equals G-D's | in `clear_drawer`, after `self.drawer.set(state);`, add `self.drawer_share.set(DrawerShare::new());` | R and G-R are back at O and G-O |
 /// | C10 | A6: D rows < M rows < L's `winheight(0)` [5 < 7 < 11] | in `build_drawer_paned`, `set_shrink_start_child(false)` → `(true)` | M reaches L's 11 |
-/// | E22a | A5: T rows > O rows [6 > 1] | in `AppShell::new_tab`, pass `DrawerShare::new()` in place of the selected tab's share | T rows equal O's 1 |
+/// | E22b | A5: T rows ≤ O rows [1] | in `AppShell::new_tab`, give the new tab the selected tab's drawer share | T rows 6 > O's 1 |
 ///
 /// C6a is the snap back on the next wake and C8 the snap back on a rebuild.
 ///
-/// A5 holds because New Tab gives the new tab the selected tab's share: the second tab's pane
-/// area is [`TAB_BAR_HEIGHT_EXPECTED`] shorter, so a new share there gives the drawer no more
-/// rows than O. The share the limit drag left clamps to the editor's floor in that tab too.
+/// A5 holds because New Tab opens New Window's tab, whose drawer opens at a new share: the
+/// second tab's pane area is [`TAB_BAR_HEIGHT_EXPECTED`] shorter, so a new share there gives the
+/// drawer no more rows than O. The share the limit drag left would give it more, clamped to the
+/// editor's floor in that tab.
 ///
 /// ## Order
 ///
@@ -250,7 +255,8 @@ fn drawer_divider_drag_resizes_and_is_remembered_under_cage() {
         .env("READ_GR", &read_gr)
         .env("READ_M", &read_m)
         .env("READ_TAB", &read_tab)
-        .env("READ_T", &read_t);
+        .env("READ_T", &read_t)
+        .env("TAB_CD_TARGET", TEMP_CWD_BASENAME);
     let status = cmd
         .status()
         .expect("failed to spawn `cage` for the headless drawer-divider scenario");
@@ -404,7 +410,7 @@ fn drawer_divider_drag_resizes_and_is_remembered_under_cage() {
         l[0]
     );
 
-    // --- A5 (E22a): a new tab takes the selected tab's share -------------------
+    // --- A5 (E22b): a new tab opens its drawer at a new share -------------------
     leg(&[read_tab.as_path(), read_t.as_path()], "A5");
     let tab = read_ints(&read_tab, 2, SMOKE);
     assert_eq!(
@@ -420,11 +426,11 @@ fn drawer_divider_drag_resizes_and_is_remembered_under_cage() {
     );
     let t = read_ints(&read_t, 2, SMOKE);
     assert!(
-        t[0] > o[0],
-        "{SMOKE}: the second tab's drawer opened with {} rows, no more than the {} a new \
-         window's drawer has. The second tab's pane area is {TAB_BAR_HEIGHT_EXPECTED} px \
-         shorter, so a default share there gives at most O's rows: New Tab gave the new tab a \
-         new share rather than the selected tab's.",
+        t[0] <= o[0],
+        "{SMOKE}: the second tab's drawer opened with {} rows, more than the {} a new window's \
+         drawer has. The second tab's pane area is {TAB_BAR_HEIGHT_EXPECTED} px shorter, so a \
+         new share there gives at most O's rows: New Tab gave the new tab the selected tab's \
+         dragged share rather than New Window's new one.",
         t[0],
         o[0]
     );
@@ -915,6 +921,8 @@ shell_size() {
 # --- Two tabs first, so both drawers open over the two-tab pane area ---------------------
 wtype -M ctrl -M shift -k t -m shift -m ctrl
 sleep "$TABS_BAR_SETTLE"
+# New Tab's tab is empty, at HOME, and saves no drawer: the :cd makes it a folder tab.
+nvim_ex "cd $TAB_CD_TARGET"
 
 # --- O1, D1: tab 1's drawer at a new share, then dragged up -------------------------------
 toggle_drawer
@@ -954,8 +962,9 @@ exit 0
 /// ## The scenario
 ///
 /// Two launches in one cage, the first through [`POINTER_PREAMBLE`]. Ctrl+Shift+T comes first,
-/// so both tabs have the two-tab pane area, and selects tab 1. There Ctrl+` opens the drawer,
-/// read as O1, and the handle is dragged [`DRAWER_DRAG_PX`] up, read as D1. A click on tab 0
+/// so both tabs have the two-tab pane area, and selects tab 1, an empty tab, which saves no
+/// drawer: a `:cd` into the project makes it a folder tab. There Ctrl+` opens the drawer, read
+/// as O1, and the handle is dragged [`DRAWER_DRAG_PX`] up, read as D1. A click on tab 0
 /// and Ctrl+` open its drawer, read as O0, and a click back on tab 1 reads D1' in its drawer.
 /// Ctrl+Shift+Q quits and Q is frozen. Run 2 starts on tab 1 and reads R1 in its restored
 /// drawer, then a click on tab 0 reads R0.
@@ -1025,7 +1034,8 @@ fn each_tab_keeps_its_drawer_share_across_a_relaunch_under_cage() {
         .env("READ_O0", &read_o0)
         .env("READ_D1B", &read_d1b)
         .env("READ_R1", &read_r1)
-        .env("READ_R0", &read_r0);
+        .env("READ_R0", &read_r0)
+        .env("TAB_CD_TARGET", TEMP_CWD_BASENAME);
     let status = cmd
         .status()
         .expect("failed to spawn `cage` for the headless tab drawer share scenario");

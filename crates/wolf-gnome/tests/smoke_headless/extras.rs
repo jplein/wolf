@@ -275,6 +275,8 @@ freeze_or_exit "$STATE_M1" 111
 # --- M2: a new tab, which switches away from tab 0 -----------------------------------------
 wtype -M ctrl -M shift -k t -m shift -m ctrl
 sleep "$TABS_BAR_SETTLE"
+# New Tab's tab is empty, its Neovim at HOME; the relative :cd makes it a folder tab.
+nvim_ex "cd $CV_PROJECT_BASE"
 wtype -- ":call writefile([printf('%d %d', getpid(), winnr('\$'))], '$READ_M2')"
 wtype -k Return
 wait_file "$READ_M2" || exit 112
@@ -334,7 +336,8 @@ fn read_named(path: &Path, ints: usize, smoke: &str) -> (String, Vec<i64>) {
 /// [`CV_A_FILE`], splits it with `<C-w>v` (focus moves to the new right pane, capturing
 /// `cva` at 1:0), opens [`CV_B_FILE`] there and goes to line 30, then `<C-w>h` back (capturing
 /// `cvb` at 30:0). In `cva` it moves the cursor to line 120, byte column 3, with `zt`, reads
-/// that back, and freezes M1. Ctrl+Shift+T switches away from tab 0, and M2 is frozen. In the
+/// that back, and freezes M1. Ctrl+Shift+T switches away from tab 0 to an empty tab, a `:cd`
+/// makes it a folder tab on the project, and M2 is frozen. In the
 /// new tab it opens [`CV_C_FILE`] on line 40, quits with `:WolfQuitApplication`, which is
 /// `Coordinator::quit` (`:qa` is the close path's), and freezes Q.
 ///
@@ -404,6 +407,7 @@ fn pane_cursors_are_captured_and_restored_under_cage() {
         .env("CV_A", CV_A_FILE)
         .env("CV_B", CV_B_FILE)
         .env("CV_C", CV_C_FILE)
+        .env("CV_PROJECT_BASE", TEMP_CWD_BASENAME)
         .env("TAB0_X", tab0_x.to_string())
         .env("TAB_Y", tab_y.to_string())
         .env("STATE_SRC", smoke_state_dir(&cwd))

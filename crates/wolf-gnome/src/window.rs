@@ -442,6 +442,14 @@ impl WindowHandle {
         self.tab(tab).is_some_and(|entry| entry.is_empty())
     }
 
+    /// The sidebar visibility New Tab captured for this window's tab `tab`
+    /// ([`crate::tab_view::TabHandle::new_tab_sidebar`]). `None` when this window holds no
+    /// such tab.
+    #[must_use]
+    pub fn new_tab_sidebar(&self, tab: TabId) -> Option<bool> {
+        self.tab(tab).and_then(|entry| entry.new_tab_sidebar())
+    }
+
     /// The selected tab, or `None` before the first page exists.
     #[must_use]
     pub fn selected_tab(&self) -> Option<TabHandle> {
@@ -820,8 +828,9 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     Some(handle)
 }
 
-/// What [`TabsHandle::open_tab`] needs to open the tab `tab` plans.
-fn tab_parts(tab: &TabPlan) -> TabParts {
+/// What [`TabsHandle::open_tab`] needs to open the tab `tab` plans, with no sidebar
+/// captured by New Tab.
+pub(crate) fn tab_parts(tab: &TabPlan) -> TabParts {
     TabParts {
         cwd: tab.cwd.clone(),
         empty: tab.empty,
@@ -830,6 +839,7 @@ fn tab_parts(tab: &TabPlan) -> TabParts {
         sidebar_page: tab.sidebar_page,
         search: tab.search.clone(),
         drawer_share: tab.drawer_share,
+        new_tab_sidebar: None,
     }
 }
 

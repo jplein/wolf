@@ -171,7 +171,11 @@ Open Folder, Open Recent included, is the only reader of `project_state`. For a 
 
 When `D` has no project state, steps 2 and 3 use a fresh tab on `D`, and a new window is sized by §7. Opening a folder never replaces a tab that has a directory. `:cd` inside Neovim is not Open Folder and reads no project state.
 
-## 7. New windows
+A stored tab keeps its own sidebar setting. A fresh tab shows the sidebar, unless it fills an empty tab New Tab made (§7). It then shows the sidebar exactly when the tab New Tab was invoked from showed it at that moment, whether or not that tab is still open or has changed since.
+
+## 7. New windows and tabs
+
+New Window opens a window holding one empty tab (§2), and New Tab opens an empty tab in the window it is invoked from. The two empty tabs are alike: each shows the "no folder open" state with no sidebar, it and its window are titled "Wolf", and it runs its own Neovim (§8). Neither takes a directory, layout or sidebar from where it was invoked. New Tab only records whether the sidebar showed in the tab it was invoked from, for §6.
 
 A new window with no stored frame to apply, from New Window or from Open Folder without a project state, takes the active window's normal frame size: never its maximized or fullscreen size. It always opens as a normal window. With no active window it opens at the front-end's default size.
 

@@ -165,6 +165,7 @@ mod fixture_guards;
 mod frame_stats;
 mod header_bar;
 mod lighthouse;
+mod new_tab;
 mod open_folder;
 mod packaged;
 mod panes;

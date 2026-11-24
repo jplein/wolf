@@ -378,7 +378,7 @@ fn assert_planted_project(smoke: &str, state_dir: &Path, directory: &str, root: 
 }
 
 /// Seeds the folder MRU in `state_dir` with `directory` and asserts it reads back.
-fn seed_recent(smoke: &str, state_dir: &Path, directory: &str) {
+pub(crate) fn seed_recent(smoke: &str, state_dir: &Path, directory: &str) {
     {
         RecentDirs::open(state_dir).record(Path::new(directory));
     }
@@ -394,7 +394,7 @@ fn seed_recent(smoke: &str, state_dir: &Path, directory: &str) {
 
 /// Asserts the command MRU in `state_dir` holds `open_recent:<directory>`: the palette ran
 /// `directory`'s Open Recent row and no other.
-fn assert_open_recent_ran(smoke: &str, state_dir: &Path, directory: &str) {
+pub(crate) fn assert_open_recent_ran(smoke: &str, state_dir: &Path, directory: &str) {
     let want = format!("open_recent:{directory}");
     let recent = CommandMru::open(state_dir).recent();
     assert!(
@@ -406,7 +406,7 @@ fn assert_open_recent_ran(smoke: &str, state_dir: &Path, directory: &str) {
 }
 
 /// Each saved window's tab directories, in tab order.
-fn window_dirs(state: &WindowState) -> Vec<Vec<String>> {
+pub(crate) fn window_dirs(state: &WindowState) -> Vec<Vec<String>> {
     state
         .windows
         .iter()

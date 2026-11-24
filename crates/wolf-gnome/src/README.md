@@ -973,7 +973,7 @@ Purpose: the pure application-state seam — what to restore at launch, and what
 - `tab_entry`, `seeded_tab`, `sidebar_entry`, `ordered_tab_states`, `window_entry` — the write side, one tab's `Tab` up to a window's `Window` and tab recency. `TabPlan` carries `restored_sidebar`'s page and fields and the drawer share.
 - `window_state(windows, stacking)`, `close_commit(shutting_down, other_live_windows) -> CloseCommit`.
 - `present_after(minimized) -> Vec<Option<usize>>` — the restore's present schedule, backmost first: the index of the window each waits to paint, `None` to present at once.
-- `new_window_size`, `active_size` — [§7](../../../specs/application-state.md#7-new-windows)'s size: stored, else the frontmost window's normal size, else `None`: the default.
+- `new_window_size`, `active_size` — [§7](../../../specs/application-state.md#7-new-windows-and-tabs)'s size: stored, else the frontmost window's normal size, else `None`: the default.
 - `restored_window_size`, `sidebar_is_shown`, `snapshot_cwd`, `may_snapshot`, `restore_runs_search`, and `may_capture_cursor`, `Alive` alone.
 
 **Decisions**

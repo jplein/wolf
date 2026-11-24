@@ -1,6 +1,6 @@
 //! The pure, GTK-free rulebook for NATIVE TABS in `wolf-gnome`: what closing one
-//! does, the working directory a new tab's Neovim starts in, the string one tab
-//! draws in the bar, and which tab's Neovim holds the UI focus.
+//! does, the string one tab draws in the bar, and which tab's Neovim holds the UI
+//! focus.
 //!
 //! The tabs counterpart of [`crate::nav_ui`] and [`crate::clipboard_ui`]. Data in,
 //! data out — no widget type, no `adw::TabView`, no `WolfCore` — which is exactly
@@ -28,15 +28,15 @@
 //! focus sent: an unchanged focus sends nothing, and a switch sends the loss before
 //! the gain, so two Neovims never both hold it.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-/// The title a tab draws when its pane shows no named file.
+/// The title a folder tab draws when its pane shows no named file.
 ///
 /// Deliberately NOT Neovim's own `[No Name]`: that string is what
 /// `WolfCore::pane_status` answers for a window it cannot resolve, so reusing it
 /// would make a genuinely unnamed buffer indistinguishable from a failed lookup.
-/// [`crate::title::WINDOW_TITLE_FALLBACK`] is the window title's fallback, one
-/// widget down.
+/// An empty tab draws [`crate::title::WINDOW_TITLE_FALLBACK`] instead, the title
+/// of its window ([`tab_title`]).
 pub const TAB_TITLE_FALLBACK: &str = "Untitled";
 
 /// What closing one tab's page does.
@@ -108,31 +108,12 @@ pub fn focus_edges(previous: Option<TabId>, next: Option<TabId>) -> Vec<FocusEdg
     edges
 }
 
-/// The directory a new tab's Neovim starts in, or `None` when the window has no
-/// project to give it.
+/// The text one tab draws in the bar: the FILE NAME of the pane's current file, or,
+/// when there is none, [`crate::title::WINDOW_TITLE_FALLBACK`] for an `empty` tab and
+/// [`TAB_TITLE_FALLBACK`] for a folder tab.
 ///
-/// A new tab inherits the SELECTED tab's folder, which is what keeps a new tab
-/// rooted where its sidebar, picker and project search already are.
-///
-/// The EMPTY state answers `None` ALWAYS — never the fallback working directory a
-/// project-less launch handed Neovim, which is `$HOME` (or `/`). Treating that as
-/// the tab's folder would silently declare the user's home directory a project.
-/// With a project open it is Neovim's LIVE cwd once reported, else the launch cwd,
-/// so a New Tab pressed before the first `DirChanged` does not lose the project.
-///
-/// The same three rules as [`crate::state_seam::snapshot_cwd`], which persists the
-/// tab's cwd — with `None` where that one answers `""`. The two must agree, or a
-/// restored window would open a different directory than its tabs are rooted at.
-#[must_use]
-pub fn new_tab_cwd(empty: bool, launch_cwd: &Path, live_cwd: Option<&Path>) -> Option<PathBuf> {
-    if empty {
-        return None;
-    }
-    Some(live_cwd.unwrap_or(launch_cwd).to_path_buf())
-}
-
-/// The text one tab draws in the bar: the FILE NAME of the pane's current file, or
-/// [`TAB_TITLE_FALLBACK`] when there is none.
+/// An empty tab with no file is titled as its window is, so tab and window agree that
+/// no folder is open (`specs/application-state.md#7-new-windows-and-tabs`).
 ///
 /// Never a path. A tab bar allots each tab a small fraction of the window's width,
 /// so an absolute path renders as an ellipsised middle with neither the project nor
@@ -141,9 +122,14 @@ pub fn new_tab_cwd(empty: bool, launch_cwd: &Path, live_cwd: Option<&Path>) -> O
 /// component (`/`, or the empty path) carries no name to show, so it falls back
 /// rather than drawing the separator.
 #[must_use]
-pub fn tab_title(current_file: Option<&Path>) -> String {
+pub fn tab_title(empty: bool, current_file: Option<&Path>) -> String {
+    let fallback = if empty {
+        crate::title::WINDOW_TITLE_FALLBACK
+    } else {
+        TAB_TITLE_FALLBACK
+    };
     current_file.and_then(Path::file_name).map_or_else(
-        || TAB_TITLE_FALLBACK.to_string(),
+        || fallback.to_string(),
         |name| name.to_string_lossy().into_owned(),
     )
 }
@@ -153,20 +139,6 @@ mod tests {
     use super::*;
 
     use std::ffi::OsStr;
-
-    use crate::state_seam::snapshot_cwd;
-
-    /// The fallback working directory a project-less launch hands Neovim. Never
-    /// the answer [`new_tab_cwd`] may give.
-    const HOME: &str = "/home/jane";
-
-    /// The directory a window with a project open was launched at.
-    const PROJECT: &str = "/home/jane/ledger";
-
-    /// A directory Neovim reported LATER, after a `:cd`. Distinct from
-    /// [`PROJECT`], so "the live cwd wins" is distinguishable from "the launch cwd
-    /// is returned".
-    const WANDERED: &str = "/home/jane/ledger/vendor";
 
     // === close_outcome ===
 
@@ -251,169 +223,6 @@ mod tests {
              CloseTab leaves a window with no editor; a constant \
              CloseWindow destroys the whole window whenever any one tab is closed."
         );
-    }
-
-    // === new_tab_cwd ===
-
-    /// One [`new_tab_cwd`] table row.
-    struct CwdCase {
-        desc: &'static str,
-        empty: bool,
-        launch_cwd: &'static str,
-        live_cwd: Option<&'static str>,
-        want: Option<&'static str>,
-    }
-
-    /// The five rows of the inherited-cwd rule.
-    ///
-    /// A `const` item so [`the_inherited_cwd_agrees_with_the_persisted_one`] can
-    /// walk the same rows without copying them.
-    const CWD_CASES: &[CwdCase] = &[
-        CwdCase {
-            desc: "a project-less window with a live cwd still inherits NOTHING",
-            empty: true,
-            launch_cwd: HOME,
-            live_cwd: Some(HOME),
-            want: None,
-        },
-        CwdCase {
-            desc: "a project-less window with no live cwd inherits nothing",
-            empty: true,
-            launch_cwd: HOME,
-            live_cwd: None,
-            want: None,
-        },
-        CwdCase {
-            desc: "a project-less window whose Neovim wandered into a real directory STILL \
-                   inherits nothing",
-            empty: true,
-            launch_cwd: HOME,
-            live_cwd: Some(PROJECT),
-            want: None,
-        },
-        CwdCase {
-            desc: "a window with a project inherits Neovim's LIVE cwd once it has reported one",
-            empty: false,
-            launch_cwd: PROJECT,
-            live_cwd: Some(WANDERED),
-            want: Some(WANDERED),
-        },
-        CwdCase {
-            desc: "a window whose Neovim has not reported yet inherits the LAUNCH cwd, so a New \
-                   Tab pressed immediately does not lose the project",
-            empty: false,
-            launch_cwd: PROJECT,
-            live_cwd: None,
-            want: Some(PROJECT),
-        },
-    ];
-
-    /// The directory a new tab's Neovim starts in, for every shape the window can
-    /// be in.
-    ///
-    /// FALSIFYING EDIT: return the launch cwd when `empty`. The three empty rows
-    /// fail, and the cost is named in the message: a project-less window's Neovim
-    /// was handed `$HOME` (or `/`) purely because a process needs a working
-    /// directory, so inheriting it declares the user's home directory a project.
-    #[test]
-    fn new_tab_cwd_table() {
-        for case in CWD_CASES {
-            let got = new_tab_cwd(
-                case.empty,
-                Path::new(case.launch_cwd),
-                case.live_cwd.map(Path::new),
-            );
-            assert_eq!(
-                got.as_deref(),
-                case.want.map(Path::new),
-                "new_tab_cwd(empty = {}, launch_cwd = {:?}, live_cwd = {:?}) must be {:?} — {}. \
-                 The answer is the new tab's project: a directory where there should be None \
-                 treats the fallback working directory a project-less launch handed Neovim, \
-                 which is $HOME, as a project, and points that tab's sidebar, picker and project \
-                 search at the whole home tree. None where there should be a directory starts \
-                 the new tab's Neovim at the launch cwd instead of the selected tab's folder, so \
-                 the two tabs of one window disagree about where the project is.",
-                case.empty,
-                case.launch_cwd,
-                case.live_cwd,
-                case.want,
-                case.desc
-            );
-        }
-
-        // Non-vacuity: a `new_tab_cwd` of `|_, _, _| None` satisfies all three empty
-        // rows while every new tab in every project silently opens at the global cwd.
-        assert!(
-            CWD_CASES.iter().any(|case| case.want.is_some()),
-            "no new_tab_cwd row expects a directory, so a seam that answered None for everything \
-             would satisfy every row above while no new tab ever inherited its window's folder."
-        );
-        // And the complement: a seam that answered `Some(launch_cwd)` for everything
-        // satisfies the two project rows only if one of them prefers the LIVE cwd.
-        assert!(
-            CWD_CASES
-                .iter()
-                .any(|case| !case.empty && case.live_cwd.is_some() && case.want == case.live_cwd),
-            "no new_tab_cwd row asserts that a reported LIVE cwd wins over the launch cwd, so a \
-             seam that ignored live_cwd entirely would pass. A window whose user has typed `:cd` \
-             would then open every new tab at the directory the window was launched at, which is \
-             no longer the project."
-        );
-    }
-
-    /// The rule stated on its own, over every live cwd, so a failure NAMES it.
-    ///
-    /// Mirrors `state_seam::the_empty_state_persists_no_cwd`, and for the same
-    /// reason: the fallback working directory a project-less launch hands Neovim is
-    /// a process requirement, not a project.
-    #[test]
-    fn a_project_less_window_inherits_no_cwd() {
-        for live_cwd in [None, Some(HOME), Some(PROJECT), Some(WANDERED), Some("/")] {
-            assert_eq!(
-                new_tab_cwd(true, Path::new(HOME), live_cwd.map(Path::new)),
-                None,
-                "a project-less window must inherit NOTHING for every live cwd (here {live_cwd:?}) \
-                 and every launch cwd. A directory here treats the fallback working directory \
-                 the launch gave Neovim — $HOME — as a project the user opened, and roots that \
-                 tab's file search at the whole home tree."
-            );
-        }
-    }
-
-    /// The inherited cwd and the PERSISTED cwd are the same directory.
-    ///
-    /// The two rules live in different modules because they answer different
-    /// questions and have different types, but they must not diverge: a window
-    /// persists [`crate::state_seam::snapshot_cwd`]'s answer and reopens there,
-    /// while every tab it opens is rooted at [`new_tab_cwd`]'s. If they disagree, a
-    /// relaunch puts the window's tabs somewhere the window itself is not.
-    ///
-    /// `None` here is `""` there — the same "no project" sentinel in the two shapes
-    /// the two callers need.
-    #[test]
-    fn the_inherited_cwd_agrees_with_the_persisted_one() {
-        for case in CWD_CASES {
-            let launch = Path::new(case.launch_cwd);
-            let live = case.live_cwd.map(Path::new);
-
-            let inherited = new_tab_cwd(case.empty, launch, live);
-            let persisted = snapshot_cwd(case.empty, launch, live);
-            let inherited_as_persisted = inherited
-                .as_ref()
-                .map_or_else(String::new, |dir| dir.to_string_lossy().into_owned());
-
-            assert_eq!(
-                inherited_as_persisted, persisted,
-                "new_tab_cwd(empty = {}, launch_cwd = {:?}, live_cwd = {:?}) inherits \
-                 {inherited:?} while state_seam::snapshot_cwd persists {persisted:?} for the same \
-                 window — {}. \
-                 The two must name the same directory, with None here matching \"\" there: the \
-                 window is reopened at the persisted one and its tabs are rooted at the inherited \
-                 one, so a divergence puts a restored window's tabs in a directory the window is \
-                 not in.",
-                case.empty, case.launch_cwd, case.live_cwd, case.desc
-            );
-        }
     }
 
     // === tab_title ===
@@ -503,7 +312,7 @@ mod tests {
         ];
 
         for case in &cases {
-            let got = tab_title(case.current_file.map(Path::new));
+            let got = tab_title(false, case.current_file.map(Path::new));
             assert_eq!(
                 got, case.want,
                 "tab_title({:?}) must be {:?}, got {got:?} — {}. The tab bar gives each tab a \
@@ -538,7 +347,7 @@ mod tests {
     /// excluded.
     #[test]
     fn a_tab_title_is_a_file_name_and_never_a_path() {
-        let got = tab_title(Some(Path::new(NESTED_FILE)));
+        let got = tab_title(false, Some(Path::new(NESTED_FILE)));
 
         assert_eq!(
             got, NESTED_BASENAME,
@@ -611,7 +420,7 @@ mod tests {
              rule it names"
         );
 
-        let got = tab_title(Some(path));
+        let got = tab_title(false, Some(path));
         assert_eq!(
             got, expected,
             "tab_title must render an invalid-UTF-8 file name lossily, got {got:?}. Falling back \

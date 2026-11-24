@@ -88,6 +88,13 @@ public enum OpenFolderSeam {
     return String(cString: resolved)
   }
 
+  /// Whether a folder tab opened by Open Folder shows its sidebar: `stored`, the folder's project
+  /// state's setting, wins; else `newTab`, the visibility New Tab captured from the tab it was
+  /// invoked from when it made the tab being filled; else shown.
+  public static func sidebarVisible(stored: Bool?, newTab: Bool?) -> Bool {
+    stored ?? newTab ?? true
+  }
+
   /// The frame a fill applies to its window: `stored`, validated as at launch, only when the
   /// filled tab is the window's only tab. `nil` keeps the window's frame.
   public static func fillFrame(

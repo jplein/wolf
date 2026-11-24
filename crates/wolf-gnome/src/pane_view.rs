@@ -4377,12 +4377,6 @@ impl PaneHandle {
         self.inner.capture_viewports();
     }
 
-    /// This tab's drawer share, which New Tab passes on to the tab it opens.
-    #[must_use]
-    pub fn drawer_share(&self) -> DrawerShare {
-        self.inner.drawer_share.get()
-    }
-
     /// `(panes with a resolved grid, windows nvim has reported buffers for)`, for
     /// `state_seam::may_snapshot` (see [`PaneInner::snapshot_readiness`]).
     #[must_use]

@@ -154,9 +154,8 @@
 //! on that tab's own core.
 //!
 //! NEW TAB adds none beyond that switch: it starts a new Neovim process for the new tab and
-//! asks the selected one nothing but `WolfCore::live_cwd`, a lock read, so it has
-//! no liveness gate. Starting a tab's core stays outside the inventory, as starting
-//! a window's does.
+//! asks the selected one nothing, so it has no liveness gate. Starting a tab's core stays
+//! outside the inventory, as starting a window's does.
 //!
 //! Neither clipboard action is disabled in the empty state, for the buffer
 //! picker's recorded reason: the captive Neovim runs in a project-less window too.
@@ -224,11 +223,10 @@ use crate::sidebar::{SidebarHandle, SidebarPage};
 use crate::sidebar_toggles::{self, ToggleClick};
 use crate::state_seam;
 use crate::tab_view::{CoreCell, TabHandle, TabParts, TabsHandle};
-use crate::tabs_ui;
 use crate::title;
 use crate::titlebar_background::{titlebar_background, TitlebarStyle};
 use crate::tree_view::TreeHandle;
-use crate::window::TREE_PANE_WIDTH;
+use crate::window::{self, TREE_PANE_WIDTH};
 use crate::workspace;
 
 /// The action the empty state's button and the primary menu use to pick a folder.
@@ -1792,7 +1790,8 @@ impl AppShell {
                 core_ref.as_ref().and_then(WolfCore::live_cwd)
             };
             self.settle_reroot(live.as_deref());
-            self.refresh_title(live.as_deref());
+            // After the settle, which takes a tab out of the empty state on a `:cd`.
+            self.refresh_title(live.as_deref().filter(|_| !tab.is_empty()));
             self.refresh_titlebar();
             self.refresh_nav_buttons();
         }
@@ -1811,7 +1810,9 @@ impl AppShell {
 
     /// Sets the window title from `live` — the selected tab's Neovim's working directory,
     /// read once per wake by [`AppShell::on_render_wake`] — through the pure
-    /// [`title::window_title`] seam.
+    /// [`title::window_title`] seam. `live` is `None` for an empty tab, whose Neovim
+    /// runs at the home directory without it being a folder, so its window is titled
+    /// [`title::WINDOW_TITLE_FALLBACK`].
     ///
     /// The cwd is passed IN rather than read here, so the re-root settle and the
     /// title share one read; `home` was captured once at [`build`] time, so this
@@ -2072,42 +2073,36 @@ impl AppShell {
         self.inner.window.minimize();
     }
 
-    /// Opens a new TAB in this window, with a Neovim of its own, rooted at the
-    /// selected tab's folder, with its empty state, sidebar preference and drawer share,
-    /// and the window's sidebar page and search fields, so nothing on screen changes.
+    /// Opens a new TAB in this window: the empty tab New Window opens, with a Neovim of
+    /// its own (`specs/application-state.md#7-new-windows-and-tabs`). It is planned by
+    /// the same [`state_seam::restore_plans`] call as
+    /// [`crate::coordinator::Coordinator::open_new_window`], so the two cannot diverge.
+    ///
+    /// It takes one value from the selected tab: whether its sidebar shows now, through
+    /// [`state_seam::sidebar_is_shown`] rather than the stored preference. A folder later
+    /// opened into the new tab with no project state shows the sidebar by it, and it is
+    /// captured here because the selected tab may close or change before then.
     ///
     /// No liveness gate and no blocking call: it starts a new process and asks the
-    /// selected Neovim nothing but `WolfCore::live_cwd`, a lock read, so a wedged or
-    /// dead selected tab does not stop the user opening another. The directory is
-    /// [`tabs_ui::new_tab_cwd`]'s answer, falling back to the selected tab's launch
-    /// cwd where that answers `None` — the empty state, where the new tab is
-    /// project-less too.
-    ///
-    /// The exact opposite of [`AppShell::new_window`] in what it inherits, and the
-    /// pair is easy to confuse: a tab shares this window's project, its sidebar and
-    /// its overlays; a window shares nothing at all. No tab shares another's
-    /// Neovim.
+    /// selected Neovim nothing, so a wedged or dead selected tab does not stop the user
+    /// opening another.
     fn new_tab(&self) {
         let Some(selected) = self.inner.tabs.selected() else {
             return;
         };
-        let empty = selected.is_empty();
-        let launch_cwd = selected.launch_cwd();
-        let live = {
-            let core_ref = selected.core().borrow();
-            core_ref.as_ref().and_then(WolfCore::live_cwd)
+        let shown = state_seam::sidebar_is_shown(selected.sidebar_shown(), selected.is_empty());
+        let home = workspace::home_dir();
+        let plans = state_seam::restore_plans(None, None, home.as_deref(), std::path::Path::is_dir);
+        let Some(tab) = plans.first().and_then(|plan| plan.tabs.first()) else {
+            eprintln!("wolf-gnome: restore_plans returned no tab for a new tab; none opened");
+            return;
         };
-        let cwd = tabs_ui::new_tab_cwd(empty, &launch_cwd, live.as_deref()).unwrap_or(launch_cwd);
+        let parts = TabParts {
+            new_tab_sidebar: Some(shown),
+            ..window::tab_parts(tab)
+        };
         // A refusal has already printed why; the window keeps its tabs as they were.
-        let _ = self.inner.tabs.open_tab(TabParts {
-            cwd,
-            empty,
-            sidebar_shown: selected.sidebar_shown(),
-            saved: None,
-            sidebar_page: self.inner.sidebar.page(),
-            search: self.inner.search.fields(),
-            drawer_share: selected.panes().drawer_share(),
-        });
+        let _ = self.inner.tabs.open_tab(parts);
     }
 
     /// Reacts to a tab switch. It first records the window's sidebar page and search
@@ -2160,7 +2155,8 @@ impl AppShell {
     /// Nothing of THIS window is passed along. The new window takes the active
     /// window's normal size and nothing else of a window, not its working directory,
     /// and the coordinator is where that rule lives, so a reader wondering what the
-    /// new window inherits finds one answer rather than two.
+    /// new window inherits finds one answer rather than two. Its tab is the one
+    /// [`AppShell::new_tab`] opens, which also records the selected tab's sidebar.
     ///
     /// Reached from the drained `Command::NewWindow` (`:WolfNewWindow`) and from
     /// the palette's New Window row; the primary menu's item and the `app.`
@@ -2312,7 +2308,9 @@ impl AppShell {
     /// An empty selected tab whose `live` is still its own launch cwd settles nothing:
     /// the sidebar may be rooted at another tab's folder, and selecting the empty tab
     /// must not take it out of the empty state. A typed `:cd` moves its `live`, and
-    /// then it settles as any tab does.
+    /// then it leaves the empty state and settles as any tab does, even when the
+    /// sidebar is already rooted at its new `live`, as it is after New Tab from a
+    /// folder tab and a `:cd` into that folder.
     ///
     /// **The ONE settle point** for every way the selected tab's directory changes —
     /// a typed `:cd`, a tab switch, a tab Open Folder fills — which is what stops
@@ -2333,7 +2331,16 @@ impl AppShell {
         // `apply_selected_tab`, which touches widgets.
         let rooted = self.inner.rooted_cwd.borrow().clone();
         match workspace::reroot_decision(live, rooted.as_deref()) {
-            workspace::RerootAction::Stay => {}
+            workspace::RerootAction::Stay => {
+                // A `:cd` into the folder another tab rooted the sidebar at re-roots nothing.
+                if let Some(tab) = selected
+                    .as_ref()
+                    .filter(|tab| live.is_some() && tab.is_empty())
+                {
+                    tab.set_empty(false);
+                    self.apply_selected_tab();
+                }
+            }
             workspace::RerootAction::Reroot { target } => {
                 // Updated in the SAME settle as the re-root, which is what makes the
                 // next settle answer `Stay` and one directory change exactly one re-root.

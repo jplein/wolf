@@ -2796,6 +2796,10 @@ nvim_probe "$NEAR_G4_NVIM" 64
 # --- g5: a new tab, the fixture, a split and a terminal pane ------------------
 wtype -M ctrl -M shift -k t -m shift -m ctrl
 sleep "$TABS_BAR_SETTLE"
+# New Tab's tab is empty, its Neovim at HOME; the relative :cd makes it a folder tab.
+wtype -- ":cd $NEAR_PROJECT_BASE"
+wtype -k Return
+sleep "$SETTLE"
 nvim_probe "$NEAR_G5_TAB" 65
 wtype -- ":e $NEAR_FIXTURE"
 wtype -k Return
@@ -2912,6 +2916,7 @@ fn neovim_panes_stay_visible_beside_terminals_under_cage() {
     let mut cmd = pointer_command(NEAR_BODY, &cwd, &runtime_dir, last_png);
     pin_terminal_smoke_shell(&mut cmd)
         .env("NEAR_FIXTURE", NEAR_FIXTURE_FILE)
+        .env("NEAR_PROJECT_BASE", TEMP_CWD_BASENAME)
         .env("NEAR_TAB1_X", tab1_x.to_string())
         .env("NEAR_TAB2_X", tab2_x.to_string())
         .env("NEAR_TAB_Y", tab_y.to_string())

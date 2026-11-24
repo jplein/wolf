@@ -107,8 +107,8 @@ const TB_BACKDROP_MIN_REFERENCE_INK: f64 = 30.0;
 /// dialog up.
 ///
 /// The app opens a second tab with Ctrl+Shift+T, waits for that tab's Neovim to make two
-/// live `nvim` children, reads back the new Neovim's `g:colors_name` and `&background`, and
-/// captures FOCUSED. It sets the other background and captures
+/// live `nvim` children, `:cd`s the empty tab into the project so it is a folder tab, reads
+/// back the new Neovim's `g:colors_name` and `&background`, and captures FOCUSED. It sets the other background and captures
 /// LIVE, then sets `WolfTitlebar` and captures WOLF. `:doautocmd ColorScheme` is what makes
 /// the theme tracker re-read the group, since a `:hi` alone fires no autocommand.
 ///
@@ -175,6 +175,10 @@ wait_ready "$app_pid" 11 "wolf-gnome titlebar smoke"
 wtype -M ctrl -M shift -k t -m shift -m ctrl
 wait_nvim_count 2 13 "after Ctrl+Shift+T opened a second tab"
 sleep "$TABS_BAR_SETTLE"
+# New Tab's tab is empty, its Neovim at HOME; the relative :cd makes it a folder tab.
+wtype -- ":cd $TB_PROJECT_BASE"
+wtype -k Return
+sleep "$SETTLE"
 wtype -- ":call writefile([get(g:, 'colors_name', ''), &background], '$READ')"
 wtype -k Return
 wait_file "$READ" || exit 12
@@ -477,6 +481,7 @@ fn titlebar_smoke(smoke: &str, background: Background) {
         // BACKDROP opens a native file dialog; see [`SAVE_AS_GDK_DEBUG`].
         .env("GDK_DEBUG", SAVE_AS_GDK_DEBUG)
         .env("READ", &read)
+        .env("TB_PROJECT_BASE", TEMP_CWD_BASENAME)
         .env("PNG_FOCUSED", &png_focused)
         .env("PNG_LIVE", &png_live)
         .env("PNG_WOLF", &png_wolf)

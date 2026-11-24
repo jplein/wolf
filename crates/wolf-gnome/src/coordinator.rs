@@ -386,8 +386,8 @@ impl Coordinator {
     /// (`notes/wolf-gnome/the-coordinator-and-its-windows.md`). It takes the active
     /// window's normal size and nothing else of a window
     /// (`specs/application-state.md` §7), else the default size. Passing the
-    /// process cwd (or the invoking window's) here would inherit a project, which is
-    /// what New TAB does and is not this row's behaviour.
+    /// process cwd (or the invoking window's) here would inherit a project. New Tab
+    /// builds its tab from the same call (`crate::shell::AppShell::new_tab`).
     ///
     /// **Both `None`s are the behaviour, not an omission to be helpfully filled
     /// in.** `restore_plans(Some(saved), ..)` would reopen the saved session, and
@@ -424,7 +424,8 @@ impl Coordinator {
     /// Here rather than in a window because it spans windows. [`open_folder::step`]
     /// decides over every window's live tabs in stacking order: a focus selects the
     /// tab §4's rule picks and raises its window; a fill replaces `current`, when it is
-    /// empty, with a tab from `directory`'s project state and raises its window; otherwise a
+    /// empty, with a tab from `directory`'s project state, or with the sidebar New Tab captured
+    /// for `current` when there is none, and raises its window; otherwise a
     /// new window opens from it. `current` is the menu's window and its selected tab, or a request's
     /// current tab, which can be a background tab. The project state is read, and so marked
     /// used, only by the last two. Then the core of the tab that ends on `directory` records
@@ -460,7 +461,9 @@ impl Coordinator {
                 .find(|handle| handle.id() == window)
                 .and_then(|handle| handle.focus_tab(tab).map(|tab| (window, tab))),
             Step::FillCurrent => {
-                let plan = open_folder::plan(&directory, self.project_state(&directory).as_ref());
+                let captured = invoking.and_then(|(handle, tab)| handle.new_tab_sidebar(tab));
+                let project = self.project_state(&directory);
+                let plan = open_folder::plan(&directory, project.as_ref(), captured);
                 invoking.and_then(|(handle, tab)| {
                     let filled = handle.fill_tab(tab, &plan)?;
                     handle.raise();
@@ -469,7 +472,7 @@ impl Coordinator {
             }
             Step::NewWindow => {
                 let mut plan =
-                    open_folder::plan(&directory, self.project_state(&directory).as_ref());
+                    open_folder::plan(&directory, self.project_state(&directory).as_ref(), None);
                 plan.window_size =
                     state_seam::new_window_size(plan.window_size, self.active_size());
                 self.open_window(app, &plan, true).and_then(|handle| {

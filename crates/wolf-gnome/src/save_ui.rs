@@ -270,11 +270,10 @@ pub fn save_as_press(liveness: Option<Liveness>, target: SaveTarget<'_>) -> Save
 /// it" becomes a navigation task. For an `Untitled.md` in the project root the two
 /// rules coincide, so nothing is lost.
 ///
-/// **Why the `cwd` passed in is NOT [`crate::tabs_ui::new_tab_cwd`]'s answer**, and
-/// the divergence is deliberate: that one refuses the empty state on purpose, so a
-/// tab never treats `$HOME` as its project. A save dialog's folder is a starting point the
-/// user can change, not a declaration that a directory is a project, so the empty
-/// state's home directory is a correct default here.
+/// **Why the `cwd` passed in may be the empty state's home directory**, which a tab
+/// never treats as its project ([`crate::state_seam::snapshot_cwd`] persists `""` for
+/// it): a save dialog's folder is a starting point the user can change, not a
+/// declaration that a directory is a project, so home is a correct default here.
 #[must_use]
 pub fn save_dialog_proposal(path: Option<&Path>, cwd: Option<&Path>) -> SaveProposal {
     match save_name(path) {

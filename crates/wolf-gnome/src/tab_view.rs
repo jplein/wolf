@@ -3,10 +3,9 @@
 //! (`specs/application-state.md#8-one-neovim-per-tab`).
 //!
 //! Every decision this module acts on is [`mod@crate::tabs_ui`]'s — what closing
-//! a tab does, the directory a new tab starts in, the string a tab draws, and
-//! which tab's Neovim holds the UI focus. This file is the widget work of carrying
-//! those answers out, in the same relationship [`crate::persistence`] has to
-//! [`crate::state_seam`].
+//! a tab does, the string a tab draws, and which tab's Neovim holds the UI focus.
+//! This file is the widget work of carrying those answers out, in the same
+//! relationship [`crate::persistence`] has to [`crate::state_seam`].
 //!
 //! ## What is per TAB and what is per WINDOW
 //!
@@ -130,8 +129,8 @@ pub struct TabsParts<'a> {
 /// What [`TabsHandle::open_tab`] needs for ONE tab.
 pub struct TabParts {
     /// The directory this tab's Neovim starts in, and the directory it persists
-    /// until Neovim reports a live one. [`crate::tabs_ui::new_tab_cwd`] decides it
-    /// for a new tab; a restored tab gets its own planned cwd.
+    /// until Neovim reports a live one: the tab's planned cwd
+    /// ([`crate::state_seam::TabPlan::cwd`]).
     pub cwd: PathBuf,
     /// Whether the tab opens in the empty state, which hides its panes behind its
     /// own status page.
@@ -150,9 +149,12 @@ pub struct TabParts {
     pub sidebar_page: SidebarPage,
     /// The search panel's fields the tab records.
     pub search: SearchFields,
-    /// The tab's drawer share: its saved one, the selected tab's for New Tab, or a new
-    /// one.
+    /// The tab's drawer share: its saved one, or a new one.
     pub drawer_share: DrawerShare,
+    /// Whether the sidebar showed in the tab New Tab was invoked from, when New Tab made
+    /// this empty tab, and `None` for every other tab. A folder opened into this tab with
+    /// no project state takes it ([`crate::open_folder::plan`]).
+    pub new_tab_sidebar: Option<bool>,
 }
 
 /// One tab's restart state, read and written by [`crate::shell`]'s restart path.
@@ -200,6 +202,8 @@ struct TabInner {
     state: StateHandle,
     /// This tab's empty-state page, an overlay child above its panes.
     empty_state: gtk::Widget,
+    /// [`TabParts::new_tab_sidebar`], kept in memory only.
+    new_tab_sidebar: Option<bool>,
 }
 
 /// A cloneable handle to ONE tab.
@@ -376,6 +380,12 @@ impl TabHandle {
         self.inner.state.sidebar_shown()
     }
 
+    /// [`TabParts::new_tab_sidebar`] as this tab was opened with it.
+    #[must_use]
+    pub fn new_tab_sidebar(&self) -> Option<bool> {
+        self.inner.new_tab_sidebar
+    }
+
     /// The cwd this tab's core was launched with.
     #[must_use]
     pub fn launch_cwd(&self) -> PathBuf {
@@ -402,7 +412,9 @@ impl TabHandle {
         self.inner.state.cached_tab()
     }
 
-    /// Refreshes this tab from its own core: its panes, then its title.
+    /// Refreshes this tab from its own core: its panes, then its title. While the
+    /// empty-state page shows, the title names no file, so an empty tab is titled
+    /// [`crate::title::WINDOW_TITLE_FALLBACK`] until a file opened from outside shows.
     ///
     /// The title is compared before it is set, so a steady-state frame costs one
     /// string compare rather than a property notification on every wake — the same
@@ -416,7 +428,9 @@ impl TabHandle {
                 .as_ref()
                 .and_then(|core| core.read_snapshot().current_file.clone())
         };
-        let title = tabs_ui::tab_title(current_file.as_deref());
+        // Every Neovim names its anonymous buffer `Untitled.md`, which the empty-state page hides.
+        let current_file = current_file.filter(|_| !self.inner.empty_state.get_visible());
+        let title = tabs_ui::tab_title(self.is_empty(), current_file.as_deref());
         if self.inner.page.title() != title {
             self.inner.page.set_title(&title);
         }
@@ -586,11 +600,12 @@ impl TabsInner {
                 panes,
                 state,
                 empty_state,
+                new_tab_sidebar: parts.new_tab_sidebar,
             }),
         };
         // The real title arrives with this tab's first refresh; until then the bar
         // draws the fallback rather than libadwaita's empty string.
-        page.set_title(tabs_ui::TAB_TITLE_FALLBACK);
+        page.set_title(&tabs_ui::tab_title(parts.empty, None));
         entry.set_empty(parts.empty);
 
         self.entries.borrow_mut().push(entry.clone());
