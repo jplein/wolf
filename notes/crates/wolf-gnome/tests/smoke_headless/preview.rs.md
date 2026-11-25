@@ -14,11 +14,11 @@ Neither file name contains a heading term, and both names and the two readbacks 
 
 ## Preview link click fixtures
 
-The one pointer smoke whose click target is something WebKit drew. It shares `POINTER_PREAMBLE` with the other `pointer_scenario` bodies.
+Its click target is a link WebKit drew, where the click-then-chords and page-click smokes click the page's plain text. All three share `POINTER_PREAMBLE` with the other `pointer_scenario` bodies.
 
 The cwd is not the directory the link resolves in. With `load_html(html, None)`, WebKitGTK hands the handler the raw relative href (`uri="lnkinto.md"`), `preview_link::classify` takes its schemeless row, and `WolfCore::preview_file` passes the relative path to Lua's `filereadable`, which resolves it against the captive Neovim's working directory. With the fixtures at the project root that is the source's directory, so the follow succeeds by coincidence and the base URI is invisible. `LINK_FIXTURE_DIR` separates the two answers.
 
-No fixture path contains an `ASSERTED_OCR_TERMS` entry, `preview` included. The registered names carry the `LINK_FIXTURE_DIR` prefix, so the guard's substring loop covers the directory with no exemption block. The smoke's observables are raw pixels in the preview pane and a `tabpagebuflist()` readback, which no sidebar row can move.
+No fixture path contains an `ASSERTED_OCR_TERMS` entry, `preview` included. The registered names carry the `LINK_FIXTURE_DIR` prefix, so the guard's substring loop covers the directory with no exemption block. The smoke's observables are raw pixels in the preview pane, a `tabpagebuflist()` readback and a current-window readback, which no sidebar row can move.
 
 ## Fire scope arithmetic
 

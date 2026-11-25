@@ -39,15 +39,16 @@ use super::panes::{
 use super::pointer::{WEDGE_OCR_CLICK, WEDGE_OCR_STAY};
 use super::preview::{
     KC_CUR_CLICKED_NAME, KC_CUR_FOCUSED_NAME, KC_SOURCE_FILE, KC_WINS_AFTER_NAME,
-    KC_WINS_BEFORE_NAME, LINK_READBACK_AFTER_NAME, LINK_READBACK_BEFORE_NAME, LINK_SOURCE_FILE,
-    LINK_TARGET_FILE, NEWVIEW_WINS_AFTER_NAME, NEWVIEW_WINS_ALONE_NAME, NEWVIEW_WINS_BEFORE_NAME,
-    OED_FIRST_FILE, OED_SECOND_FILE, OED_WINS_1_NAME, OED_WINS_2_NAME, OPR_FIRST_FILE,
-    OPR_SECOND_FILE, OPR_WINS_1_NAME, OPR_WINS_2_NAME, OPR_WINS_3_NAME, PREVIEW_LIVE_MARKER,
-    PREVIEW_OCR_BODY, PREVIEW_OCR_LIVE, PREVIEW_OCR_OTHER, PREVIEW_OCR_STATUS, PREVIEW_OTHER_FILE,
-    PREVIEW_OTHER_HEADING, PREVIEW_READBACK_A_NAME, PREVIEW_READBACK_B_NAME, PREVIEW_SOURCE_FILE,
-    PREVIEW_SOURCE_HEADING, PREVIEW_SOURCE_PARAGRAPH, UNSAVED_BUFFER_NAME, UNSAVED_COVER_FILE,
-    UNSAVED_COVER_HEADING, UNSAVED_MARKER, UNSAVED_OCR_COVER, UNSAVED_OCR_MARKER,
-    UNSAVED_READBACK_NAME,
+    KC_WINS_BEFORE_NAME, LINK_CUR_AFTER_NAME, LINK_CUR_BEFORE_NAME, LINK_READBACK_AFTER_NAME,
+    LINK_READBACK_BEFORE_NAME, LINK_SOURCE_FILE, LINK_TARGET_FILE, NEWVIEW_WINS_AFTER_NAME,
+    NEWVIEW_WINS_ALONE_NAME, NEWVIEW_WINS_BEFORE_NAME, OED_FIRST_FILE, OED_SECOND_FILE,
+    OED_WINS_1_NAME, OED_WINS_2_NAME, OPR_FIRST_FILE, OPR_SECOND_FILE, OPR_WINS_1_NAME,
+    OPR_WINS_2_NAME, OPR_WINS_3_NAME, PCA_CUR_AFTER_NAME, PCA_CUR_BEFORE_NAME, PCA_SOURCE_FILE,
+    PREVIEW_LIVE_MARKER, PREVIEW_OCR_BODY, PREVIEW_OCR_LIVE, PREVIEW_OCR_OTHER, PREVIEW_OCR_STATUS,
+    PREVIEW_OTHER_FILE, PREVIEW_OTHER_HEADING, PREVIEW_READBACK_A_NAME, PREVIEW_READBACK_B_NAME,
+    PREVIEW_SOURCE_FILE, PREVIEW_SOURCE_HEADING, PREVIEW_SOURCE_PARAGRAPH, UNSAVED_BUFFER_NAME,
+    UNSAVED_COVER_FILE, UNSAVED_COVER_HEADING, UNSAVED_MARKER, UNSAVED_OCR_COVER,
+    UNSAVED_OCR_MARKER, UNSAVED_READBACK_NAME,
 };
 use super::preview_render::{PICKOVER_OTHER_FILE, PICKOVER_SOURCE_FILE, PICKOVER_WINS_NAME};
 use super::recovery::{
@@ -1260,6 +1261,16 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         "LINK_READBACK_AFTER_NAME",
         "preview_link_click_repoints_the_pane_under_cage",
     ),
+    (
+        LINK_CUR_BEFORE_NAME,
+        "LINK_CUR_BEFORE_NAME",
+        "preview_link_click_repoints_the_pane_under_cage",
+    ),
+    (
+        LINK_CUR_AFTER_NAME,
+        "LINK_CUR_AFTER_NAME",
+        "preview_link_click_repoints_the_pane_under_cage",
+    ),
     // Registered for the generic loop; this smoke reads no OCR term. `preview` is an asserted
     // term, hence `kc*`.
     (
@@ -1286,6 +1297,23 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         KC_WINS_AFTER_NAME,
         "KC_WINS_AFTER_NAME",
         "preview_click_keeps_window_chords_under_cage",
+    ),
+    // Registered for the generic loop; this smoke reads no OCR term. `preview` is an asserted
+    // term, hence `pca*`.
+    (
+        PCA_SOURCE_FILE,
+        "PCA_SOURCE_FILE",
+        "preview_page_click_activates_the_preview_under_cage",
+    ),
+    (
+        PCA_CUR_BEFORE_NAME,
+        "PCA_CUR_BEFORE_NAME",
+        "preview_page_click_activates_the_preview_under_cage",
+    ),
+    (
+        PCA_CUR_AFTER_NAME,
+        "PCA_CUR_AFTER_NAME",
+        "preview_page_click_activates_the_preview_under_cage",
     ),
     (
         UNSAVED_COVER_FILE,

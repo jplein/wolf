@@ -1,6 +1,7 @@
 //! Markdown-preview smokes: opening a preview and returning to the source, a link click,
-//! an unsaved buffer's preview, the configured appearance, a view created after launch, and
-//! Preview and Edit in Another Pane reusing the other pane.
+//! a click in the page activating its pane, an unsaved buffer's preview, the configured
+//! appearance, a view created after launch, and Preview and Edit in Another Pane reusing the
+//! other pane.
 
 use super::config::{APPEARANCE_FORCED_DARK, APPEARANCE_FORCED_LIGHT};
 use super::frame_stats::{
@@ -702,6 +703,13 @@ pub(crate) const LINK_READBACK_BEFORE_NAME: &str = "lnkwina.txt";
 /// Name of the same readback taken AFTER the click.
 pub(crate) const LINK_READBACK_AFTER_NAME: &str = "lnkwinb.txt";
 
+/// Name of the file the captive Neovim writes its current window's buffer name into BEFORE
+/// the click.
+pub(crate) const LINK_CUR_BEFORE_NAME: &str = "lnkcura.txt";
+
+/// Name of the same current-window readback taken AFTER the click.
+pub(crate) const LINK_CUR_AFTER_NAME: &str = "lnkcurb.txt";
+
 /// The BLUE channel a pixel must exceed to be a candidate for the rendered link
 /// colour.
 ///
@@ -810,8 +818,8 @@ const LINK_CLUSTER_MAX_H_PX: usize = 48;
 /// [`POINTER_PREAMBLE`].
 ///
 /// Open the source in the window's ONE pane, open its preview with `:WolfPreview`,
-/// capture, read the window list back, CLICK the rendered link, read the window list
-/// back again, capture again.
+/// capture, read the window list and the current window back, CLICK the rendered link,
+/// read both back again, capture again.
 ///
 /// ## Why `:WolfPreview` rather than the command palette
 ///
@@ -877,6 +885,13 @@ read_wins() {
     wait_file "$1" || exit 14
 }
 
+# The current window's buffer name, raw for the same reason read_wins' are.
+read_cur() {
+    wtype -- ":call writefile([bufname('%')], '$1')"
+    wtype -k Return
+    wait_file "$1" || exit 14
+}
+
 # --- Step 2: open the preview BESIDE the source, by its Ex command ------------
 #
 # An Ex command and not the palette: see this const's doc comment. The OTHER-PANE
@@ -905,6 +920,7 @@ grim "$OUT_PNG_BEFORE"
 # Taken AFTER the capture on purpose: the typed command line is drawn by the cmdline
 # strip, and capture A must carry no typed text at all.
 read_wins "$LINK_WINS_BEFORE"
+read_cur "$LINK_CUR_BEFORE"
 
 # --- Step 5: THE CLICK, at the measured centroid of the rendered link --------
 #
@@ -913,9 +929,11 @@ read_wins "$LINK_WINS_BEFORE"
 # motion_absolute to a position the pointer already occupies -- the same reason
 # POINTER_WEDGE_BODY nudges before its click.
 #
-# The web view is set_focusable(false)/set_can_focus(false), so this is not a focus
-# change: the event reaches WebKit's DOM hit test, the `decide-policy` handler answers
-# the navigation with ignore() and hands the resolved URI to preview_link::classify.
+# The press makes the preview the active pane through the web view's capture-phase
+# click gesture, which claims nothing, so the event still reaches WebKit's DOM hit
+# test: the `decide-policy` handler answers the navigation with ignore() and hands the
+# resolved URI to preview_link::classify. GTK keyboard focus stays off the view, which
+# is set_focusable(false)/set_can_focus(false).
 hsend motion "$LINK_CLICK_X" "$LINK_CLICK_Y"
 hsend press "$BTN_LEFT"
 hsend release "$BTN_LEFT"
@@ -926,6 +944,7 @@ sleep "$PREVIEW_SETTLE"
 
 # --- Step 6: the AFTER readback ----------------------------------------------
 read_wins "$LINK_WINS_AFTER"
+read_cur "$LINK_CUR_AFTER"
 
 # --- Step 7: park the pointer again, then capture B --------------------------
 #
@@ -1679,6 +1698,9 @@ fn preview_burst_delay_stays_below_the_coalescer_trailing_delay() {
 /// `set_focusable(false)`/`set_can_focus(false)` and must stay so, or
 /// `click_then_close_keeps_keyboard_input_alive_under_cage` breaks.
 ///
+/// Assertions 5 and 6 add that the same press makes the preview the active pane, so one click
+/// is shown both to activate the pane and to follow the link.
+///
 /// ## The two assertions name DIFFERENT causes, which is why there are two
 ///
 /// **Assertion 3 is the CALIBRATION**, re-derived from this run's own capture A: the
@@ -1774,6 +1796,8 @@ fn preview_burst_delay_stays_below_the_coalescer_trailing_delay() {
 /// | 2 | both captures present, and the click point is inside the reported output | precondition — `grim` produced images and the injected point was not clamped | none; do not invent one | n/a |
 /// | 3 | capture A's blue cluster is ONE small rectangle and contains the click constant | **calibration** — the constant still names the rendered link | change `PREVIEW_SOURCE_HEADING`-style typography, the fixture's link text, or the output size. It is a TRIPWIRE rather than a feature revert, and a failure here says nothing about the click path. | No red run, and none was invented: a tripwire has no feature to revert. It is not idle, though — it runs BEFORE assertion 4 and passed in both of assertion 4's red runs, so the cluster still contained ([`LINK_CLICK_X`], [`LINK_CLICK_Y`]) in each and only the readback moved. Its constants come from the phase-A measurement recorded above. |
 /// | 4 | the readback goes from `Preview: <source>` to `Preview: <target>` | **discriminator** — the click reached WebKit AND the whole follow path ran | best: in `pane_view`'s `decide-policy` handler, return `false` for a `LinkClicked` navigation WITHOUT calling `ignore()`, letting WebKit navigate itself. The view then loads the target as a document of its own and the readback still names `Preview: <source>` — exactly the defect the answer-first rule prevents. Second: restore `view.load_html(html, None)`; WebKit then delivers the raw relative href, `classify` answers its schemeless row, and `filereadable` resolves it against the captive Neovim's cwd — a directory the target is NOT in, thanks to [`LINK_FIXTURE_DIR`] — so `preview_file` answers 0 and the readback is unchanged. | RED for BOTH reverts, each run alone. Identical comparison in each: left `["Preview: lnkdir/lnkfrom.md", "lnkdir/lnkfrom.md"]`, right `["Preview: lnkdir/lnkinto.md", "lnkdir/lnkfrom.md"]` — the pane never left the source. The app's stderr separated them exactly as the message predicts: the `ignore()` revert printed no refusal line at all, while the `None`-base revert printed `wolf-gnome: preview link not followed: the captive Neovim declined to preview "lnkinto.md" — it is unreadable, it is not Markdown, or the RPC failed`, naming the BARE filename, which is the base-URI signature. Each source restored and the smoke re-run green. |
+/// | 5 | before the click, the current window is the source | precondition — the editor was active when the click came | none; do not invent one | n/a |
+/// | 6 | after the click, the current window is `Preview: <target>` | **discriminator** — the click that followed the link also made the preview active | C2a | — |
 #[test]
 fn preview_link_click_repoints_the_pane_under_cage() {
     const SMOKE: &str = "preview_link_click_repoints_the_pane_under_cage";
@@ -1866,9 +1890,18 @@ fn preview_link_click_repoints_the_pane_under_cage() {
 
     let wins_before = cwd.join(LINK_READBACK_BEFORE_NAME);
     let wins_after = cwd.join(LINK_READBACK_AFTER_NAME);
+    let cur_before = cwd.join(LINK_CUR_BEFORE_NAME);
+    let cur_after = cwd.join(LINK_CUR_AFTER_NAME);
     let out_png_before = runtime_dir.join("wolf_gnome_preview_link_before.png");
     let out_png = runtime_dir.join("wolf_gnome_preview_link_after.png");
-    for path in [&wins_before, &wins_after, &out_png_before, &out_png] {
+    for path in [
+        &wins_before,
+        &wins_after,
+        &cur_before,
+        &cur_after,
+        &out_png_before,
+        &out_png,
+    ] {
         clear_evidence(path, SMOKE);
     }
 
@@ -1884,6 +1917,8 @@ fn preview_link_click_repoints_the_pane_under_cage() {
             ("LINK_SOURCE_FILE", OsStr::new(LINK_SOURCE_FILE)),
             ("LINK_WINS_BEFORE", wins_before.as_os_str()),
             ("LINK_WINS_AFTER", wins_after.as_os_str()),
+            ("LINK_CUR_BEFORE", cur_before.as_os_str()),
+            ("LINK_CUR_AFTER", cur_after.as_os_str()),
             ("LINK_CLICK_X", OsStr::new(&click_x)),
             ("LINK_CLICK_Y", OsStr::new(&click_y)),
             ("OUT_PNG_BEFORE", out_png_before.as_os_str()),
@@ -2028,6 +2063,27 @@ fn preview_link_click_repoints_the_pane_under_cage() {
          rebinds a window and never creates one. Captures kept at {} and {}.",
         out_png_before.display(),
         out_png.display()
+    );
+
+    // --- Assertion 5 (precondition): the source was current before the click ---
+    let current_before = read_trimmed(&cur_before, SMOKE);
+    assert_eq!(
+        current_before, LINK_SOURCE_FILE,
+        "{SMOKE}: BEFORE the click Neovim's current window shows {current_before:?}, not the \
+         source {LINK_SOURCE_FILE:?}. A preview name means `:WolfPreviewInOtherPane` left focus \
+         on the preview, so assertion 6 could hold with the click activating nothing."
+    );
+
+    // --- Assertion 6 (discriminator): the click that followed the link activated the preview
+    let want_current = format!("{PREVIEW_READBACK_PREFIX}{LINK_TARGET_FILE}");
+    let current_after = read_trimmed(&cur_after, SMOKE);
+    assert_eq!(
+        current_after, want_current,
+        "{SMOKE}: AFTER the click Neovim's current window shows {current_after:?}, not the \
+         repointed preview {want_current:?}. Assertion 4 passed, so the click reached WebKit and \
+         the link was followed. The source {LINK_SOURCE_FILE:?} means the press never reached \
+         the pane's focus path: no capture-phase gesture on the web view ran `on_pane_clicked`. \
+         Any other name means the click focused some other window."
     );
 }
 
@@ -3836,8 +3892,10 @@ pub(crate) const KC_CUR_CLICKED_NAME: &str = "kccurb.txt";
 /// The window-buffer readback after leg B's Ctrl+Shift+W.
 pub(crate) const KC_WINS_AFTER_NAME: &str = "kcwinb.txt";
 
-/// The source's contents: a heading and [`KC_PARAGRAPHS`] paragraphs of plain prose with
-/// no link, so a click anywhere in the page is a click on text and never a navigation.
+/// The source's contents for [`preview_click_keeps_window_chords_under_cage`] and
+/// [`preview_page_click_activates_the_preview_under_cage`]: a heading and
+/// [`KC_PARAGRAPHS`] paragraphs of plain prose with no link, so a click anywhere in the page
+/// is a click on text and never a navigation.
 fn kc_source_body() -> String {
     let mut body = String::from("# Click Then Chords");
     for n in 1..=KC_PARAGRAPHS {
@@ -3848,9 +3906,11 @@ fn kc_source_body() -> String {
     body
 }
 
-/// The point the scenario clicks, in absolute output pixels: the centre of the band
-/// [`preview_document_follows_the_configured_appearance_under_cage`] samples inside the
-/// preview (right) pane, which that smoke measures as the web view's own background.
+/// The point [`preview_click_keeps_window_chords_under_cage`] and
+/// [`preview_page_click_activates_the_preview_under_cage`] click, in absolute output pixels:
+/// the centre of the band [`preview_document_follows_the_configured_appearance_under_cage`]
+/// samples inside the preview (right) pane, which that smoke measures as the web view's own
+/// background.
 fn kc_click_point() -> (i64, i64) {
     let (x0, x1) = preview_theme_preview_columns();
     let (y0, y1) = preview_theme_band_rows();
@@ -4068,8 +4128,9 @@ fn preview_click_keeps_window_chords_under_cage() {
              {preview_name:?}. After <C-w>l, a miss means the keys never moved focus, and \
              the legs below would run over the source. After the click, it means the click \
              changed Neovim's window, so the chords below would not be measured over a \
-             clicked preview: GNOME has no preview click-to-focus, so look for a pane gesture \
-             that refocuses on a press."
+             clicked preview: a click on the already active preview moved Neovim's focus, and \
+             the web view's click gesture in `pane_view.rs`'s `sync_preview_view` must focus \
+             its own pane."
         );
     }
 
@@ -4098,6 +4159,367 @@ fn preview_click_keeps_window_chords_under_cage() {
          close chord never fired over the clicked preview. The source gone and the preview \
          kept means the chord closed the wrong pane, so the click moved Neovim's focus after \
          all."
+    );
+}
+
+// Page-click fixtures: the source previewed beside itself, and the current-window readbacks.
+// No name carries an `ASSERTED_OCR_TERMS` entry (`preview` is one); this smoke OCRs nothing.
+
+/// Page-click smoke: the source, previewed beside itself and drawn from [`kc_source_body`].
+pub(crate) const PCA_SOURCE_FILE: &str = "pcasrc.md";
+
+/// The current window's buffer name before the click in the page.
+pub(crate) const PCA_CUR_BEFORE_NAME: &str = "pcacura.txt";
+
+/// The current window's buffer name after the click in the page.
+pub(crate) const PCA_CUR_AFTER_NAME: &str = "pcacurb.txt";
+
+/// The least ink both strips' primary lines must carry, in channel units, for the ratio in
+/// [`assert_strip_states`] to mean anything.
+///
+/// An acceptance criterion. The smokes' dark appearance draws the editor's default
+/// foreground about 200 channel units from its background, so a fully covered glyph pixel
+/// of an active line reads about 200 and of an inactive line about 100, while a band that
+/// holds no glyph reads near 0. Without this floor a band that missed its strip would read
+/// 0, and 0 is at most any multiple of the other strip's ink, so "the other strip is
+/// inactive" would hold with no strip in sight. 48 is under half the inactive reading, so
+/// antialiasing on a regular-weight glyph cannot take a drawn line below it.
+const PCA_INK_FLOOR: u8 = 48;
+
+/// How far above [`wolf_gnome::statusbar_layout::STATUSBAR_INACTIVE_ALPHA`] the inactive
+/// strip's ink may sit, as a fraction of the active strip's.
+///
+/// An acceptance criterion. A fully covered glyph pixel of an inactive line is the active
+/// colour blended toward the background by that alpha, so its distance from the background
+/// is the alpha times the active line's, plus at most one unit of `blend_channel`'s rounding.
+/// The margin covers an active bold line whose darkest pixel is not fully covered, down to
+/// three quarters coverage. Two strips drawn in the same state read a ratio near 1, far
+/// above the alpha plus this.
+const PCA_ALPHA_TOLERANCE: f64 = 0.15;
+
+/// Body of [`preview_page_click_activates_the_preview_under_cage`], appended to
+/// [`POINTER_PREAMBLE`].
+///
+/// Open the source, put its preview beside it with `:WolfPreviewInOtherPane`, which leaves
+/// Neovim's focus on the source, capture and read the current window back, click plain text
+/// in the preview's page, then capture and read the current window back again. Each capture
+/// is taken before the readback that follows it, so no typed command line is in it.
+///
+/// ## Exit codes it adds to [`POINTER_PREAMBLE`]'s 11-15
+///
+/// None. A missing readback is the preamble's own `exit 14`, and a `grim` failure aborts
+/// under `set -eu` carrying grim's own status.
+const PCA_BODY: &str = r#"
+# PREVIEW_SETTLE -- the cold-open budget POINTER_LINK_BODY documents: the blocking
+# open RPC, the WebProcess spawn, the blocking render and the full load.
+PREVIEW_SETTLE=2.0
+
+# The current window's buffer name.
+read_cur() {
+    wtype -- ":call writefile([bufname('%')], '$1')"
+    wtype -k Return
+    wait_file "$1" || exit 14
+}
+
+# --- Step 1: the source, and its preview beside it ---------------------------
+# Core leaves Neovim's focus on the source, so the editor pane is the active one.
+wtype -- ":e $PCA_SOURCE_FILE"
+wtype -k Return
+sleep "$SETTLE"
+wtype -- ":WolfPreviewInOtherPane"
+wtype -k Return
+sleep "$PREVIEW_SETTLE"
+
+# --- Step 2: capture A, then the current window -------------------------------
+hsend motion 1 1
+sleep "$SETTLE"
+grim "$OUT_PNG_BEFORE"
+read_cur "$PCA_CUR_BEFORE"
+
+# --- Step 3: click plain text in the preview's page ---------------------------
+# The pointer is parked at (1, 1), so this motion crosses into the pane and
+# delivers a real enter and motion before the press.
+hsend motion "$PCA_CLICK_X" "$PCA_CLICK_Y"
+hsend press "$BTN_LEFT"
+hsend release "$BTN_LEFT"
+sleep "$SETTLE"
+
+# --- Step 4: capture B, then the current window -------------------------------
+hsend motion 1 1
+sleep "$SETTLE"
+grim "$OUT_PNG"
+read_cur "$PCA_CUR_AFTER"
+
+hsend quit
+exit 0
+"#;
+
+/// One pane's strip primary line as a capture shows it.
+#[derive(Clone, Copy, Debug)]
+struct StripInk {
+    /// The band's dominant colour, taken for the strip's background.
+    background: Rgb8,
+    /// The largest per-channel distance of any band pixel from [`Self::background`].
+    ink: u8,
+}
+
+/// The two panes' strip primary-line bands, in absolute output pixels.
+struct StripBands {
+    /// The editor (left) pane's.
+    editor: SampleRect,
+    /// The preview (right) pane's.
+    preview: SampleRect,
+}
+
+/// Each pane's strip primary line: the rows `statusbar_layout` puts it at below the pane
+/// area's top, as `titlebar.rs` derives them, and that pane's half of
+/// [`preview_theme_pane_area`], [`LINK_SEARCH_INSET_X_PX`] clear of the window edge and the
+/// paned handle.
+fn strip_bands() -> StripBands {
+    let cell = cell_metrics_for_smoke();
+    let layout = wolf_gnome::statusbar_layout::statusbar_layout(
+        cell.size_px,
+        wolf_gnome::statusbar_layout::secondary_font_size(cell.size_px),
+        wolf_gnome::statusbar_layout::STATUSBAR_VERTICAL_PADDING,
+        wolf_gnome::statusbar_layout::STATUSBAR_LINE_GAP,
+    );
+    let (area_x, area_y, area_w, _) = preview_theme_pane_area();
+    let top = area_y + layout.primary_line_top;
+    let y0 = pixel_index(top, "the strip band's first row");
+    let y1 = pixel_index(
+        top + layout.primary_line_height,
+        "the strip band's last row",
+    );
+    let mid = area_x + area_w / 2.0;
+    let editor = SampleRect {
+        x0: pixel_index(
+            area_x + LINK_SEARCH_INSET_X_PX,
+            "the editor strip's first column",
+        ),
+        x1: pixel_index(
+            mid - LINK_SEARCH_INSET_X_PX,
+            "the editor strip's last column",
+        ),
+        y0,
+        y1,
+    };
+    let preview = SampleRect {
+        x0: pixel_index(
+            mid + LINK_SEARCH_INSET_X_PX,
+            "the preview strip's first column",
+        ),
+        x1: pixel_index(
+            area_x + area_w - LINK_SEARCH_INSET_X_PX,
+            "the preview strip's last column",
+        ),
+        y0,
+        y1,
+    };
+    for (rect, what) in [(editor, "editor"), (preview, "preview")] {
+        assert!(
+            rect.x1 > rect.x0 && rect.y1 > rect.y0,
+            "the {what} strip's derived band {rect:?} is empty, so its ink would read 0 and every \
+             strip assertion would be vacuous. Re-derive it from CAGE_OUTPUT_*_EXPECTED, \
+             OVERLAY_ORIGIN_*_EXPECTED and `statusbar_layout`."
+        );
+    }
+    StripBands { editor, preview }
+}
+
+/// The largest per-channel distance between two colours.
+fn channel_distance(a: Rgb8, b: Rgb8) -> u8 {
+    a.0.abs_diff(b.0)
+        .max(a.1.abs_diff(b.1))
+        .max(a.2.abs_diff(b.2))
+}
+
+/// Reads `rect` of `capture` as a strip line: its dominant colour and its ink.
+fn strip_ink(capture: &Capture, rect: SampleRect) -> StripInk {
+    let mut counts: std::collections::BTreeMap<Rgb8, usize> = std::collections::BTreeMap::new();
+    for y in rect.y0..rect.y1 {
+        for x in rect.x0..rect.x1 {
+            *counts.entry(capture.pixel(x, y)).or_default() += 1;
+        }
+    }
+    let background = counts
+        .iter()
+        .max_by_key(|(_, count)| **count)
+        .map(|(colour, _)| *colour)
+        .unwrap_or_else(|| panic!("the strip band {rect:?} holds no pixel"));
+    let ink = counts
+        .keys()
+        .map(|&pixel| channel_distance(pixel, background))
+        .max()
+        .unwrap_or(0);
+    StripInk { background, ink }
+}
+
+/// Asserts that `shot` shows the `active` pane's strip drawn active and the `inactive` pane's
+/// drawn inactive: both carry [`PCA_INK_FLOOR`], and the inactive one's ink is at most
+/// [`wolf_gnome::statusbar_layout::STATUSBAR_INACTIVE_ALPHA`] plus [`PCA_ALPHA_TOLERANCE`]
+/// times the active one's.
+///
+/// The ratio rests on a premise about `statusbar_text`, which the alpha is read from rather
+/// than retyped: an inactive line is the active colour blended toward the background by that
+/// alpha, so a fully covered glyph pixel's distance from the background scales by it.
+/// `finding` says what a failed ratio means at this point of the smoke.
+fn assert_strip_states(
+    smoke: &str,
+    shot: &str,
+    active: (&str, StripInk),
+    inactive: (&str, StripInk),
+    png: &Path,
+    finding: &str,
+) {
+    let (active_name, active_ink) = active;
+    let (inactive_name, inactive_ink) = inactive;
+    for (name, reading) in [active, inactive] {
+        assert!(
+            reading.ink >= PCA_INK_FLOOR,
+            "{smoke}: in {shot}, the {name} pane's strip band reads an ink of {} over its \
+             background {:?}, under {PCA_INK_FLOOR}, so it holds no strip text and the strip \
+             comparison would be vacuous. Either the band missed the primary line, so re-derive \
+             it from OVERLAY_ORIGIN_Y_EXPECTED and `statusbar_layout`, or the pane drew no strip \
+             at all. The {active_name} strip reads {} and the {inactive_name} strip {}. PNG kept \
+             at {}.",
+            reading.ink,
+            reading.background,
+            active_ink.ink,
+            inactive_ink.ink,
+            png.display()
+        );
+    }
+    let alpha = wolf_gnome::statusbar_layout::STATUSBAR_INACTIVE_ALPHA;
+    let ratio = f64::from(inactive_ink.ink) / f64::from(active_ink.ink);
+    assert!(
+        ratio <= alpha + PCA_ALPHA_TOLERANCE,
+        "{smoke}: in {shot}, the {inactive_name} pane's strip ink is {} and the {active_name} \
+         pane's {}, a ratio of {ratio:.3}, above STATUSBAR_INACTIVE_ALPHA {alpha} plus \
+         {PCA_ALPHA_TOLERANCE}. A ratio near 1 means both strips are drawn in the same state; \
+         a ratio above 1 means the {inactive_name} strip is the one drawn active. {finding} \
+         PNG kept at {}.",
+        inactive_ink.ink,
+        active_ink.ink,
+        png.display()
+    );
+}
+
+/// A primary click in a preview pane's page makes that pane the active one, as a click on its
+/// strip does, and the click still reaches the page.
+///
+/// ## What it checks
+///
+/// With the editor pane active beside a preview of its file, one click on plain text in the
+/// page. Neovim's current window must move to the preview's scratch buffer, and the strips'
+/// raw pixels must swap: the editor's primary line drawn active and the preview's inactive
+/// before the click, the other way round after it. OCR reads neither the weight nor the dim
+/// of a strip, so the strips are read by [`strip_ink`] and compared by
+/// [`assert_strip_states`]. That a click which activates a preview still reaches WebKit is
+/// [`preview_link_click_repoints_the_pane_under_cage`]'s to show: its assertion 4 sees the
+/// link followed, and its assertion 6 the preview made active by the same click.
+///
+/// ## Assertions
+///
+/// A precondition has no ID.
+///
+/// | # | assertion | kind | ID |
+/// | --- | --- | --- | --- |
+/// | 1 | `status.success()`, both captures present, and the click point inside the reported output | precondition | — |
+/// | 2 | before the click, the current window is the source | precondition: the editor was active when the click came | — |
+/// | 3 | capture A shows the editor strip active and the preview strip inactive | precondition | — |
+/// | 4 | after the click, the current window is the preview | **discriminator** | C1a |
+/// | 5 | capture B shows the preview strip active and the editor strip inactive | **discriminator** | C1b |
+#[test]
+fn preview_page_click_activates_the_preview_under_cage() {
+    const SMOKE: &str = "preview_page_click_activates_the_preview_under_cage";
+
+    let runtime_dir = require_smoke_env();
+    let cwd = make_temp_cwd();
+    let body = kc_source_body();
+    write_relaunch_fixtures(SMOKE, &cwd, &[(PCA_SOURCE_FILE, body.as_str())]);
+
+    let cur_before = cwd.join(PCA_CUR_BEFORE_NAME);
+    let cur_after = cwd.join(PCA_CUR_AFTER_NAME);
+    let out_png_before = runtime_dir.join("wolf_gnome_preview_page_click_before.png");
+    let out_png = runtime_dir.join("wolf_gnome_preview_page_click_after.png");
+    for path in [&cur_before, &cur_after, &out_png_before, &out_png] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let (click_x, click_y) = kc_click_point();
+    let click_x_arg = click_x.to_string();
+    let click_y_arg = click_y.to_string();
+
+    let status = run_pointer_scenario(
+        PCA_BODY,
+        &cwd,
+        &runtime_dir,
+        &out_png,
+        &[
+            ("PCA_SOURCE_FILE", OsStr::new(PCA_SOURCE_FILE)),
+            ("PCA_CUR_BEFORE", cur_before.as_os_str()),
+            ("PCA_CUR_AFTER", cur_after.as_os_str()),
+            ("PCA_CLICK_X", OsStr::new(&click_x_arg)),
+            ("PCA_CLICK_Y", OsStr::new(&click_y_arg)),
+            ("OUT_PNG_BEFORE", out_png_before.as_os_str()),
+        ],
+    );
+
+    // --- Assertion 1 (precondition): the scenario ran; the point is on screen ---
+    assert_pointer_scenario_succeeded(SMOKE, status, &cwd, &out_png);
+    assert_png_present(SMOKE, &out_png_before);
+    assert_png_present(SMOKE, &out_png);
+    let extents = read_output_extents(&cwd, SMOKE);
+    assert_inside_extents(SMOKE, "the page click", (click_x, click_y), extents);
+
+    // --- Assertion 2 (precondition): the editor was active when the click came ---
+    let preview_name = format!("{PREVIEW_READBACK_PREFIX}{PCA_SOURCE_FILE}");
+    let current_before = read_trimmed(&cur_before, SMOKE);
+    assert_eq!(
+        current_before, PCA_SOURCE_FILE,
+        "{SMOKE}: before the click Neovim's current window shows {current_before:?}, not the \
+         source {PCA_SOURCE_FILE:?}. {preview_name:?} means `:WolfPreviewInOtherPane` left \
+         focus on the preview, so the click below would land in an already active pane and \
+         prove nothing; any other name means the `:e` or the preview did not run as typed."
+    );
+
+    // --- Assertion 3 (precondition): capture A draws the editor strip active ----
+    let bands = strip_bands();
+    let capture_a = decode_capture(&out_png_before, SMOKE, "capture A");
+    assert_strip_states(
+        SMOKE,
+        "capture A",
+        ("editor", strip_ink(&capture_a, bands.editor)),
+        ("preview", strip_ink(&capture_a, bands.preview)),
+        &out_png_before,
+        "Assertion 2 found the source current, so the strips do not follow the active pane \
+         before any click, or the alpha premise in `assert_strip_states` is false: re-measure \
+         it before reading assertion 5.",
+    );
+
+    // --- Assertion 4 (discriminator): the click moved Neovim to the preview -----
+    let current_after = read_trimmed(&cur_after, SMOKE);
+    assert_eq!(
+        current_after, preview_name,
+        "{SMOKE}: after the click in the preview's page Neovim's current window shows \
+         {current_after:?}, not the preview {preview_name:?}. The source's name means the \
+         press never reached the pane's focus path: WebKit's own click gesture took it, and \
+         no capture-phase gesture on the web view ran `on_pane_clicked` first. Any other name \
+         means the click focused some other window."
+    );
+
+    // --- Assertion 5 (discriminator): capture B draws the preview strip active ---
+    let capture_b = decode_capture(&out_png, SMOKE, "capture B");
+    assert_strip_states(
+        SMOKE,
+        "capture B",
+        ("preview", strip_ink(&capture_b, bands.preview)),
+        ("editor", strip_ink(&capture_b, bands.editor)),
+        &out_png,
+        "Assertion 4 found the preview current in Neovim, so the front-end's active pane did not \
+         follow. The editor strip still active means `set_active_pane` never ran for the \
+         preview; both strips inactive means `draw_pane` does not draw a preview's strip \
+         active.",
     );
 }
 

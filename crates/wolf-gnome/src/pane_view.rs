@@ -129,6 +129,16 @@
 //! event carrying the whole step count; and, while the program tracks the mouse,
 //! buttonless motion. Only the primary press focuses the pane.
 //!
+//! A preview's page is not its area's but its web view's, which WebKit's own click
+//! gesture claims in the bubble phase, so the area's gesture never sees a press there.
+//! The view therefore carries one more controller, a primary-button
+//! `gtk::GestureClick` in the CAPTURE phase whose press runs
+//! [`PaneInner::on_pane_clicked`], exactly as a strip press does. It sends Neovim no
+//! mouse event: the pointer is over the page, not the scratch buffer's grid, and with
+//! WebKit owning the sequence no drag or release would follow a forwarded press. It
+//! NEVER claims the sequence, because a claim stops the press before WebKit sees it,
+//! and the link click and the drag selection go with it.
+//!
 //! ## Terminal panes
 //!
 //! A pane whose window `Snapshot::win_buffers` binds to a session paints that session's
@@ -2517,7 +2527,9 @@ impl PaneInner {
     /// through [`Self::on_preview_link`], `load-changed` applies a waiting cross-file
     /// fragment or saved scroll through [`Self::on_preview_load_finished`], and the
     /// view's own `webkit6::UserContentManager` runs [`preview_ui::SCROLL_REPORT_JS`]
-    /// and hands each report to [`Self::on_scroll_report`]. Each captures a [`Weak`]
+    /// and hands each report to [`Self::on_scroll_report`], and a capture-phase primary
+    /// `gtk::GestureClick` runs [`Self::on_pane_clicked`] on a press in the page (see the
+    /// module's "Mouse and scroll"). Each captures a [`Weak`]
     /// rather than the `Rc`, since the view outlives nothing but is owned by a
     /// `PaneWidgets` this `PaneInner` owns.
     ///
@@ -2607,6 +2619,20 @@ impl PaneInner {
                         inner.on_preview_load_finished(pane_id);
                     }
                 });
+            }
+            {
+                // Capture phase, since WebKit's own click gesture claims the press in the bubble phase. Never
+                // claim here, or WebKit loses the press and with it the link click and the drag selection.
+                let click = gtk::GestureClick::new();
+                click.set_button(gdk::BUTTON_PRIMARY);
+                click.set_propagation_phase(gtk::PropagationPhase::Capture);
+                let weak = Rc::downgrade(self);
+                click.connect_pressed(move |_click, _n_press, _x, _y| {
+                    if let Some(inner) = weak.upgrade() {
+                        inner.on_pane_clicked(pane_id);
+                    }
+                });
+                view.add_controller(click);
             }
             p.host.add_overlay(&view);
             // Explicit, though `false` is GTK's default: a measured WebView would add its size request to the
@@ -3301,6 +3327,10 @@ impl PaneInner {
 
     /// Click-to-focus: focus the clicked pane's Neovim window, mark it active, and
     /// park GTK keyboard focus on the PERSISTENT cmdline strip.
+    ///
+    /// Reached from an area's primary press ([`Self::on_pane_press`]) and from a press in
+    /// a preview's page, through the web view's click gesture that
+    /// [`Self::sync_preview_view`] connects.
     ///
     /// The GTK focus target is deliberately the cmdline strip and NOT the pane's own
     /// `DrawingArea`. Pane areas are ephemeral — `detect_closes` destroys one as soon
