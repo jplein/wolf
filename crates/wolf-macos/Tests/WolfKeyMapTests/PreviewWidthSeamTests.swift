@@ -196,7 +196,7 @@ final class PreviewWidthSeamTests: XCTestCase {
     }
   }
 
-  /// M2, with no cell width: the cap is skipped, as `PaneGeometry` skips it.
+  /// M11, with no cell width: the cap is skipped, as `PaneGeometry` skips it.
   func testZeroCellWidthCapsNothing() {
     let pane = Rect(x: 0, y: 0, w: 1200, h: 800)
     let placement = PreviewWidthSeam.placement(
@@ -249,7 +249,7 @@ final class PreviewWidthSeamTests: XCTestCase {
       "the styled document's body must split out as the raw one's")
   }
 
-  /// M3, the two cases that leave the document alone.
+  /// M12, the two cases that leave the document alone.
   func testStyledDocumentLeavesTheDocumentWhenItCannotStyleIt() {
     XCTAssertEqual(
       PreviewWidthSeam.styledDocument(document, rootStyle: ""), document,
@@ -260,9 +260,9 @@ final class PreviewWidthSeamTests: XCTestCase {
       "with no <html before <head> the document must be left as it is")
   }
 
-  /// M3, an attribute value cannot end early.
+  /// M13, an attribute value cannot end early.
   func testStyledDocumentEscapesTheAttribute() throws {
-    let style = "a\"b&c"
+    let style = "a\"b&amp;c"
     let styled = PreviewWidthSeam.styledDocument(document, rootStyle: style)
     let open = try XCTUnwrap(
       styled.range(of: "<html style=\""), "the style must open on the <html tag: \(styled)")
@@ -275,7 +275,8 @@ final class PreviewWidthSeamTests: XCTestCase {
     XCTAssertEqual(
       decoded, style,
       "the attribute value \(value.debugDescription) must escape \" and & and decode to the"
-        + " style; a raw \" ends the attribute early")
+        + " style; a raw \" ends the attribute early, and a raw & lets an entity in the style"
+        + " decode to another value, here &amp; to &")
     XCTAssertTrue(
       String(rest[close...]).hasPrefix("\"><head>"),
       "the attribute must close right before the tag ends: \(rest.prefix(80))")

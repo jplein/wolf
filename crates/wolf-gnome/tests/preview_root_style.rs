@@ -15,8 +15,8 @@
 //! | G1 | [`capped_content_box_is_the_editors_capped_grid_rect`] | layout |
 //! | G2 | [`full_width_style_pads_and_caps_nothing`] | layout |
 //! | G3 | [`styled_document_puts_the_style_on_the_root_tag_alone`] | document |
-//! | G3 | [`styled_document_leaves_a_document_it_cannot_style`] | document |
-//! | G3 | [`apply_root_style_js_sets_the_roots_style_to_exactly_the_style`] | script |
+//! | G11 | [`styled_document_leaves_a_document_it_cannot_style`] | document |
+//! | G12 | [`apply_root_style_js_sets_the_roots_style_to_exactly_the_style`] | script |
 
 use std::collections::HashMap;
 
@@ -230,7 +230,7 @@ fn styled_document_puts_the_style_on_the_root_tag_alone() {
     );
 }
 
-/// G3, the two cases that leave the document alone.
+/// G11, the two cases that leave the document alone.
 #[test]
 fn styled_document_leaves_a_document_it_cannot_style() {
     let html = document();
@@ -268,7 +268,7 @@ fn root_style_argument(js: &str) -> String {
     }
 }
 
-/// G3, the live script.
+/// G12, the live script.
 #[test]
 fn apply_root_style_js_sets_the_roots_style_to_exactly_the_style() {
     let real = root_style(column_cap(false, CELL_W), EDITOR_PADDING_PX);

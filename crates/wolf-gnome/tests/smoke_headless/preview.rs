@@ -2376,7 +2376,7 @@ const PREVIEW_LIGHT_BG: (u8, u8, u8) = (0xf4, 0xf4, 0xf4);
 /// GTK 4.22.4 / libadwaita 1.9.0 / WebKitGTK 2.52.4): the content's top is absolute
 /// row 159 on BOTH launches, and the first row carrying any non-theme pixel is
 /// absolute row 165 — OFFSET 6 into the band, with rows 0..5 pure background. The web
-/// view's own top, now that it reaches the strip, is row 139, derived as 159 less
+/// view's own top, at the strip, is row 139, derived as 159 less
 /// `EDITOR_PADDING_PX` rather than re-measured. So
 /// the leading `.wolf-src` anchor costs no line box here: had it cost one, the first
 /// ink would have landed at offset 24 and this band would have read empty. Offset 6
