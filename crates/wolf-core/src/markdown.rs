@@ -352,7 +352,7 @@ pub fn theme_css(theme: PreviewTheme) -> &'static str {
 /// How the rendered Markdown body's content area is sized horizontally.
 ///
 /// A per-render choice threaded into [`render_html`]. [`WidthMode::Full`] is the
-/// full-bleed behavior (the in-app webview FRAME does any capping);
+/// full-bleed behavior (the in-app front-end caps the content inside the page);
 /// [`WidthMode::Capped`] appends a `max-width` cap + horizontal centering to the
 /// CSS so the standalone document (the always-capped browser preview)
 /// caps its own content.
@@ -526,7 +526,7 @@ pub fn code_blocks(source: &str) -> Vec<CodeBlockInfo> {
 /// scheme and its DOM placement.
 ///
 /// `width_mode` selects the content-area sizing: [`WidthMode::Full`] appends no
-/// width CSS (full-bleed; the in-app webview frame caps it), while
+/// width CSS (full-bleed; the in-app front-end caps it inside the page), while
 /// [`WidthMode::Capped`] appends [`CAPPED_WIDTH_CSS`] AFTER the theme CSS so the
 /// standalone document (the always-capped browser preview) caps + centers its
 /// own content.
@@ -1637,8 +1637,8 @@ mod tests {
     }
 
     /// `WidthMode::Full` is the FULL-BLEED / current behavior: no content
-    /// `max-width` cap and no centering, so the in-app webview FRAME (not CSS) does
-    /// any capping. The body stays flush.
+    /// `max-width` cap and no centering, so the in-app front-end, not this CSS, caps
+    /// the content inside the page. The body stays flush.
     #[test]
     fn render_html_full_is_flush() {
         let html = render_html("# Hi\n\ntext", PreviewTheme::Default, WidthMode::Full);

@@ -70,6 +70,8 @@ Three one-shot timers exist and none is a poll. Each is armed by an arriving eve
 
 The preview's is the one to read carefully, because a burst can leave several of them alive at once — bounded by `ceil(PREVIEW_TRAILING_DELAY / inter-key interval)`, and zero while the user is idle. Each fires once and performs nothing unless it carries the live generation, since an armed GLib source cannot be withdrawn without a warning. A reader who finds five queued has found the design rather than a leak.
 
+The sidebar's reveal scroll is a frame-clock tick rather than a timer: a reveal arms it, it removes itself on the second frame after the latest reveal, and it never keeps running while the tree is unmapped ([The sidebar reveal](wolf-gnome/the-sidebar-reveal.md)).
+
 One asynchronous callback exists and it is not a timer. `gdk::Clipboard::read_text_async` resolves on the main thread some turns after the paste chord, and its closure holds a `Weak` to the shell and reads the core through the same `Option`, so a read landing after the close handler has taken the core out performs nothing rather than panicking.
 
 A `StyleManager` `dark` notification is neither a timer nor a poll either. It is a GObject property notification, armed once per tab as its core starts and in `auto` mode alone, fired only when libadwaita's own property changes. A closed tab's handler stays connected and does nothing, because its `Weak` to the core fails to upgrade. So nothing re-arms while the application is idle and the property above is intact.
@@ -102,7 +104,7 @@ Eight things are process-scoped, each because a second copy would be wrong rathe
 
 ## Window structure
 
-The widget tree, the pane area while a tab is zoomed, the overlay stacking order, and the focus regime that keeps GTK keyboard focus off every pane area, since a destroyed focus widget kills key dispatch. [Window structure](wolf-gnome/window-structure.md) records each, with why the pane chrome is painted rather than built from widgets.
+The widget tree, the pane area while a tab is zoomed, the overlay stacking order, how a press on a preview's page reaches its pane, and the focus regime that keeps GTK keyboard focus off every pane area, since a destroyed focus widget kills key dispatch. [Window structure](wolf-gnome/window-structure.md) records each, with why the pane chrome is painted rather than built from widgets.
 
 ## Terminal panes
 
@@ -155,6 +157,14 @@ A Markdown preview follows the configured appearance through a chain whose links
 **The write is silent.** libadwaita carries a warning string for exactly this property and suppresses its own warning while it performs the write; zero occurrences reached stderr across six `cage` runs. Nothing logs it, so `preview_document_follows_the_configured_appearance_under_cage` in [`tests/README.md`](../crates/wolf-gnome/tests/README.md) is the only tripwire.
 
 **Do not move the theme's `color-scheme` declaration to `:root`.** Measured and falsified: the declaration sits on `body.wolf-markdown`, `getComputedStyle(documentElement).colorScheme` computes `normal`, and dark takes anyway; injecting it on the root changed nothing in either direction.
+
+## The preview's content width
+
+A preview's web view spans its pane below the statusbar strip, through its margins on the host overlay, and the page caps its own content. A view framed to the capped grid rect puts the page's scrollbar beside the content and leaves the margins and padding gutters to the drawing area, dead to the wheel. The page instead carries an inline style on its root element, [`preview_width.rs`](../crates/wolf-gnome/src/README.md#preview_widthrs)'s: the pane padding, plus a `max-width` of the column cap centred by auto side margins unless the source is full width, under the same `pane_cap` an editor's grid takes.
+
+The style goes on `<html>`, never `<body>`, because `base.css` owns the body's box: its zero padding is what the first-block margin rules and the baseline grid rest on. It reaches the page two ways. Every full load carries it in the document's `<html>` tag, so a load never paints uncapped, and a script sets it on each change and once more after each finished load, which lands a change made while that load was in flight. Core's render is untouched, so the head stays byte-identical and the in-place body swap stays sound.
+
+The view reaches its pane's edges with no band kept clear for a divider, because a `gtk::Paned` handle is a widget of its own, allocated between the two children. The statusbar strip stays chrome rather than a margin: GTK has no public way to hand a scroll event to a WebKitGTK view, and a `scrollBy` script cannot reproduce WebKit's own wheel and kinetic scrolling. Content wider than the cap, such as a wide table, spills into the right margin, and scrolled content passes under the top padding gutter up to the strip.
 
 ## Following a link in the preview
 

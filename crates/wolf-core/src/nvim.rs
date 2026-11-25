@@ -449,8 +449,8 @@ impl NvimProcess {
         &self,
         source_bufnr: i64,
     ) -> impl std::future::Future<Output = Result<String, NvimError>> + Send + 'static {
-        // In-app preview: full-bleed render (WidthMode::Full) — the webview FRAME
-        // caps the content to the ~90-char width when the source is not full-width.
+        // In-app preview: full-bleed render (WidthMode::Full) — the in-app front-end caps the
+        // content inside the page to the ~90-char width when the source is not full-width.
         let nvim = self.nvim.clone();
         async move { render_source_html(&nvim, source_bufnr, crate::markdown::WidthMode::Full).await }
     }
@@ -1728,8 +1728,9 @@ pub(crate) async fn win_tabpage(nvim: Nvim, win: i64) -> Result<i64, NvimError> 
 /// treesitter-highlight them ([`highlight_code_blocks`]), and renders via
 /// [`crate::markdown::render_html_with_highlights`] with the fixed
 /// [`crate::markdown::PreviewTheme::Default`] and the given `width_mode`
-/// (in-app callers pass [`crate::markdown::WidthMode::Full`] and let the webview
-/// frame cap; the browser preview passes [`crate::markdown::WidthMode::Capped`]).
+/// (in-app callers pass [`crate::markdown::WidthMode::Full`] and let the front-end
+/// cap the content inside the page; the browser preview passes
+/// [`crate::markdown::WidthMode::Capped`]).
 /// The highlight pass degrades gracefully and PER FENCE: any block Neovim cannot
 /// highlight (no language on the fence, or no parser AND `highlights` query for it
 /// on the runtimepath) renders as plain `<pre><code>`. This is NOT a per-platform

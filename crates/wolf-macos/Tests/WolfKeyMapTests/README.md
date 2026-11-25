@@ -228,7 +228,7 @@ It also covers `terminalRestore(splits:drawerOpen:live:)`: live splits once, asc
 
 **Gotchas**
 
-- Containment tolerance is exactly `0.0`, and `testOccluderShortByAHairOnMaxXEdge` exists to pin it. `syncPreviewWebViews` assigns the web view frame from the same `gridRect(ofPane:)` expression the painter receives, so the rects are bit-identical when in sync; an epsilon would leave the grid unpainted mid-live-resize instead of repainting the moment geometry drifts.
+- Containment tolerance is exactly `0.0`, and `testOccluderShortByAHairOnMaxXEdge` exists to pin it: an epsilon would leave the grid unpainted mid-live-resize instead of repainting the moment geometry drifts ([why](../../../../notes/crates/wolf-macos/Sources/WolfKeyMap/PaneOcclusion.swift.md#why-the-tolerance-is-zero)).
 - Every flag case uses a frame that fully contains the grid rect, so a `false` result can only be attributed to the flag under test. The control assertion at the end of `testContainingOccluderWithASingleDisqualifyingFlagPaints` is what proves that.
 
 #### `PaneTreeTests.swift`
@@ -343,6 +343,14 @@ The `PreviewSeam` reload gate plus the click-to-focus surface. `winsNeedingReloa
 - The gate keys on `(sourceBufnr, sourceTick)` rather than the tick alone because two freshly opened files can share a tick; `testSourceBufnrChangedSameTickNeedsReload` is the reused-preview-pane regression that forced it.
 - Clearing `loaded` to `[:]` is the mechanism the appearance re-pull relies on to force every preview to re-render, so `testEmptyLoadedReloadsEveryCurrentWin` is load-bearing.
 - The result order is dictionary iteration order and is not part of the contract — compare through `Set<Int64>`, never array equality.
+
+#### `PreviewWidthSeamTests.swift`
+
+**Covers**
+
+`PreviewWidthSeam`: a capped style's content box is `PaneGeometry`'s capped grid rect, lone or split, either side of the cap; a full-width one pads alone; `styledDocument` styles `<html>` alone, leaving the head byte-identical; `placement` insets only the edges bordering a divider.
+
+**Gotchas** — no page loads under `bazel test`, so the box is `contentBox`'s CSS model.
 
 #### `RestoreSeamTests.swift`
 

@@ -57,8 +57,8 @@ public enum PaneOcclusion {
   ///    occluded, conservatively: there is no paint work to save, and `true`
   ///    would be a claim about a rectangle that does not exist.
   /// 8. Containment on all four edges with tolerance EXACTLY 0.0 (see the file
-  ///    header). Equality counts as containment (`<=` / `>=`), because the common
-  ///    in-sync case is bit-identical rectangles.
+  ///    header). Equality counts as containment (`<=` / `>=`), because an occluder
+  ///    whose edge is flush with the grid rect's still covers it.
   ///
   /// PARTIAL coverage always returns `false`: this seam answers only "fully
   /// occluded", never "partly occluded", so the caller's choice stays binary.

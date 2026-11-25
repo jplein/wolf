@@ -4767,9 +4767,9 @@ impl FfiPreview {
     }
 
     /// Whether the SOURCE Markdown buffer is in FULL-WIDTH mode
-    /// ([`PreviewInfo::source_full_width`]). The front-end frames this preview pane's
-    /// web view to the full inset pane when `true`, or the capped+centered ~90-char
-    /// rect when `false`.
+    /// ([`PreviewInfo::source_full_width`]). The front-end lets this preview's content
+    /// fill the inset pane when `true`, or caps and centres it at ~90 characters inside
+    /// the page when `false`.
     #[must_use]
     pub fn source_full_width(&self) -> bool {
         self.source_full_width

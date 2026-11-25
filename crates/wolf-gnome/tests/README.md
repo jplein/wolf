@@ -10,7 +10,7 @@ The devShell is not optional: it supplies GTK, exports `WOLF_NVIM_BIN` and `WOLF
 
 Rules that are decidable from their arguments are pinned in each seam's own `#[cfg(test)] mod tests`, which is the point of the seam split in [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md).
 
-Some seams' tables are files here instead: [`drawer_share.rs`](#drawer_sharers), [`gdk_key.rs`](#gdk_keyrs), [`terminal_seams.rs`](#terminal_seamsrs), [`other_pane_seam.rs`](#other_pane_seamrs), [`open_request.rs`](#open_requestrs), [`pane_zoom.rs`](#pane_zoomrs), [`pane_views.rs`](#pane_viewsrs), [`sidebar_toggles.rs`](#sidebar_togglesrs), [`titlebar_background.rs`](#titlebar_backgroundrs), [`restore_caps.rs`](#restore_capsrs), [`app_state_seam.rs`](#app_state_seamrs), [`stacking.rs`](#stackingrs), [`tab_focus.rs`](#tab_focusrs) and [`tab_titles.rs`](#tab_titlesrs).
+Some seams' tables are files here instead: [`drawer_share.rs`](#drawer_sharers), [`gdk_key.rs`](#gdk_keyrs), [`terminal_seams.rs`](#terminal_seamsrs), [`other_pane_seam.rs`](#other_pane_seamrs), [`open_request.rs`](#open_requestrs), [`pane_zoom.rs`](#pane_zoomrs), [`pane_views.rs`](#pane_viewsrs), [`preview_root_style.rs`](#preview_root_stylers), [`sidebar_toggles.rs`](#sidebar_togglesrs), [`titlebar_background.rs`](#titlebar_backgroundrs), [`restore_caps.rs`](#restore_capsrs), [`app_state_seam.rs`](#app_state_seamrs), [`stacking.rs`](#stackingrs), [`tab_focus.rs`](#tab_focusrs) and [`tab_titles.rs`](#tab_titlesrs).
 
 The other files below cover what a seam cannot reach: a real Neovim, a real window, the built binary together with the manifest that shaped it, and the store output `nix build .#wolf-gnome` installs — a different artifact from the checkout build, making different claims.
 
@@ -211,6 +211,17 @@ The other files below cover what a seam cannot reach: a real Neovim, a real wind
 - Pure: no display, no Neovim and no compositor. What the pane area shows for an answer is [`smoke_headless/zoom_pane.rs`](#smoke_headlesszoom_paners)'s question.
 - A case for a rule both front-ends apply belongs on both, or the two ports can drift silently.
 
+#### `preview_root_style.rs`
+
+**Covers**
+
+- `preview_width`'s rules. A capped `root_style`'s content box lands on `editor_inset::grid_rect`'s capped rect in a pane wider and in one narrower than the cap, its width exactly and its left edge within the floor `grid_rect` takes; a full-width cap pads without capping.
+- `styled_document` over a real `render_html(…, WidthMode::Full)` puts the style on the `<html>` tag alone and leaves the document byte-identical from `<head>` on, or returns a document it cannot style unchanged; `apply_root_style_js` decodes to exactly the style.
+
+**Gotchas**
+
+- Pure: no display, no Neovim and no compositor. The content box comes from `content_box`, a model of CSS block layout for a `border-box` root; whether WebKitGTK lays the page out so is [`smoke_headless/preview_margins.rs`](#smoke_headlesspreview_marginsrs)'s question.
+
 #### `release_profile.rs`
 
 **Covers**
@@ -377,7 +388,11 @@ Pointer smokes, driven through [Pointer injection](#pointer-injection) and read 
 
 #### `smoke_headless/preview.rs`
 
-Markdown preview smokes: opening a preview and returning to the source, a link click, an unsaved buffer, the configured appearance, a view created after launch, Ctrl+Shift+P and Ctrl+Shift+W still firing after a click in the preview, and Preview and Edit in Another Pane reusing the other pane, where a press from a lone pane splits. Its guard keeps the smokes' burst delay below the coalescer's trailing delay.
+Markdown preview smokes: opening a preview and returning to the source, a link click that also makes the preview it repoints active, a click in a preview's page, or in its top padding gutter, making it active, read from Neovim's current window and from the strips' pixels, an unsaved buffer, the configured appearance, a view created after launch, Ctrl+Shift+P and Ctrl+Shift+W still firing after a click in the preview, and Preview and Edit in Another Pane reusing the other pane, where a press from a lone pane splits. Its guard keeps the smokes' burst delay below the coalescer's trailing delay.
+
+#### `smoke_headless/preview_margins.rs`
+
+The preview's content-width smoke, read from raw pixels and the frozen window state, with no OCR. One launch at `FULLWIDTH_SMOKE_FONT_PT`, where the cap binds, previews a code block above several viewports of one-line paragraphs in a lone pane. The page's background must span the pane below the strip with the code block on the capped grid rect, `:WolfFullWidth` must widen the block to the pane less its padding, and a second toggle must bring it back. A wheel over the left side margin must then scroll the page, read from the saved preview scroll; every failed assertion is reported by its ID.
 
 #### `smoke_headless/preview_render.rs`
 
@@ -440,6 +455,12 @@ The terminfo smoke: the checkout binary, given `WOLF_TERMINFO_DIR` from the devS
 The titlebar smokes, one per Lighthouse background: the checkout binary over a staged Lighthouse, with `appearance` forced to that background while `ADW_DEBUG_COLOR_SCHEME` makes the desktop prefer the other. One launch opens a second tab and takes four captures: focused, after `:set background` to the other, after a runtime `WolfTitlebar`, and in backdrop with GTK's in-process save dialog up, so the smoke exports `GDK_DEBUG=no-portals`. The header bar and the tab bar must match the grid's `Normal`, then `WolfTitlebar`, and the title and the tabs' text must be drawn on the forced scheme's side. The bands derive from the geometry constants, and every run prints a table of expected and measured colours.
 
 The dialog is the route to backdrop: `cage` activates every toplevel it maps and deactivates one only when another takes focus, so no launch starts inactive. A toplevel with a parent is centred at its own size, so the main window and both bars stay visible beside it. A precondition proves the dimming: the title's contrast over `WolfTitlebar` must reach a floor while focused, and be at most a share of it in backdrop.
+
+#### `smoke_headless/tree_reveal.rs`
+
+The sidebar launch-reveal smoke. One launch restores a tab with the tree sidebar beside an editor pane, focused, and a preview pane, both on a file below the fold, over a generated folder of about three hundred mixed-case root files, four subdirectories and the usual dot entries. Capture A must read the six rows directly above the current file and its own row; the scenario then creates a file, so the watcher's rescan rebuilds the tree, and capture B must read them again and the new row. The scenario sends no key and no pointer event, so nothing but the reveal scrolls the list.
+
+The asserted rows are the subject, so their generated names carry their terms. `reveal_fixture_puts_its_rows_directly_above_the_current_file` guards that premise without a compositor: the rows' order under `wolf_core::tree::children_of`, the row counts above and below, and each term naming one row.
 
 #### `smoke_headless/zoom_pane.rs`
 
@@ -601,7 +622,7 @@ The flake's `shellHook` substitutes its placeholders with Nix store paths and po
 
 The cage slots and private runtime directories, the per-cage session bus that activates nothing, the pinned GTK settings, the single-shell-command shape, and the single environment helper are in [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md). What follows is what a smoke author has to get right.
 
-**A fixture must not be named after the term its smoke asserts on.** The sidebar renders every file in the working directory by name and nvim's `:e` echoes the filename, so a fixture carrying the asserted word satisfies the assertion whether or not the feature did anything — a permanent silent pass, not a flake. Fixture names and asserted terms are therefore deliberately unlike: a heading lives only in a file's content. The one exception is the sidebar-population smoke, where the rendered row is the feature under test.
+**A fixture must not be named after the term its smoke asserts on.** The sidebar renders every file in the working directory by name and nvim's `:e` echoes the filename, so a fixture carrying the asserted word satisfies the assertion whether or not the feature did anything — a permanent silent pass, not a flake. Fixture names and asserted terms are therefore deliberately unlike: a heading lives only in a file's content. The exceptions are the smokes whose subject is a tree row, such as the sidebar-population and launch-reveal smokes, where the rendered row is the feature under test; [`fixture_guards.rs`](#smoke_headlessfixture_guardsrs) lists each such term.
 
 That rule has three mechanical guards, because the fixture and the assertion it can disarm sit in different files: one over the sidebar filler names, one over the temp working directory's fixed path components, which the header bar renders as page text, and one over the smoke-owned relaunch fixtures.
 
@@ -690,7 +711,7 @@ Being scrupulous about this is the point of the section.
 - **The strict press ordering.** That a click focuses the window is proven, because closing the clicked pane closes the right one. That the focus change is sent before the press is not observable, since Neovim's own left-mouse handling also moves the current window. It is guaranteed by construction — both ride one ordered channel — and must not be ticked.
 - **The recorded pointer position.** The scroll handler names its target grid explicitly, so a stuck recorded position would still scroll the right window and the smoke would still pass. Nothing asserts on what the motion controller produces.
 - **The press-pinned grid and button.** No smoke drags from one pane into another, so there is no other grid for a wandering drag to be retargeted to and the pin is never discriminating. Proving it needs a split, a press in one pane, and a release in the other.
-- **The strip's active/inactive treatment reaches no pixel, and nothing else carries that signal.** OCR reads neither a font weight nor a dim — the same shape as the sidebar's current-file bold below — so the status-bar smoke asserts both strips present and nothing about which one is emphasised. Measured: inverting `draw_pane`'s active-pane predicate leaves the whole suite green. The strip is the only surface [Window structure](../../../notes/wolf-gnome/window-structure.md) allows that signal on, so no assertion anywhere observes which pane is active.
+- **The strip's bold reaches no pixel.** The page-click smoke in [`smoke_headless/preview.rs`](#smoke_headlesspreviewrs) reads which strip is active from raw pixels, as the inactive primary line's ink scaled by `STATUSBAR_INACTIVE_ALPHA` against the active one's, so the dim is observed. That reading sees colour and not weight, and OCR reads neither a weight nor a dim — the same shape as the sidebar's current-file bold below — so nothing observes `primary_bold`.
 - **Three further properties of the per-pane status bar reach no pixel.** A clipped path is indistinguishable from a short one, and an overflow would have to be arranged deliberately; no smoke opens an unnamed buffer in a pane, so `wolf_core::pane_status`'s `[No Name]` and empty-display-path arms are table-tested only; and deleting the status refresh on the layout-rebuild path draws `[No Name]` for exactly one frame, which a settled capture cannot see. `statusbar_text` and `draw_pane` are demonstrably read in every case.
 - **The inset's composition test discriminates nothing inside the inset itself.** Measured: `cell_at` clamps into the grid and the division never returns a zero dimension, so the property holds for every input the pair can produce, and it reddens only under an edit to `geometry::cell_at`'s clamp. Read it as a guard on that clamp surviving, not as coverage of the inset — the two seams' own tables are what cover the arithmetic.
 - **No scrollbar reaches a pixel.** `scrollbar_thumb` and `scrollbar_thumb_color` are table-tested and `draw_pane` demonstrably reads both, but the thumb is an eight-pixel grey mark in a padding gutter and OCR cannot read one: tesseract's `contains` is a word test on a page of glyphs. Nothing observes that scrolling moves the thumb, or that a buffer fitting its window draws none.
@@ -744,7 +765,8 @@ Being scrupulous about this is the point of the section.
 - **The restored `sidebar.visible` reaches no pixel.** No relaunch smoke hides the sidebar, quits and relaunches. The seam is table-tested and the applier demonstrably reads it; the write side is the half that could regress silently, since persisting the live visibility rather than the preference would hide the sidebar after any project-less session.
 - **The per-tab sidebar preference and empty state follow the selection in no smoke.** None toggles the sidebar in one tab and selects another, and none selects an empty tab beside a folder tab, so `apply_selected_tab` on a switch and `settle_reroot`'s empty-tab guard rest on the code alone.
 - **Minimize, in either direction.** `cage` ignores a minimize request, so no smoke reaches `on_window_minimized`, the `minimize()` before `present()` of a window saved minimized, or a minimized window saved last; the minimized class is [`stacking.rs`](#stackingrs)'s and [`app_state_seam.rs`](#app_state_seamrs)'s tables alone, and so is a minimized window's present at once.
-- **Neither the current-file bold nor manual expansion reaches a pixel.** OCR reads no font weight and no expansion state, so the bound-label registry — the only thing keeping the highlight on the file being edited while the version gate suppresses the rebuild — is unverified in both suites, and every assertion about the current file reads a revealed row's presence rather than its weight. The user-visible payoff of the version gate goes the same way, as does its inverse, a collapse on a version advance, which is recorded as a limitation in [Present limitations](../../../notes/wolf-gnome/present-limitations.md) instead.
+- **Neither the current-file bold, the revealed row's selection nor manual expansion reaches a pixel.** OCR reads no font weight, no highlight and no expansion state, so the bound-label registry — the only thing keeping the highlight on the file being edited while the version gate suppresses the rebuild — is unverified in both suites, and every assertion about the current file reads a revealed row's presence rather than its weight. The user-visible payoff of the version gate goes the same way, as does its inverse, a collapse on a version advance, which is recorded as a limitation in [Present limitations](../../../notes/wolf-gnome/present-limitations.md) instead.
+- **The reveal tick's withdrawal while the tree is unmapped, and its `map` re-arm.** No smoke hides the sidebar between a reveal and its scroll, so nothing observes that the frame clock goes idle or that an owed scroll runs on the next show. Measured: deleting the re-arm leaves `tree_reveal.rs` green, because the launch reveal runs with the list mapped ([The sidebar reveal](../../../notes/wolf-gnome/the-sidebar-reveal.md)).
 - **The visibility gate's deferral and its one catch-up.** No smoke hides the sidebar mid-traversal and re-shows it, so nothing observes a batch that landed while hidden reaching the widgets. The gate's own table pins the rule; the relay from the shell's single visibility site is the untested half.
 - **That the coalescer arms a real `glib` source.** Only the pure state machine is tested, and every smoke asserts on a settled end state, so a coalescer that performed its refresh on every request — arming nothing at all — would pass every one of them.
 - **A configured font family reaches no pixel.** No smoke changes the family: doing so would change every glyph and put the whole OCR calibration at risk for no added confidence, since [`paint_golden.rs`](#paint_goldenrs) covers family resolution headlessly. What a smoke does prove about the config is the font size, through two launches whose `winwidth(0)` readbacks differ.

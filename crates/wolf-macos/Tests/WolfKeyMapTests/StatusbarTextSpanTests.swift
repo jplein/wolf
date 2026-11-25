@@ -134,8 +134,8 @@ final class StatusbarTextSpanTests: XCTestCase {
   // MARK: - Case 4: preview, wide pane — centered like the editor, plus full-width
 
   func testPreviewWidePaneIsCenteredAndFullWidthIsFlush() {
-    // A wide preview at the ~90-char default is framed to the capped, centered gridRect, so its
-    // statusbar text indents by paintOffsetX exactly like the editor's.
+    // A wide preview at the ~90-char default centres its page content on the capped gridRect, so
+    // its statusbar text indents by paintOffsetX exactly like the editor's.
     let gridWidth: Double = 1400.0
     let paintOffsetX = expectedPaintOffsetX(gridWidth: gridWidth)
     XCTAssertGreaterThan(

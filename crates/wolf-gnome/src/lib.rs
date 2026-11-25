@@ -52,6 +52,7 @@
 //! - [`mod@clipboard_ui`]: the Copy and Paste guards and what crosses each way.
 //! - [`mod@preview_link`]: the URI arithmetic behind a link clicked inside the preview.
 //! - [`mod@preview_ui`]: the Markdown preview's guards, reloads and statusbar lines.
+//! - [`mod@preview_width`]: the root style that caps and centres a preview page's content.
 //! - [`mod@preview_coalescer`]: when the preview's render runs during a typing burst.
 //! - [`mod@tabs_ui`]: the native tabs of one window, each with a captive Neovim of its own.
 //! - [`mod@terminal`]: how a terminal pane paints its session and routes its input.
@@ -145,6 +146,7 @@ pub mod picker;
 pub mod preview_coalescer;
 pub mod preview_link;
 pub mod preview_ui;
+pub mod preview_width;
 pub mod ready_seam;
 pub mod refresh_coalescer;
 pub mod render;

@@ -1,4 +1,4 @@
-// A Markdown preview as the active pane of a split, over a live core, for key tests.
+// A Markdown preview as the active pane, beside its source or alone, over a live core.
 
 import AppKit
 import WebKit
@@ -7,8 +7,9 @@ import XCTest
 
 @testable import WolfMacOS
 
-/// A `TerminalViewFixture` whose container shows a Markdown preview as the active pane of a
-/// two-pane split, its source in the other pane, hosted in a real `WKWebView`.
+/// A `TerminalViewFixture` whose container shows a Markdown preview as the active pane, hosted
+/// in a real `WKWebView`: by default in a two-pane split, its source in the other pane, or with
+/// `split: false` as the lone pane, which the preview replaces in place.
 ///
 /// The page is never waited for, and no test may depend on it: where the gate runs, the
 /// worker's Seatbelt profile keeps WebKit from issuing the sandbox extensions its WebContent
@@ -30,9 +31,11 @@ final class PreviewViewFixture {
   var handle: WolfCoreHandle { base.handle }
   var window: OffscreenWindow { base.renderer.window }
 
-  /// Splits the editor and previews `probe.md` in the new pane, which becomes the active pane,
-  /// over `initLua` when given.
-  init?(initLua: String? = nil, file: StaticString = #filePath, line: UInt = #line) {
+  /// Splits the editor, unless `split` is `false`, and previews `probe.md` in the current pane,
+  /// which becomes the active pane, over `initLua` when given.
+  init?(
+    initLua: String? = nil, split: Bool = true, file: StaticString = #filePath, line: UInt = #line
+  ) {
     guard let base = TerminalViewFixture(initLua: initLua, file: file, line: line) else {
       return nil
     }
@@ -62,19 +65,31 @@ final class PreviewViewFixture {
     }
 
     base.typeEx("edit \(probePath)")
-    guard base.wake(until: { handle.is_markdown_active() }) else {
+    // The starting buffer is already Markdown and open_preview() overtakes queued keys, so the
+    // wait is on the probe's path: else the preview shows the start buffer and :edit replaces it.
+    var current = ""
+    guard
+      base.wake(until: {
+        current = handle.current_file().toString()
+        return current == probePath && handle.is_markdown_active()
+      })
+    else {
       XCTFail(
-        "premise: :edit \(probePath) never made a Markdown buffer active", file: file, line: line)
+        "premise: :edit \(probePath) must make the probe the current Markdown buffer, but"
+          + " current_file() reads \"\(current)\", Markdown active"
+          + " \(handle.is_markdown_active())", file: file, line: line)
       base.shutdown()
       return nil
     }
-    base.neovimChord("v")
-    guard base.wake(until: { container.paneCount == 2 }) else {
-      XCTFail(
-        "premise: <C-w>v must split the editor into two panes: \(container.paneCount)",
-        file: file, line: line)
-      base.shutdown()
-      return nil
+    if split {
+      base.neovimChord("v")
+      guard base.wake(until: { container.paneCount == 2 }) else {
+        XCTFail(
+          "premise: <C-w>v must split the editor into two panes: \(container.paneCount)",
+          file: file, line: line)
+        base.shutdown()
+        return nil
+      }
     }
     let scratch = handle.open_preview()
     var webViews: [WKWebView] = []
@@ -101,11 +116,12 @@ final class PreviewViewFixture {
       previewCount += 1
     }
     let others = handle.windows().map { $0.win() }.filter { $0 != previewWin }
-    guard previewCount == 1, previewWin == container.activeWin, others.count == 1 else {
+    let otherCount = split ? 1 : 0
+    guard previewCount == 1, previewWin == container.activeWin, others.count == otherCount else {
       XCTFail(
-        "premise: one preview, the active pane, beside one source window: \(previewCount)"
-          + " preview(s), preview window \(previewWin), active window \(container.activeWin),"
-          + " other windows \(others)", file: file, line: line)
+        "premise: one preview, the active pane, beside \(otherCount) source window(s):"
+          + " \(previewCount) preview(s), preview window \(previewWin), active window"
+          + " \(container.activeWin), other windows \(others)", file: file, line: line)
       base.shutdown()
       return nil
     }

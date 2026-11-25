@@ -623,7 +623,7 @@ Purpose: the pure codec between the live pane tree, whose leaves are pane ids, a
 
 #### `pane_view.rs`
 
-Purpose: one tab's GTK glue: `layout`'s pane tree as nested `gtk::Paned`, a `gtk::Overlay` per window, the drawer.
+Purpose: one tab's GTK glue: `layout`'s tree as nested `gtk::Paned`, a `gtk::Overlay` per window, the drawer.
 
 **Public API**
 
@@ -636,14 +636,14 @@ Purpose: one tab's GTK glue: `layout`'s pane tree as nested `gtk::Paned`, a `gtk
 
 **Decisions**
 
-- A dragged divider writes the tree's weights, since rebuilds destroy paneds, and re-applies on each `max-position` notify, since nested allocation reports intermediate values; a resize's clamp is refused ([why](../../../notes/wolf-gnome/pane-weights-and-dividers.md)).
-- `request_layout_rebuild` waits for a wake with a grid, then applies the [extras](../../../notes/wolf-gnome/application-state.md#restoring-the-extras); views are captured only at [§4's moments](../../../notes/wolf-gnome/application-state.md#capture-moments).
+- A dragged divider writes the tree's weights, since rebuilds destroy paneds, re-applying per `max-position` notify against nested allocation's intermediate values; a resize's clamp is refused ([why](../../../notes/wolf-gnome/pane-weights-and-dividers.md)).
+- `request_layout_rebuild` applies the [extras](../../../notes/wolf-gnome/application-state.md#restoring-the-extras) once a wake brings a grid; views are captured only at [§4's moments](../../../notes/wolf-gnome/application-state.md#capture-moments).
 - [`preview_coalescer.rs`](#preview_coalescerrs)'s state is per tab: a rebuild replaces `panes`.
-- Pointer input is one all-button `gtk::GestureDrag` ([why](../../../notes/crates/wolf-gnome/src/pane_view.rs.md#one-drag-gesture)), pinning target and button at press; editor panes take only the primary.
-- A terminal pane paints through its own [`TerminalCanvas`](terminal/README.md#canvasrs) ([why](../../../notes/wolf-gnome/terminal-panes.md)).
+- An area's pointer input is one all-button `gtk::GestureDrag` ([why](../../../notes/crates/wolf-gnome/src/pane_view.rs.md#one-drag-gesture)), pinning target and button at press; editors take only the primary. A preview page spans its pane below the strip ([why](../../../notes/wolf-gnome-decisions.md#the-previews-content-width)); its capture-phase primary click activates the pane, claiming nothing ([why](../../../notes/wolf-gnome/window-structure.md)).
+- A terminal pane paints through [`TerminalCanvas`](terminal/README.md#canvasrs) ([why](../../../notes/wolf-gnome/terminal-panes.md)).
 - Each pane's status and `b:wolf_full_width` cache per wake: a use-time read re-enters `draw_pane`'s guard, and paint, pointer and resize must agree.
-- One funnel sends every grid resize, against the size last requested, not the lagging snapshot; it runs each wake, as a lifted cap re-divides a still allocation.
-- The drawer's paned exists only while one is bound, re-taking the tab's share each wake; a zoom shows its host alone, touching no weight or share ([why](../../../notes/wolf-gnome/window-structure.md)). `reset_after_restart` clears the drawer `detect_closes` misses.
+- One funnel sends each wake's grid resizes against the last requested size, not the lagging snapshot: a lifted cap re-divides a still allocation.
+- The drawer's paned exists only while bound, re-taking its share each wake; a zoom shows its host alone ([why](../../../notes/wolf-gnome/window-structure.md)). `reset_after_restart` clears the drawer `detect_closes` misses.
 
 #### `pane_zoom.rs`
 
@@ -761,6 +761,24 @@ Purpose: the pure, GTK-free rulebook for the Markdown preview pane — its gates
 - Liveness is read before the buffer-kind gate, so a wedged Neovim reads as wedged, not as a non-Markdown buffer. `preview_file_press` has no buffer-kind gate at all: a linked file's Markdown-ness is core's, unanswerable here without the filesystem.
 - Both `PreviewLoad` comparisons key on the source bufnr, never the `changedtick`: two freshly opened files share a tick, so a tick-keyed source switch would swap a linked file's body under the previous file's base URI.
 - `preview_status`'s `abs_path` is the source path verbatim: [`pane_view.rs`](#pane_viewrs) persists it as a preview pane's `path`, which [§2](../../../specs/application-state.md#pane) requires to be absolute.
+
+#### `preview_width.rs`
+
+Purpose: the pure, GTK-free root style that caps and centres a preview page's content, the document that carries it in its `<html>` tag, and the script that sets it live. [The preview's content width](../../../notes/wolf-gnome-decisions.md#the-previews-content-width) owns why the page caps rather than the view; [`pane_view.rs`](#pane_viewrs) is the glue.
+
+**Public API**
+
+- `root_style(cap, padding) -> String` — `name:value` declarations joined by `;`, padding on every side, and a `max-width` only where [`editor_inset.rs`](#editor_insetrs)'s `grid_rect` would cap.
+- `styled_document(html, root_style) -> String` — the style inserted after the first `<html` ahead of `<head>`, with `&` and `"` escaped; `html` unchanged for an empty style or no such tag.
+- `apply_root_style_js(root_style) -> String` — sets the root's `style` attribute to exactly the value, carried as a JSON literal.
+
+**Decisions**
+
+- Nothing from `<head>` on is touched, so a caller reads the head offset and the body from the raw document and compares raw to raw.
+
+**Gotchas**
+
+- `grid_rect` floors its centring offset while the page centres at the exact one, so capped content can start up to 1 px right of a capped editor's column in the same pane.
 
 #### `ready_seam.rs`
 
@@ -1111,25 +1129,26 @@ Purpose: the pure, GTK-free gate every refresh of the sidebar's two pages passes
 
 #### `tree_view.rs`
 
-Purpose: the GTK glue for the file-tree sidebar — a `gtk::ListView` over a `gtk::TreeListModel`.
+Purpose: the file-tree sidebar, a `gtk::ListView` over a `gtk::TreeListModel`.
 
 **Public API**
 
 - `build(core, opener, area, start, root_label) -> TreeHandle` — a file click tries `opener` first; `area` is a [`picker.rs`](#pickerrs) `FocusTarget`; `start` is false in the empty state, where nothing is walked.
 - `widget()` — [`sidebar.rs`](#sidebarrs)'s Files page.
 - `release_core(core)`, on a tab's close.
-- `on_render_wake()`, `close()`, `set_sidebar_visible(shown)`, relayed through `sidebar.rs` and true only while a shown sidebar is on Files, and `reroot(root_label)`, from [`shell.rs`](#shellrs)'s one settle point; this module reads no cwd.
+- `on_render_wake()`, `close()`, `set_sidebar_visible(shown)`, relayed through `sidebar.rs` and true only while a shown sidebar is on Files, and `reroot(root_label)`, from [`shell.rs`](#shellrs); this module reads no cwd.
 
 **Decisions**
 
-- The root store holds one item: a synthetic `Dir` named after the working directory whose rel-path is the empty cwd sentinel, so the create-func needs no special case. `remove_all` destroys its expanded state, so it is re-expanded after every rebuild and before a reveal walks ancestors.
-- Children materialize lazily through `wolf_core::tree::TreeIndexCache` under rule R1, on `children_for`: the memo and the entries are borrowed inside one statement touching no widget, because GTK re-enters the create-func and a borrow held across `set_expanded` or `set_list_row` panics.
-- Only a traversal batch is coalesced ([`refresh_coalescer.rs`](#refresh_coalescerrs)); every other refresh is immediate, and all pass both gates in [`tree_gate.rs`](#tree_gaters). A pending reveal retries even on a skipped rebuild.
+- The root store holds one synthetic `Dir` named after the working directory, whose rel-path is the empty cwd sentinel, so the create-func needs no special case. `remove_all` destroys its expanded state, so every rebuild re-expands it.
+- Children materialize lazily through `wolf_core::tree::TreeIndexCache` under rule R1: memo and entries are borrowed in one statement touching no widget, because GTK re-enters the create-func and a borrow held across `set_expanded` or `set_list_row` panics.
+- Only a traversal batch is coalesced ([`refresh_coalescer.rs`](#refresh_coalescerrs)); every other refresh is immediate, and all pass both gates in [`tree_gate.rs`](#tree_gaters).
+- A pending reveal retries on every refresh, and a rebuild re-reveals the current file. The scroll runs from a frame-clock tick, while mapped and after layout: an earlier `scroll_to` draws rows blank ([The sidebar reveal](../../../notes/wolf-gnome/the-sidebar-reveal.md)).
 - The current-file bold moves through a registry of bound labels, which is what the version gate costs: a suppressed rebuild re-binds no row.
 
 **Gotchas**
 
-- Manual expansion below the root does not survive a root-store rebuild; [Present limitations](../../../notes/wolf-gnome/present-limitations.md) owns it and what preserving it would cost.
+- Manual expansion below the root does not survive a rebuild; see [Present limitations](../../../notes/wolf-gnome/present-limitations.md).
 
 #### `window.rs`
 

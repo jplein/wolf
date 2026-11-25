@@ -94,8 +94,8 @@ final class PaneOcclusionTests: XCTestCase {
   // MARK: - The occluding cases (the only two that may return `true`)
 
   func testExactContainmentIsOccluded() {
-    // The common case: the frame comes from the same `gridRect(ofPane:)` expression, so the rects
-    // are bit-identical, and zero tolerance must still count equality as containment.
+    // Equality is the boundary case: an occluder flush with the grid rect on every edge still
+    // covers it, so zero tolerance must still count equality as containment.
     assertOcclusion(
       gridRect: gridRect,
       by: occluder(frame: exactFrame),

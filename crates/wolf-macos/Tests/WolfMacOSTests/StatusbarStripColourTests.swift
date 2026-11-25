@@ -297,9 +297,12 @@ final class StatusbarStripColourTests: XCTestCase {
       let bounds = container.bounds
       let sourceMidX =
         w.midX < bounds.midX ? bounds.minX + bounds.width * 3 / 4 : bounds.minX + bounds.width / 4
+      // The web view reaches its pane's edges, and the divider's band beside it, so the strip
+      // band keeps to the padding-inset span the strip text sits on.
+      let padding = CGFloat(EditorInset.padding)
       assertStage(
         "preview", background, normal: normal,
-        strip: Self.band(minX: w.minX, maxX: w.maxX),
+        strip: Self.band(minX: w.minX + padding, maxX: w.maxX - padding),
         grid: NSRect(
           x: sourceMidX - Self.blockSide / 2, y: bounds.midY, width: Self.blockSide,
           height: Self.blockSide),

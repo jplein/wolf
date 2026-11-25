@@ -8,6 +8,8 @@ A few read something else. [`PreviewKeyEquivalentTests.swift`](#previewkeyequiva
 bazel test //crates/wolf-macos:WolfMacOSTests
 ```
 
+[`PreviewMarginTests.swift`](#previewmargintestsswift) samples no pixels either: it reads a preview web view's frame, its recorded root style and AppKit's hit test.
+
 **Adding a file means editing `srcs`.** As for [`WolfKeyMapTests`](../WolfKeyMapTests/README.md), the target's `srcs` is a hand-maintained list, not a glob, so a file missing from it never compiles and never runs. Helpers such as `OffscreenRenderer.swift` are listed too.
 
 ## What renders under `bazel test`
@@ -85,11 +87,14 @@ Purpose: A `PaneContainerView` over a [`LiveCore`](#livecoreswift), hosted offsc
 
 #### `PreviewViewFixture.swift`
 
-Purpose: A [`TerminalViewFixture`](#terminalviewfixtureswift) whose container shows a short Markdown file's preview as the active pane of a two-pane split, beside its source, in a real `WKWebView`. It fails the calling test on a `premise:` and asserts nothing else.
+Purpose: A [`TerminalViewFixture`](#terminalviewfixtureswift) whose container shows a short Markdown file's preview as the active pane, in a real `WKWebView`: beside its source in a two-pane split, or alone with `split: false`, replacing the lone pane. It fails the calling test on a `premise:` and asserts nothing else.
 
-**Public API** — `PreviewViewFixture(initLua:)`, `nil` once a premise has failed, with `initLua` passed to the base fixture; `web`, `previewWin`, `probePath`; `container`, `handle` and `window` from the base fixture; `shutdown()`.
+**Public API** — `PreviewViewFixture(initLua:split:)`, `nil` once a premise has failed, with `initLua` passed to the base fixture; `web`, `previewWin`, `probePath`; `container`, `handle` and `window` from the base fixture; `shutdown()`.
 
-**Gotchas** — the page never loads, for the reason [What renders under `bazel test`](#what-renders-under-bazel-test) gives, so a test may use the web view's responder chain but nothing the page would draw or answer.
+**Gotchas**
+
+- The page never loads, for the reason [What renders under `bazel test`](#what-renders-under-bazel-test) gives, so a test may use the web view's responder chain but nothing the page would draw or answer.
+- After `:edit` it waits for `current_file()` to be the probe's path, not for a Markdown buffer. The starting buffer is already Markdown, and Neovim answers the `open_preview()` request ahead of typed keys still queued, so a wait on Markdown alone previews the starting buffer, which the late `:edit` then replaces.
 
 #### `LighthouseColours.swift`
 
@@ -163,6 +168,15 @@ Purpose: The vendored Lighthouse's expected colours, for the tests that render u
 - WebKit's web-process step is modelled, since no page loads: the page leaves the chord unhandled and its binding is `noop:`. If the sink receives `noop:`, the test resends the event to `NSApp.mainMenu`, as WebKit's resend through `NSApp.sendEvent` would.
 - Every item with a key equivalent is retargeted to a recorder that enables everything, so `validateMenuItem` and `AppDelegate`'s actions reach no test. A `control:` leg first fires each chord with the container first responder, so a later miss is the chain's.
 - Each delivery prints a `KEYROUTE` line: responder, chord, whether the window claimed it, whether the chain passed `noop:`, and the item fired. Whether the window claims it is printed, not asserted, because without a web process the value is WebKit's.
+
+#### `PreviewMarginTests.swift`
+
+**Covers** — over [`PreviewViewFixture.swift`](#previewviewfixtureswift): a lone capped preview's web view spans the container's width below the strip, and its padding gutters and side margin hit-test to it; `previewRootStyle(forWin:)` holds the capped `PreviewWidthSeam.rootStyle`, and after `toggle_full_width()` the frame still spans and the style caps nothing. In the default split, a point 2 pt inside the preview's pane from the divider hit-tests to the container, which drags the divider, and the outer gutter to the web view.
+
+**Gotchas**
+
+- A hit test stands in for the wheel: AppKit sends a scroll-wheel or mouse event to the view `hitTest(_:)` returns, so a point that reaches the web view is one whose wheel scrolls the page. No page loads, so nothing reads how far it scrolls or where WebKit lays out the content.
+- The lone-pane tests take as a premise that the capped content and its padding are narrower than the container, or there is no margin to test.
 
 #### `InstallCommandMenuTests.swift`
 
@@ -336,7 +350,7 @@ Purpose: Checks that a pane's statusbar strip paints Lighthouse's `Normal` backg
 
 **Gotchas**
 
-- The strip band is the top 2 points of a pane, inset 2 from its sides, above the text's vertical padding, so it holds no glyph.
+- The strip band is the top 2 points of a pane, inset 2 from its sides, above the text's vertical padding, so it holds no glyph. A preview's band keeps a further `EditorInset.padding` inside its web view's sides, which reach the pane's edges and, beside the divider, its band.
 - `previewDidFinishLoad(win:)` stands in for WebKit's `didFinish`, which never comes here, so `PaneOcclusion` skips the preview's grid and its frame is never read.
 - The window is no `MainWindow` and Lighthouse leaves `WolfTitlebar` unset, so a strip that follows the titlebar paints the black fallback.
 - Every stage prints a table row of the expected colour, `read_frame()`'s default background, and each region's mean and share.

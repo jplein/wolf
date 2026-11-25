@@ -371,7 +371,7 @@ Purpose: The editor area: one flipped first-responder `NSView` painting every pa
 
 **Decisions**
 
-- One `geometry(_:fullWidth:)` call sets web-view frame, occlusion and statusbar span: no frame paints preview alignment without its web view.
+- A preview's web view spans its pane below the strip, and its page carries the cap ([why](../../../../notes/wolf-macos-decisions.md#a-previews-content-width)).
 - Grids are skipped only under an opaque, loaded preview web view; the flag survives reloads: WebKit shows the outgoing document.
 - Scroll follows `scrollingDeltaY`'s natural-scroll-aware sign; `isDirectionInvertedFromDevice` double-corrects.
 - The drawer is a pane outside `tree`, excluded from leaves, neighbours, splits ([why](../../../../notes/wolf-macos-decisions.md#terminal-panes)).

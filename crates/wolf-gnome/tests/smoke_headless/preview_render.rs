@@ -44,8 +44,9 @@ const CODEHL_SOURCE_FILE: &str = "cbhl.md";
 /// row would be the 24 px gap BETWEEN the two blocks, and every rectangle derived
 /// from `web_top` would be one block too low. A paragraph guarantees a run of pure
 /// body background at the top of the document — the same mechanism
-/// `preview_document_follows_the_configured_appearance_under_cage` measured at
-/// absolute row 159.
+/// `preview_document_follows_the_configured_appearance_under_cage` measured with the
+/// content's top at absolute row 159. The page's root padding adds a run of its own above
+/// the paragraph, so `web_top` is the view's top edge, at 139 by derivation.
 ///
 /// ## Why it carries no markdown syntax
 ///
@@ -55,8 +56,8 @@ const CODEHL_SOURCE_FILE: &str = "cbhl.md";
 /// plain prose contributes no chroma at any threshold.
 ///
 /// MEASURED (GTK 4.22.4, libadwaita 1.9.0, WebKitGTK 2.52.4, `cage` 0.3.0, 1280x720):
-/// this paragraph WRAPS to two lines, so the first `pre` block starts 72 rows below
-/// `web_top` rather than 48. Nothing asserts that offset — the blocks are located
+/// this paragraph WRAPS to two lines, so the first `pre` block starts 72 rows below the
+/// content's top rather than 48, and 92 below `web_top`, the root padding above it. Nothing asserts that offset — the blocks are located
 /// from the pixels — but a longer paragraph pushes both blocks down, and the scan
 /// only reaches [`preview_theme_band_rows`]'s last row (600 at the pinned output).
 ///
@@ -216,7 +217,7 @@ const CODEHL_LANGTREE_OK: &str = "OK";
 /// It is what LOCATES the two code blocks: a `pre` paints this colour across the
 /// document's whole content width, while the 24 px gap between two blocks is 100 %
 /// [`PREVIEW_DARK_BG`] and 0 % this, so the gap breaks a run cleanly.
-const CODEHL_PRE_BG: Rgb8 = (0x16, 0x16, 0x16);
+pub(crate) const CODEHL_PRE_BG: Rgb8 = (0x16, 0x16, 0x16);
 
 /// The least CHROMA a pixel must carry to count as highlighter ink.
 ///
@@ -623,7 +624,7 @@ exit 0
 /// | 1 | `status.success()` | precondition — the cage scenario ran to completion | none; do not invent one | n/a |
 /// | 2 | the PNG is present and decodes at exactly `CAGE_OUTPUT_W_EXPECTED` x `CAGE_OUTPUT_H_EXPECTED` | precondition — and what makes every derived rectangle mean what it says | none; do not invent one | n/a |
 /// | 3 | `tabpagebuflist()`, sorted, is the preview scratch plus the source | precondition — a preview pane exists, and exactly two panes do | none; do not invent one | green: `Preview: cbhl.md,cbhl.md` |
-/// | 4 | `web_top` is locatable | precondition — the document's own top edge, self-located from the pixels | none; do not invent one | green: absolute row 159 |
+/// | 4 | `web_top` is locatable | precondition — the web view's own top edge, self-located from the pixels | none; do not invent one | green: absolute row 159 measured, at the content's top; 139 by derivation, the view's top above the root padding, not re-measured |
 /// | 5 | exactly TWO majority-[`CODEHL_PRE_BG`] runs of at least [`CODEHL_MIN_BLOCK_ROWS`] rows, of EQUAL height | precondition — BOTH fences rendered as `pre` blocks, and NEITHER was clipped by the scan limit. The run COUNT cannot see a clipped block: a truncated run is still exactly one run, and a control rect short of its subject can only LOWER claim 7's count, which would make the control read stronger than it is. | none; do not invent one | green: rows 231..375 and 399..543, both 144 tall, 24-row gap at 0 % `CODEHL_PRE_BG`, 57 rows of margin below. MEASURED on a rejected six-line fixture: two runs, the second clipped to 153 rows against 192, 20 % of the control unsampled. |
 /// | 6 | run 1 carries at least [`CODEHL_MIN_CHROMA_PX`] chromatic pixels | **discriminator** — the vendored parsers reach the rendered document (feat-list row "Syntax-highlighted code blocks") | in `runtime/nvim/init.lua`, revert the PARSERS probe to a bare sibling `uv.fs_stat` (leave the queries fallback). `parser/go.so` is then off the runtimepath, the block renders plain, and this count collapses to the control's level. ISOLATED against the FFI suite, and this is not obvious: all three `wolf-ffi` treesitter tests stay GREEN, because none of them reaches `init.lua`'s environment fallback — two stage real siblings in a temp directory and the third loads the `.so` by absolute path. It is NOT isolated from claim 8, which reddens with it. | green: 1209 at threshold 32, max chroma 108, over 50,976 pixels |
 /// | 7 | run 2 carries at most [`CODEHL_MAX_CHROMA_PX`] chromatic pixels | **in-capture control** — the chroma in run 1 comes from the highlighter and not from the renderer | none of its own. On a host with subpixel antialiasing it would fire in the GREEN run if `CODEHL_CHROMA_MIN` were ever set too low; on this host, whose antialiasing is grayscale, that failure mode is invisible and the threshold's legal window is what guards it instead. | green: **0**, at every threshold down to `>= 1`, over all 50,976 pixels |
@@ -1065,7 +1066,8 @@ const CODEGRID_WINS_NAME: &str = "wolf_gnome_code_grid_wins.txt";
 /// the stylesheet became.
 const CODEGRID_HR_COLOUR: Rgb8 = (0x3a, 0x3a, 0x3a);
 
-/// How far below the web view's own top edge the rule's hairline must sit.
+/// How far below the top of the page's content the rule's hairline must sit: the web view's
+/// own top edge plus the root padding `preview_width::root_style` gives the page.
 ///
 /// SIX baseline units. The arithmetic, which is the whole subject of the smoke: with
 /// the inline code element declaring `line-height: 0`, each paragraph is one 24 px line
@@ -1079,7 +1081,7 @@ const CODEGRID_HR_COLOUR: Rgb8 = (0x3a, 0x3a, 0x3a);
 /// of 24.
 ///
 /// MEASURED, three consecutive runs with the declaration and two with it reverted:
-/// 144 x3 against 150 x2, absolute rows 303 and 309 with `web_top` at 159. A fourth
+/// 144 x3 against 150 x2, absolute rows 303 and 309 with the content's top at 159. A fourth
 /// green run with a completely different glyph set also read 144. The feared "no row
 /// matches the rule's colour exactly" outcome — which a fractional device-pixel landing
 /// would produce — did not occur: the match is 354 of 354 sampled columns EXACT on a
@@ -1092,7 +1094,7 @@ const CODEGRID_HR_OFFSET_PX: usize = 144;
 /// RE-TYPED, for the reason [`CODEGRID_HR_COLOUR`] gives.
 const CODEGRID_CHIP_COLOUR: Rgb8 = (0x2b, 0x2b, 0x2b);
 
-/// How many rows below the web view's top edge the chip band covers: the FIRST
+/// How many rows below the top of the page's content the chip band covers: the FIRST
 /// paragraph's line box and nothing else.
 ///
 /// One baseline unit, so the band ends before the second paragraph's line box begins
@@ -1100,8 +1102,8 @@ const CODEGRID_CHIP_COLOUR: Rgb8 = (0x2b, 0x2b, 0x2b);
 /// bands summed would let two surviving chips cover for one that vanished.
 ///
 /// MEASURED: exact-chip pixels occupy three 20-row bands at absolute rows 163..182,
-/// 211..230 and 259..278, each inside its own 24 px line box. With `web_top` at 159 the
-/// first of those is offsets 4..23, entirely inside this band, and the second starts at
+/// 211..230 and 259..278, each inside its own 24 px line box. With the content's top at 159
+/// the first of those is offsets 4..23, entirely inside this band, and the second starts at
 /// offset 52, entirely outside it.
 const CODEGRID_CHIP_BAND_PX: usize = 24;
 
@@ -1295,8 +1297,8 @@ exit 0
 /// | 1 | `status.success()` | precondition — the cage scenario ran to completion | none; do not invent one | n/a |
 /// | 2 | the PNG is present and decodes at the pinned output size | precondition | none; do not invent one | n/a |
 /// | 3 | `tabpagebuflist()`, sorted, is the preview scratch plus the source | precondition — a preview pane exists, and exactly two panes do | none; do not invent one | n/a |
-/// | 4 | `web_top` is locatable, and a row matching [`CODEGRID_HR_COLOUR`] exists below it | precondition — both ends of the measured distance were found | none; do not invent one | green: `web_top` 159, rule at absolute 303 |
-/// | 5 | `hr_row - web_top` is exactly [`CODEGRID_HR_OFFSET_PX`] | **discriminator** — three lines carrying inline code each occupy exactly one baseline unit | delete `line-height: 0;` from `body.wolf-markdown code` in `wolf-core`'s `markdown/base.css`. NOT isolated: `markdown_render.rs`'s declared-value test reddens too, and the PAIRING is the diagnosis — a red smoke over a RED declared-value test says the declaration went missing, while a red smoke over a GREEN one says the engine stopped honouring it, which is a very different investigation. | green: 144, three consecutive runs. Red: 150, two consecutive runs. 150 / 24 = 6.25. |
+/// | 4 | `web_top` is locatable, and a row matching [`CODEGRID_HR_COLOUR`] exists below it | precondition — both ends of the measured distance were found | none; do not invent one | green: content top 159, rule at absolute 303. `web_top`, the view's own top, is 139 by derivation, 159 less `EDITOR_PADDING_PX`, not re-measured |
+/// | 5 | `hr_row - (web_top + EDITOR_PADDING_PX)` is exactly [`CODEGRID_HR_OFFSET_PX`] | **discriminator** — three lines carrying inline code each occupy exactly one baseline unit | delete `line-height: 0;` from `body.wolf-markdown code` in `wolf-core`'s `markdown/base.css`. NOT isolated: `markdown_render.rs`'s declared-value test reddens too, and the PAIRING is the diagnosis — a red smoke over a RED declared-value test says the declaration went missing, while a red smoke over a GREEN one says the engine stopped honouring it, which is a very different investigation. | green: 144, three consecutive runs. Red: 150, two consecutive runs. 150 / 24 = 6.25. |
 /// | 6 | the first paragraph's band carries at least [`CODEGRID_MIN_CHIP_PX`] exactly-[`CODEGRID_CHIP_COLOUR`] pixels | **discriminator** — `line-height: 0` removed the line box's union term and NOT the chip's background | remove `background-color` from `body.wolf-markdown code` in `wolf-core`'s `markdown/themes/default.css`. ISOLATED, and that is the reason it was added: removing a background changes no geometry, so assertion 5's 144 and the declared-value test both stay green and this assertion alone reddens. | green: 748 in the band, at 20–50 exact pixels per row over the chip's 20 rows. Red: **1**, which is also what proves the wide band carries no contamination from the editor half. |
 #[test]
 fn preview_inline_code_keeps_the_baseline_grid_under_cage() {
@@ -1419,12 +1421,19 @@ fn preview_inline_code_keeps_the_baseline_grid_under_cage() {
     });
 
     // --- Assertion 5 (discriminator): three code lines, three baseline units --
-    let offset = hr_row - web_top;
+    let content_top = web_top
+        + pixel_index(
+            wolf_gnome::editor_inset::EDITOR_PADDING_PX,
+            "the page's root padding",
+        );
+    let offset = hr_row.saturating_sub(content_top);
     assert_eq!(
         offset,
         CODEGRID_HR_OFFSET_PX,
-        "{SMOKE}: the rule's hairline sits {offset} px below the web view's own top edge (absolute \
-         row {hr_row}, web view top {web_top}), not {CODEGRID_HR_OFFSET_PX}. The fixture is three \
+        "{SMOKE}: the rule's hairline sits {offset} px below the content's top (absolute row \
+         {hr_row}, content top {content_top}: the web view's top {web_top} plus the page's root \
+         padding), not {CODEGRID_HR_OFFSET_PX}. An offset larger by a constant with every line \
+         box intact means the root style's padding-top is not EDITOR_PADDING_PX. The fixture is three \
          one-line paragraphs each carrying one inline code element, then the rule: with each line \
          box at one 24 px unit the rule's box lands at 6 x 24 = {CODEGRID_HR_OFFSET_PX}.\n\
          A reading of 150 is the NAMED failure and has one cause: `body.wolf-markdown code` in \
@@ -1449,8 +1458,8 @@ fn preview_inline_code_keeps_the_baseline_grid_under_cage() {
     let chip = SampleRect {
         x0: chip_columns.0,
         x1: chip_columns.1,
-        y0: web_top,
-        y1: web_top + CODEGRID_CHIP_BAND_PX,
+        y0: content_top,
+        y1: content_top + CODEGRID_CHIP_BAND_PX,
     };
     assert!(
         chip.x0 < chip.x1
@@ -1631,8 +1640,8 @@ const PICKOVER_UNSTYLED_FILL: Rgb8 = (0x1d, 0x1d, 0x20);
 /// The least of the SAMPLED rectangle that must be [`PREVIEW_DARK_BG`] in the CONTROL
 /// capture.
 ///
-/// MEASURED 0.9405 across that rectangle's 79,800 pixels, the remaining 5.95 % being
-/// the heading's and the paragraph's ink. This floor leaves fourteen points of
+/// MEASURED 0.9405 across its 79,800 pixels with R's left and top 20 px in, the remaining
+/// 5.95 % being the heading's and the paragraph's ink. This floor leaves fourteen points of
 /// headroom, which is more than a fixture whose paragraph grew by a line could
 /// consume and far above anything a rectangle aimed at the wrong region could reach:
 /// the editor pane's background reads `(20, 22, 27)` and the overlay box's own fill
@@ -1660,8 +1669,9 @@ pub(crate) const PICKOVER_CONTROL_MIN_INK_PX: usize = 500;
 /// the SAMPLE capture.
 ///
 /// The rectangle assertions 7 and 8 read is R inset by [`PICKOVER_CORNER_INSET_PX`] on
-/// the right and the bottom, which puts the box's rounded corner outside it altogether.
-/// MEASURED **exactly 1.0000000000** — all 79,800 of its pixels are the one colour
+/// the right and the bottom, which puts the box's rounded corner outside it altogether,
+/// and started below the picker's selected row. MEASURED **exactly 1.0000000000** — all
+/// 79,800 of its pixels, with R's left and top 20 px in, are the one colour
 /// `(54, 54, 58)` and the histogram of everything else is EMPTY.
 ///
 /// The floor is not raised to that measurement, and the gap is reserved rather than
@@ -1676,8 +1686,9 @@ const PICKOVER_SAMPLE_MIN_FILL_FRACTION: f64 = 0.98;
 
 /// The fewest columns the picker box's visible surface must span INSIDE the web view.
 ///
-/// MEASURED 278 (the web view's left edge at 787, the box's right edge one past 1064),
-/// so this floor leaves 1.4x. It is a discriminator and not a sanity check: a box that
+/// 298 by derivation (the web view's left edge at its pane's, 767, the box's right edge one
+/// past 1064), not re-measured: 278 was measured with that edge at 787, the pane's padding
+/// in. So this floor leaves 1.4x or more. It is a discriminator and not a sanity check: a box that
 /// is on screen but not over the preview reads 0 here, because the only thing that
 /// bounds its visible right edge is then the web view's own left edge.
 ///
@@ -1688,7 +1699,8 @@ const PICKOVER_SAMPLE_MIN_FILL_FRACTION: f64 = 0.98;
 /// inset, so the subtraction that takes it cannot go negative.
 ///
 /// The P1b red capture carries exactly that 0. Read off the retained red PNG:
-/// `web_top` 159, `web_left` 787 and `box_right` 787, so R is degenerate at zero area
+/// `web_top` 159, `web_left` 787 and `box_right` 787 (139, 767 and 767 by derivation with
+/// the view reaching its pane's edge and its strip), so R is degenerate at zero area
 /// and this width reads 0 against the floor. That run reddened assertion 4 first and
 /// never reached here, which is why the 0 is quoted from the PNG rather than from a
 /// failure message — and why this floor is a discriminator rather than decoration.
@@ -1703,8 +1715,9 @@ const PICKOVER_MIN_OVERLAP_W_PX: usize = 200;
 
 /// The fewest rows the picker box's visible surface must span inside the web view.
 ///
-/// MEASURED 312 (the web view's top edge at 159, the box's bottom edge at 471), so
-/// this floor leaves 1.6x. See [`PICKOVER_MIN_OVERLAP_W_PX`]; the two are separate
+/// 332 by derivation (the web view's top edge under the strip, at 139, the box's bottom edge
+/// at 471), not re-measured: 312 was measured with that edge at 159. So this floor leaves
+/// 1.6x or more. See [`PICKOVER_MIN_OVERLAP_W_PX`]; the two are separate
 /// constants so a failure names the axis that collapsed, and its last paragraph applies
 /// here unchanged — this is R's true height, and clearing the floor is what makes the
 /// vertical half of the [`PICKOVER_CORNER_INSET_PX`] subtraction safe.
@@ -2169,6 +2182,13 @@ exit 0
 /// ROUNDED and the preview genuinely shows through R at that corner — see that
 /// constant for why the inset is the declared radius rather than a tuned number.
 ///
+/// S also starts on the first row at or below `web_top` whose columns carry no pixel of
+/// [`PICKOVER_ROW_HIGHLIGHT`], within [`PICKOVER_ROW_HIGHLIGHT_TOLERANCE`]. With the web
+/// view reaching its strip, the picker's selected row lies inside R's top rows, and that
+/// row is the box's own surface but not its fill. S must hold one colour, so it skips the
+/// row. When the preview is painted over the box no highlight reaches S's columns, S starts
+/// at `web_top`, and assertion 8's zeros fire as before.
+///
 /// R's four edges come from two captures, each edge read where that boundary is actually
 /// visible — which is not the same capture for all four, and that asymmetry is the
 /// point:
@@ -2192,9 +2212,13 @@ exit 0
 /// absent from the control, so R's right and bottom edges are where the BOX's surface
 /// stops rather than where some flat colour does.
 ///
-/// Derived at the pinned output size and MEASURED off this smoke's own retained
-/// captures: **R = x 787..1065, y 159..471, 86,736 pixels**, and therefore
-/// **S = x 787..1053, y 159..459, 79,800 pixels**.
+/// Derived at the pinned output size, with the web view reaching its pane's left edge and
+/// its strip: **R = x 767..1065, y 139..471, 98,936 pixels**. A row scan of a kept sample
+/// capture read the selected row across S's columns at rows 139..150, so
+/// **S = x 767..1053, y 151..459, 88,088 pixels**, derived. These are not re-measured. The
+/// readings below were measured off this smoke's own retained captures with R's left and
+/// top edges 20 px further in, at R = x 787..1065, y 159..471 and S = x 787..1053,
+/// y 159..459, 79,800 pixels.
 ///
 /// S is constructed only AFTER both halves of assertion 6 have passed, and the ordering
 /// is load-bearing rather than tidy: under the P1b falsifier `box_right == web_left`, so
@@ -2207,7 +2231,9 @@ exit 0
 /// geometry would assert that the box is where its own constants put it.
 ///
 /// Assertion 9 reads neither rectangle, and deliberately: the box measures 600 x 400
-/// whatever its rows do, so no reading of R or S is an observable of the row metrics. It
+/// whatever its rows do, so no reading of R or S is an observable of the row metrics.
+/// S's top follows the selected row's bottom, but no reading of S tells the row's height,
+/// and under F3 the row ends above `web_top` by derivation, which leaves S at R's top. It
 /// scans [`pickover_fill_reference_band`]'s columns UPWARD from that band instead, and its
 /// region is bounded by the box rather than by a literal — see the comment at the
 /// assertion for the walk and what stops it.
@@ -2238,10 +2264,10 @@ exit 0
 /// | 2 | both PNGs present, each decoding at exactly `CAGE_OUTPUT_W_EXPECTED` x `CAGE_OUTPUT_H_EXPECTED` | precondition — and what makes every derived rectangle below mean what it says | none; do not invent one | n/a |
 /// | 3 | `tabpagebuflist()`, sorted, is the preview scratch plus the other file | precondition — a preview pane exists and exactly two panes do, established BEFORE either capture | none; do not invent one | green: the preview scratch for [`PICKOVER_SOURCE_FILE`] plus [`PICKOVER_OTHER_FILE`], and nothing else |
 /// | 4 | the reference band is ONE colour in the sample, that colour appears ZERO times in the same band in the control, and it is none of [`PREVIEW_DARK_BG`], [`PICKOVER_HEADING_INK`] or [`PICKOVER_UNSTYLED_FILL`] | precondition in its first two halves — they make the fill EMPIRICAL rather than a pinned theme value, and say the colour belongs to the box rather than to the pane under it — and **discriminator** in the unstyled-fill half, which is the only reading in this binary that separates "the overlay stylesheet resolved" from "an opaque widget under the box painted something" | F2, below: empty the body of `overlay_style::apply`. It is also where a build that hid the box ENTIRELY reddens — P1b below is exactly that build, and **this is the assertion P1b's red fired on**, second half | green: 32,000 / 32,000 open, 0 / 32,000 closed, the fill `(54, 54, 58)`. red (P1b): the band is uniform in BOTH captures and the colour is the same `(20, 22, 27)` in both, so the absence half read 32,000. red (F2): the uniformity and absence halves both hold and the fill reads exactly [`PICKOVER_UNSTYLED_FILL`] `(29, 29, 32)`, which is the line that fires and the only one that does |
-/// | 5 | all four edges of R are locatable | precondition — the web view's top and left in the control by the preview background arriving, the box's right and bottom in the sample by its own fill leaving | none; do not invent one | green: 787..1065 x 159..471 |
-/// | 6 | R — the TRUE overlap, before any inset — spans at least [`PICKOVER_MIN_OVERLAP_W_PX`] columns and [`PICKOVER_MIN_OVERLAP_H_PX`] rows | **discriminator, geometrical** — the box's VISIBLE surface reaches into the web view's own columns and rows at all. Passing it is also what makes S's subtraction safe, which is why S is built after this row rather than before it | P1b, below — NOT reached, because assertion 4 fired first. Carried through by hand off the red PNG it would have read `overlap_w` = 0 against the 200 floor | green: 278 x 312 |
-/// | 7 | in the CONTROL, S is at least [`PICKOVER_CONTROL_MIN_DARK_FRACTION`] `PREVIEW_DARK_BG` and carries at least [`PICKOVER_CONTROL_MIN_INK_PX`] [`PICKOVER_HEADING_INK`] pixels | **paired control** — S really is inside a web view that really rendered the document. Without it the sample half holds over a blank pane. It reads S and not R because assertion 8 reads S: a control over a different rectangle would not cover the region the discriminator samples. | drop the Preview leg from the scenario, or blank the render (`WolfCore::render_preview` answering the empty string it returns on an RPC failure). The first was TAKEN and reddens assertion 3, the louder and more correct answer — so the ink floor here has **no captured red**. The only edit that reaches it is the second, and that `src/` change has not been run against this smoke. A known gap, recorded rather than implied. | green: 0.9405 dark of S's 79,800 pixels, 1,976 white |
-/// | 8 | in the SAMPLE, S holds EXACTLY zero `PREVIEW_DARK_BG`, EXACTLY zero [`PICKOVER_HEADING_INK`], and at least [`PICKOVER_SAMPLE_MIN_FILL_FRACTION`] of the fill colour assertion 4 read back | **discriminator** — the fully-occluded part of the overlap is the picker's surface and nothing of the preview survives in it | P1b, below — NOT reached, and it would have been vacuous if it had been: the red's R is degenerate at zero area | green: 0, 0, and a fill fraction of exactly 1.0000 across S's 79,800 pixels — the inset puts the box's corner arc outside S, so it holds one colour, `(54, 54, 58)`, and the histogram of everything else is empty |
+/// | 5 | all four edges of R are locatable | precondition — the web view's top and left in the control by the preview background arriving, the box's right and bottom in the sample by its own fill leaving | none; do not invent one | green: 787..1065 x 159..471 measured; 767..1065 x 139..471 derived |
+/// | 6 | R — the TRUE overlap, before any inset — spans at least [`PICKOVER_MIN_OVERLAP_W_PX`] columns and [`PICKOVER_MIN_OVERLAP_H_PX`] rows | **discriminator, geometrical** — the box's VISIBLE surface reaches into the web view's own columns and rows at all. Passing it is also what makes S's subtraction safe, which is why S is built after this row rather than before it | P1b, below — NOT reached, because assertion 4 fired first. Carried through by hand off the red PNG it would have read `overlap_w` = 0 against the 200 floor | green: 278 x 312 measured; 298 x 332 derived |
+/// | 7 | in the CONTROL, S is at least [`PICKOVER_CONTROL_MIN_DARK_FRACTION`] `PREVIEW_DARK_BG` and carries at least [`PICKOVER_CONTROL_MIN_INK_PX`] [`PICKOVER_HEADING_INK`] pixels | **paired control** — S really is inside a web view that really rendered the document. Without it the sample half holds over a blank pane. It reads S and not R because assertion 8 reads S: a control over a different rectangle would not cover the region the discriminator samples. | drop the Preview leg from the scenario, or blank the render (`WolfCore::render_preview` answering the empty string it returns on an RPC failure). The first was TAKEN and reddens assertion 3, the louder and more correct answer — so the ink floor here has **no captured red**. The only edit that reaches it is the second, and that `src/` change has not been run against this smoke. A known gap, recorded rather than implied. | green: 0.9405 dark of the measured S's 79,800 pixels, 1,976 white |
+/// | 8 | in the SAMPLE, S holds EXACTLY zero `PREVIEW_DARK_BG`, EXACTLY zero [`PICKOVER_HEADING_INK`], and at least [`PICKOVER_SAMPLE_MIN_FILL_FRACTION`] of the fill colour assertion 4 read back | **discriminator** — the fully-occluded part of the overlap is the picker's surface and nothing of the preview survives in it | P1b, below — NOT reached, and it would have been vacuous if it had been: the red's R is degenerate at zero area | green: 0, 0, and a fill fraction of exactly 1.0000 across the measured S's 79,800 pixels; the derived S is 88,088 pixels. The inset puts the box's corner arc outside S and the row scan puts the selected row above it, because S must hold one colour: it holds `(54, 54, 58)`, and the histogram of everything else is empty |
 /// | 9 | in the SAMPLE, the run of [`PICKOVER_ROW_HIGHLIGHT`] rows inside the box is at least [`PICKOVER_MIN_SELECTED_ROW_H_PX`] rows tall | **discriminator** — the SELECTED ROW is menu-sized, which is the half of the overlay appearance no other assertion here reads. Assertion 4's fill inequality sees the box's surface and is satisfied whatever the rows measure | F3, below: remove `padding: 8px 10px` from `list > row` in `overlay_style::OVERLAY_CSS_DATA` | green: 34 rows, bbox `x 471..1058, y 117..150`. red (F3): 22 rows |
 ///
 /// ## The falsifiers
@@ -2268,7 +2294,8 @@ exit 0
 ///
 /// What would have fired next is worth recording, because it is what says assertion 6
 /// is not decoration. Carried through by hand off the same red PNG: `web_top` 159,
-/// `web_left` 787, `box_right` 787 — so `overlap_w` = 0 against its 200 floor, and R is
+/// `web_left` 787, `box_right` 787, or 139, 767 and 767 by derivation — so `overlap_w` = 0
+/// against its 200 floor, and R is
 /// degenerate at zero area. Assertion 8 was never reached, and on a zero-area rectangle
 /// it would have been vacuous if it had been.
 ///
@@ -2622,7 +2649,7 @@ fn file_picker_covers_the_live_preview_under_cage() {
         overlap_w >= PICKOVER_MIN_OVERLAP_W_PX,
         "{SMOKE}: the picker box's visible surface spans only {overlap_w} column(s) inside the web \
          view (its right edge located at {box_right}, the view's left edge at {web_left}), fewer \
-         than the {PICKOVER_MIN_OVERLAP_W_PX} floor; the measurement is 278. A reading of ZERO is \
+         than the {PICKOVER_MIN_OVERLAP_W_PX} floor; the derived span is 298. A reading of ZERO is \
          the named one and it means the box's visible right edge coincides with the web view's \
          left edge — the preview is painted OVER the box rather than under it, so the box stops \
          being visible exactly where the view begins. A box that is on screen NOWHERE reads 0 here \
@@ -2667,7 +2694,7 @@ fn file_picker_covers_the_live_preview_under_cage() {
         overlap_h >= PICKOVER_MIN_OVERLAP_H_PX,
         "{SMOKE}: the picker box's visible surface spans only {overlap_h} row(s) inside the web \
          view (its bottom edge located at {box_bottom}, the view's top edge at {web_top}), fewer \
-         than the {PICKOVER_MIN_OVERLAP_H_PX} floor; the measurement is 312. ZERO means the box \
+         than the {PICKOVER_MIN_OVERLAP_H_PX} floor; the derived span is 332. ZERO means the box \
          ends at or above where the view begins, so the two do not overlap vertically at all. A \
          small non-zero reading means the box got shorter, or the web view starts lower down the \
          pane than it did. Captures kept at {} and {}.",
@@ -2675,14 +2702,40 @@ fn file_picker_covers_the_live_preview_under_cage() {
         sample_png.display()
     );
 
-    // S is R inset past the rounded corner, shared by assertions 7 and 8. Built after 6, whose
-    // 200 px spans keep the subtraction in range; earlier, the paint-order falsifier underflows.
+    // S is R inset past the rounded corner and started below the selected row, so it holds one
+    // colour; shared by assertions 7 and 8. Built after 6, whose 200 px spans keep it in range.
+    let sampled_x1 = box_right - PICKOVER_CORNER_INSET_PX;
+    let sampled_y1 = box_bottom - PICKOVER_CORNER_INSET_PX;
+    let sampled_y0 = (web_top..sampled_y1)
+        .find(|&y| {
+            !(web_left..sampled_x1).any(|x| {
+                rgb_within(
+                    sample.pixel(x, y),
+                    PICKOVER_ROW_HIGHLIGHT,
+                    PICKOVER_ROW_HIGHLIGHT_TOLERANCE,
+                )
+            })
+        })
+        .unwrap_or(sampled_y1);
     let sampled = SampleRect {
         x0: web_left,
-        x1: box_right - PICKOVER_CORNER_INSET_PX,
-        y0: web_top,
-        y1: box_bottom - PICKOVER_CORNER_INSET_PX,
+        x1: sampled_x1,
+        y0: sampled_y0,
+        y1: sampled_y1,
     };
+    assert!(
+        sampled.y0 < sampled.y1,
+        "{SMOKE}: in {SAMPLE_LABEL}, every row of the overlap from the web view's top ({web_top}) \
+         down to {sampled_y1} carries a pixel of the selected row's PICKOVER_ROW_HIGHLIGHT = \
+         {PICKOVER_ROW_HIGHLIGHT:?} across columns {web_left}..{sampled_x1}, so the sampled \
+         rectangle {sampled:?} has no rows. A row scan of a kept sample read the selected row at rows \
+         139..150, so S starts at 151. A whole overlap that scans as the selected row means the box's own fill resolved to \
+         the selection colour — the reading assertion 9 calls far above 34 — which is a finding \
+         about the overlay stylesheet, not about where the box is painted. Captures kept at {} and \
+         {}.",
+        control_png.display(),
+        sample_png.display()
+    );
     assert!(
         sampled.x1 <= control.width
             && sampled.y1 <= control.height
@@ -2744,8 +2797,8 @@ fn file_picker_covers_the_live_preview_under_cage() {
         sample_png.display()
     );
 
-    // Assertion 8 (discriminator): the two zeros stay exact, as S excludes the shadow and the corner.
-    // Measured inside S: 0 dark, 0 ink, a fill fraction of 1.0000 over 79,800 pixels.
+    // Assertion 8 (discriminator): exact zeros, as S skips the shadow, the corner and the selected
+    // row, so it holds one colour. Measured 0, 0 and 1.0000 fill; S is 88,088 pixels by derivation.
     let sample_dark = sample.count_exactly(sampled, PREVIEW_DARK_BG);
     let sample_ink = sample.count_exactly(sampled, PICKOVER_HEADING_INK);
     let sample_fill = sample.count_exactly(sampled, fill);
@@ -2762,10 +2815,13 @@ fn file_picker_covers_the_live_preview_under_cage() {
          {sample_dark} pixels of PREVIEW_DARK_BG = {PREVIEW_DARK_BG:?} (needs exactly 0), \
          {sample_ink} pixels of PICKOVER_HEADING_INK = {PICKOVER_HEADING_INK:?} (needs exactly 0), \
          and {sample_fill_fraction:.4} of the picker's own fill {fill:?} (needs >= \
-         {PICKOVER_SAMPLE_MIN_FILL_FRACTION}). The measurements are 0, 0 and exactly 1.0000 over \
-         79,800 pixels: this rectangle is the overlap trimmed on its right and bottom by \
+         {PICKOVER_SAMPLE_MIN_FILL_FRACTION}). The measurements are 0, 0 and exactly 1.0000, read \
+         when R's left and top edges sat 20 px further in; S is 88,088 pixels by derivation at \
+         the current edges. This rectangle is the overlap trimmed on its right and bottom by \
          PICKOVER_CORNER_INSET_PX = {PICKOVER_CORNER_INSET_PX}, which puts the box's rounded \
-         corner outside it, so it holds one colour and nothing else. Assertion 7 \
+         corner outside it, and started below the selected row, whose PICKOVER_ROW_HIGHLIGHT is \
+         the box's surface but not its fill. S must hold one colour, and so it holds the fill and \
+         nothing else. Assertion 7 \
          above passed, so this rectangle IS a live preview with the document rendered in it, and \
          the only question left is what covers it.\n\
          The named cause is the picker box no longer painting above the preview pane's web view. \
@@ -2783,8 +2839,8 @@ fn file_picker_covers_the_live_preview_under_cage() {
          stack even against a deliberately promoted compositing layer, so a reading of this shape \
          is a finding worth recording rather than a threshold to retune. Both zeros holding with \
          the fill fraction low: the box is on top but is drawing something other than its flat \
-         surface across the rectangle — a list row taller than measured is one benign version, and \
-         PICKOVER_QUERY is what controls the row count; a stylesheet whose `border-radius` grew \
+         surface across the rectangle — a second list row below the selected one is one benign \
+         version, and PICKOVER_QUERY is what controls the row count; a stylesheet whose `border-radius` grew \
          past PICKOVER_CORNER_INSET_PX is the other, and it shows as a bite out of this \
          rectangle's bottom-right corner in the retained PNG, answered by re-typing that constant \
          from the stylesheet. Neither is answered by lowering \

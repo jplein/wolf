@@ -39,16 +39,18 @@ use super::panes::{
 use super::pointer::{WEDGE_OCR_CLICK, WEDGE_OCR_STAY};
 use super::preview::{
     KC_CUR_CLICKED_NAME, KC_CUR_FOCUSED_NAME, KC_SOURCE_FILE, KC_WINS_AFTER_NAME,
-    KC_WINS_BEFORE_NAME, LINK_READBACK_AFTER_NAME, LINK_READBACK_BEFORE_NAME, LINK_SOURCE_FILE,
-    LINK_TARGET_FILE, NEWVIEW_WINS_AFTER_NAME, NEWVIEW_WINS_ALONE_NAME, NEWVIEW_WINS_BEFORE_NAME,
-    OED_FIRST_FILE, OED_SECOND_FILE, OED_WINS_1_NAME, OED_WINS_2_NAME, OPR_FIRST_FILE,
-    OPR_SECOND_FILE, OPR_WINS_1_NAME, OPR_WINS_2_NAME, OPR_WINS_3_NAME, PREVIEW_LIVE_MARKER,
-    PREVIEW_OCR_BODY, PREVIEW_OCR_LIVE, PREVIEW_OCR_OTHER, PREVIEW_OCR_STATUS, PREVIEW_OTHER_FILE,
-    PREVIEW_OTHER_HEADING, PREVIEW_READBACK_A_NAME, PREVIEW_READBACK_B_NAME, PREVIEW_SOURCE_FILE,
-    PREVIEW_SOURCE_HEADING, PREVIEW_SOURCE_PARAGRAPH, UNSAVED_BUFFER_NAME, UNSAVED_COVER_FILE,
-    UNSAVED_COVER_HEADING, UNSAVED_MARKER, UNSAVED_OCR_COVER, UNSAVED_OCR_MARKER,
-    UNSAVED_READBACK_NAME,
+    KC_WINS_BEFORE_NAME, LINK_CUR_AFTER_NAME, LINK_CUR_BEFORE_NAME, LINK_READBACK_AFTER_NAME,
+    LINK_READBACK_BEFORE_NAME, LINK_SOURCE_FILE, LINK_TARGET_FILE, NEWVIEW_WINS_AFTER_NAME,
+    NEWVIEW_WINS_ALONE_NAME, NEWVIEW_WINS_BEFORE_NAME, OED_FIRST_FILE, OED_SECOND_FILE,
+    OED_WINS_1_NAME, OED_WINS_2_NAME, OPR_FIRST_FILE, OPR_SECOND_FILE, OPR_WINS_1_NAME,
+    OPR_WINS_2_NAME, OPR_WINS_3_NAME, PCA_CUR_AFTER_NAME, PCA_CUR_BEFORE_NAME, PCA_SOURCE_FILE,
+    PREVIEW_LIVE_MARKER, PREVIEW_OCR_BODY, PREVIEW_OCR_LIVE, PREVIEW_OCR_OTHER, PREVIEW_OCR_STATUS,
+    PREVIEW_OTHER_FILE, PREVIEW_OTHER_HEADING, PREVIEW_READBACK_A_NAME, PREVIEW_READBACK_B_NAME,
+    PREVIEW_SOURCE_FILE, PREVIEW_SOURCE_HEADING, PREVIEW_SOURCE_PARAGRAPH, UNSAVED_BUFFER_NAME,
+    UNSAVED_COVER_FILE, UNSAVED_COVER_HEADING, UNSAVED_MARKER, UNSAVED_OCR_COVER,
+    UNSAVED_OCR_MARKER, UNSAVED_READBACK_NAME,
 };
+use super::preview_margins::PM_FILE;
 use super::preview_render::{PICKOVER_OTHER_FILE, PICKOVER_SOURCE_FILE, PICKOVER_WINS_NAME};
 use super::recovery::{
     RESTART_OCR_BANNER, RESTART_OCR_HEADING, RESTART_OCR_OVERLAY, RESTART_OCR_UNSAVED, STALL_FILE,
@@ -106,6 +108,7 @@ use super::terminal::{
     TP_OCR_WORD,
 };
 use super::titlebar::TB_READ_NAME;
+use super::tree_reveal::{ABOVE_TERMS, CURRENT_TERM, TRIGGER_TERM};
 use super::*;
 
 /// Every lowercased substring the OCR-asserting cage smokes must — or must not —
@@ -181,6 +184,11 @@ use super::*;
 /// as well. [`TG_OCR_KEEP`] is content, the heading the sidebar band reads only while the
 /// sidebar is hidden. The chord smoke asserts on the same terms as the click smoke, so it is
 /// covered through the click smoke's rows.
+///
+/// [`ABOVE_TERMS`], [`CURRENT_TERM`] and [`TRIGGER_TERM`] are the sixth: the tree rows the
+/// sidebar's launch reveal must bring into view, so their generated files carry their terms and
+/// stay out of [`RELAUNCH_FIXTURE_NAMES`]. `tree_reveal.rs`'s own guard checks that each term
+/// names its one row and no other.
 ///
 /// Every smoke that OCRs a capture registers each term it asserts on here, and a
 /// smoke that OCRs nothing registers none; the second project-search smoke is covered
@@ -336,6 +344,9 @@ use super::*;
 ///   writes no fixture and reads only `stty size` readbacks and a frozen state.
 ///   `a_restored_search_sidebar_runs_its_query_under_cage` asserts on the case smoke's terms
 ///   over the case smoke's fixtures, so it is covered through that smoke's rows.
+/// * `preview_margins_frame_and_scroll_the_page_under_cage` captures three PNGs and OCRs none:
+///   its observables are colour extents and a frozen state's scroll. Its fixture is registered
+///   in [`RELAUNCH_FIXTURE_NAMES`] for the generic loop's sake.
 /// * The New Tab smokes in `new_tab.rs` assert on [`EMPTY_STATE_OCR`] and
 ///   [`TG_OCR_TREE_ROW`], covered through their owners' rows, and on the empty tab's title,
 ///   `new_tab::NT_OCR_TITLE`, which has no row: [`TEMP_CWD_PREFIX`] spells it, so the
@@ -817,6 +828,46 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
         "TOAST_OCR_TERM",
         "terminal_drawer_hides_a_message_toast_under_cage",
     ),
+    (
+        ABOVE_TERMS[0],
+        "ABOVE_TERMS[0]",
+        "restored_editor_reveal_draws_the_rows_above_the_current_file_under_cage",
+    ),
+    (
+        ABOVE_TERMS[1],
+        "ABOVE_TERMS[1]",
+        "restored_editor_reveal_draws_the_rows_above_the_current_file_under_cage",
+    ),
+    (
+        ABOVE_TERMS[2],
+        "ABOVE_TERMS[2]",
+        "restored_editor_reveal_draws_the_rows_above_the_current_file_under_cage",
+    ),
+    (
+        ABOVE_TERMS[3],
+        "ABOVE_TERMS[3]",
+        "restored_editor_reveal_draws_the_rows_above_the_current_file_under_cage",
+    ),
+    (
+        ABOVE_TERMS[4],
+        "ABOVE_TERMS[4]",
+        "restored_editor_reveal_draws_the_rows_above_the_current_file_under_cage",
+    ),
+    (
+        ABOVE_TERMS[5],
+        "ABOVE_TERMS[5]",
+        "restored_editor_reveal_draws_the_rows_above_the_current_file_under_cage",
+    ),
+    (
+        CURRENT_TERM,
+        "CURRENT_TERM",
+        "restored_editor_reveal_draws_the_rows_above_the_current_file_under_cage",
+    ),
+    (
+        TRIGGER_TERM,
+        "TRIGGER_TERM",
+        "restored_editor_reveal_draws_the_rows_above_the_current_file_under_cage",
+    ),
 ];
 
 /// Every fixture NAME a smoke creates inside its OWN working directory, as
@@ -1214,6 +1265,16 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         "LINK_READBACK_AFTER_NAME",
         "preview_link_click_repoints_the_pane_under_cage",
     ),
+    (
+        LINK_CUR_BEFORE_NAME,
+        "LINK_CUR_BEFORE_NAME",
+        "preview_link_click_repoints_the_pane_under_cage",
+    ),
+    (
+        LINK_CUR_AFTER_NAME,
+        "LINK_CUR_AFTER_NAME",
+        "preview_link_click_repoints_the_pane_under_cage",
+    ),
     // Registered for the generic loop; this smoke reads no OCR term. `preview` is an asserted
     // term, hence `kc*`.
     (
@@ -1240,6 +1301,23 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         KC_WINS_AFTER_NAME,
         "KC_WINS_AFTER_NAME",
         "preview_click_keeps_window_chords_under_cage",
+    ),
+    // Registered for the generic loop; this smoke reads no OCR term. `preview` is an asserted
+    // term, hence `pca*`.
+    (
+        PCA_SOURCE_FILE,
+        "PCA_SOURCE_FILE",
+        "preview_page_click_activates_the_preview_under_cage",
+    ),
+    (
+        PCA_CUR_BEFORE_NAME,
+        "PCA_CUR_BEFORE_NAME",
+        "preview_page_click_activates_the_preview_under_cage",
+    ),
+    (
+        PCA_CUR_AFTER_NAME,
+        "PCA_CUR_AFTER_NAME",
+        "preview_page_click_activates_the_preview_under_cage",
     ),
     (
         UNSAVED_COVER_FILE,
@@ -1767,6 +1845,11 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         PS_FILE,
         "PS_FILE",
         "preview_scroll_survives_a_close_and_relaunch_under_cage",
+    ),
+    (
+        PM_FILE,
+        "PM_FILE",
+        "preview_margins_frame_and_scroll_the_page_under_cage",
     ),
     (
         DZ_FILE,

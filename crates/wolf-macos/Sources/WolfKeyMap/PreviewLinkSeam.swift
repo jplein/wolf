@@ -80,7 +80,7 @@ public enum PreviewLinkSeam {
   /// `"`, newline, carriage return, tab, `<`, and `/` (the last two so an embedded
   /// `</script>` or `<` can never break out of the JS context). Any other control
   /// character below U+0020 is emitted as a `\u00XX` escape.
-  private static func jsonEscape(_ s: String) -> String {
+  static func jsonEscape(_ s: String) -> String {
     var out = "\""
     for scalar in s.unicodeScalars {
       switch scalar {

@@ -44,7 +44,7 @@ It also exposes `_G.wolf_sync_buffers`, which emits at once unless suppressed an
 
 Notifies **`wolf_full_width`** with one list of `{ win, vim.b[buf].wolf_full_width == true }` pairs covering every window, on `BufEnter`/`BufWinEnter`/`WinEnter`/`WinNew`/`WinClosed`. Core wholesale-replaces `Snapshot.full_width`; a window absent from the map defaults to false. The front-end threads each pane's content-width mode — full versus the capped default — into its geometry, keyed by window handle.
 
-Unlike buffer tracking, preview panes are not skipped. A preview pane's own flag is unused, because the front-end frames a preview from the source buffer's flag carried by `wolf_preview`. Exposes `_G.wolf_emit_full_width`.
+Unlike buffer tracking, preview panes are not skipped. A preview pane's own flag is unused, because the front-end caps a preview's content by the source buffer's flag carried by `wolf_preview`. Exposes `_G.wolf_emit_full_width`.
 
 #### `wolf_setup_layout(chan)`
 
