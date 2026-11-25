@@ -70,6 +70,8 @@ Three one-shot timers exist and none is a poll. Each is armed by an arriving eve
 
 The preview's is the one to read carefully, because a burst can leave several of them alive at once — bounded by `ceil(PREVIEW_TRAILING_DELAY / inter-key interval)`, and zero while the user is idle. Each fires once and performs nothing unless it carries the live generation, since an armed GLib source cannot be withdrawn without a warning. A reader who finds five queued has found the design rather than a leak.
 
+The sidebar's reveal scroll is a frame-clock tick rather than a timer: a reveal arms it, it removes itself on the second frame after the latest reveal, and it never keeps running while the tree is unmapped ([The sidebar reveal](wolf-gnome/the-sidebar-reveal.md)).
+
 One asynchronous callback exists and it is not a timer. `gdk::Clipboard::read_text_async` resolves on the main thread some turns after the paste chord, and its closure holds a `Weak` to the shell and reads the core through the same `Option`, so a read landing after the close handler has taken the core out performs nothing rather than panicking.
 
 A `StyleManager` `dark` notification is neither a timer nor a poll either. It is a GObject property notification, armed once per tab as its core starts and in `auto` mode alone, fired only when libadwaita's own property changes. A closed tab's handler stays connected and does nothing, because its `Weak` to the core fails to upgrade. So nothing re-arms while the application is idle and the property above is intact.

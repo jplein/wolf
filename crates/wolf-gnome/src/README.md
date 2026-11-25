@@ -1111,25 +1111,26 @@ Purpose: the pure, GTK-free gate every refresh of the sidebar's two pages passes
 
 #### `tree_view.rs`
 
-Purpose: the GTK glue for the file-tree sidebar — a `gtk::ListView` over a `gtk::TreeListModel`.
+Purpose: the file-tree sidebar, a `gtk::ListView` over a `gtk::TreeListModel`.
 
 **Public API**
 
 - `build(core, opener, area, start, root_label) -> TreeHandle` — a file click tries `opener` first; `area` is a [`picker.rs`](#pickerrs) `FocusTarget`; `start` is false in the empty state, where nothing is walked.
 - `widget()` — [`sidebar.rs`](#sidebarrs)'s Files page.
 - `release_core(core)`, on a tab's close.
-- `on_render_wake()`, `close()`, `set_sidebar_visible(shown)`, relayed through `sidebar.rs` and true only while a shown sidebar is on Files, and `reroot(root_label)`, from [`shell.rs`](#shellrs)'s one settle point; this module reads no cwd.
+- `on_render_wake()`, `close()`, `set_sidebar_visible(shown)`, relayed through `sidebar.rs` and true only while a shown sidebar is on Files, and `reroot(root_label)`, from [`shell.rs`](#shellrs); this module reads no cwd.
 
 **Decisions**
 
-- The root store holds one item: a synthetic `Dir` named after the working directory whose rel-path is the empty cwd sentinel, so the create-func needs no special case. `remove_all` destroys its expanded state, so it is re-expanded after every rebuild and before a reveal walks ancestors.
-- Children materialize lazily through `wolf_core::tree::TreeIndexCache` under rule R1, on `children_for`: the memo and the entries are borrowed inside one statement touching no widget, because GTK re-enters the create-func and a borrow held across `set_expanded` or `set_list_row` panics.
-- Only a traversal batch is coalesced ([`refresh_coalescer.rs`](#refresh_coalescerrs)); every other refresh is immediate, and all pass both gates in [`tree_gate.rs`](#tree_gaters). A pending reveal retries even on a skipped rebuild.
+- The root store holds one synthetic `Dir` named after the working directory, whose rel-path is the empty cwd sentinel, so the create-func needs no special case. `remove_all` destroys its expanded state, so every rebuild re-expands it.
+- Children materialize lazily through `wolf_core::tree::TreeIndexCache` under rule R1: memo and entries are borrowed in one statement touching no widget, because GTK re-enters the create-func and a borrow held across `set_expanded` or `set_list_row` panics.
+- Only a traversal batch is coalesced ([`refresh_coalescer.rs`](#refresh_coalescerrs)); every other refresh is immediate, and all pass both gates in [`tree_gate.rs`](#tree_gaters).
+- A pending reveal retries on every refresh, and a rebuild re-reveals the current file. The scroll runs from a frame-clock tick, while mapped and after layout: an earlier `scroll_to` draws rows blank ([The sidebar reveal](../../../notes/wolf-gnome/the-sidebar-reveal.md)).
 - The current-file bold moves through a registry of bound labels, which is what the version gate costs: a suppressed rebuild re-binds no row.
 
 **Gotchas**
 
-- Manual expansion below the root does not survive a root-store rebuild; [Present limitations](../../../notes/wolf-gnome/present-limitations.md) owns it and what preserving it would cost.
+- Manual expansion below the root does not survive a rebuild; see [Present limitations](../../../notes/wolf-gnome/present-limitations.md).
 
 #### `window.rs`
 
