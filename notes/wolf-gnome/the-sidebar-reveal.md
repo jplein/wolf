@@ -16,7 +16,7 @@ Under `cage`, with instrumentation in `tree_view.rs` and the fixture of [`smoke_
 - Inside that `scroll_to`, GTK bound rows 0 to 204, then unbound rows 1 to 82 one by one while binding rows 205 to 285. Only row 0 and rows 83 onward kept a widget.
 - Once laid out, the adjustment's value was still 0. The list showed its top, with the root row drawn and the rows below it blank, which is what OCR of the band read.
 - A scroll on the first tick after the reveal fails the same way: that tick still precedes the list's first allocation.
-- A later version advance, from a watcher rescan, unbound every row and rebound the top of the tree, with no reveal, because the launch reveal had cleared `pending_reveal`. The revealed row went out of view and unselected.
+- A later version advance, from a watcher rescan, unbound every row and rebound the top of the tree, with no reveal, because the launch reveal had cleared `pending_reveal`. The revealed row went out of view.
 
 ## The GTK path
 
@@ -24,7 +24,7 @@ Read in GTK 4.22's list code and not measured: `gtk_list_base_compute_scroll_ali
 
 ## Why a rebuild re-reveals
 
-`remove_all` drops the `SingleSelection`'s selected item and returns the list's anchor to row 0, so any rebuild after a reveal loses it. A rebuild with nothing pending therefore reveals the current file again. A refresh without a rebuild reveals only a pending file: a re-reveal there would pull a user's scroll back to the current file on every render wake. The re-reveal never arms a retry, since `reveal` leaves `pending_reveal` untouched when the file does not resolve.
+`remove_all` drops the `SingleSelection`'s selected item, which GTK documents, and returns the list's anchor to row 0, so any rebuild after a reveal loses it. A rebuild with nothing pending therefore reveals the current file again. A refresh without a rebuild reveals only a pending file: a re-reveal there would pull a user's scroll back to the current file on every render wake. The re-reveal never arms a retry, since `reveal` leaves `pending_reveal` untouched when the file does not resolve.
 
 ## Why the tick waits a frame
 
