@@ -36,7 +36,7 @@ final class PaneContainerView: NSView {
   /// its grid at `maxGridCols` and CENTERS it horizontally, leaving side margins
   /// (painted in the grid's background); a narrower pane is unaffected. All pixel↔
   /// cell mapping routes through `PaneGeometry`, which owns the cap + centering.
-  private static let maxGridCols = 90
+  static let maxGridCols = 90
 
   // -- Mouse / scroll FFI discriminants (mirror `wolf-ffi`'s `mod mouse_button`
   //    / `mod mouse_action` / `mod scroll_dir`) ------------------------------
@@ -389,9 +389,14 @@ final class PaneContainerView: NSView {
   /// The SOURCE buffer's full-width flag of each preview pane, keyed by the pane's
   /// bound GRID, rebuilt every wake by `syncPreviewWebViews` from
   /// `FfiPreview.source_full_width()`. Consulted by `fullWidth(forGrid:)` so the
-  /// preview's webview frame, occlusion test, and statusbar span all resolve the same
-  /// capped-vs-full geometry.
+  /// preview's occlusion test and statusbar span resolve the same capped-vs-full
+  /// geometry as its page's root style.
   private var previewFullWidthByGrid: [UInt64: Bool] = [:]
+  /// The root style each preview window's page carries or has been sent
+  /// (`PreviewWidthSeam.rootStyle`), set by `syncPreviewWebViews` when it changes. A full
+  /// load writes it into the document's `<html>` tag, and `previewDidFinishLoad` sends it
+  /// again, so a change made while that load was in flight still lands.
+  private var previewRootStyles: [Int64: String] = [:]
   /// Debounces the BLOCKING preview reload (`render_preview` + `loadHTMLString`)
   /// so a fast-typing burst — which fires many render wakes, each advancing the
   /// source `changedtick` — yields ONE trailing main-thread `render_preview`
@@ -631,7 +636,7 @@ final class PaneContainerView: NSView {
 
   /// Whether the pane bound to `grid` is in FULL-WIDTH mode. A PREVIEW pane follows
   /// its SOURCE buffer's flag (cached per wake in `previewFullWidthByGrid` from
-  /// `FfiPreview.source_full_width()`), so its webview frame, occlusion test, and
+  /// `FfiPreview.source_full_width()`), so its page's root style, occlusion test, and
   /// statusbar span all agree; an EDITOR pane follows the per-window `full_width` map
   /// via its bound window handle. `false` when the grid has no bound pane.
   private func fullWidth(forGrid grid: UInt64) -> Bool {
@@ -731,6 +736,12 @@ final class PaneContainerView: NSView {
       frames[win] = rect
     }
     return frames
+  }
+
+  /// The root style preview window `win`'s page carries or has last been sent, or `nil` when
+  /// it has none: `PreviewWidthSeam.rootStyle` for the pane's placement and source width.
+  func previewRootStyle(forWin win: Int64) -> String? {
+    previewRootStyles[win]
   }
 
   /// Zoom Pane: toggles the active pane between zoomed and not (`PaneZoom`); a lone pane
@@ -1726,8 +1737,8 @@ final class PaneContainerView: NSView {
   /// `previews()` snapshot.
   ///
   /// For every pane bound to a preview WINDOW (a window showing a
-  /// `b:wolf_preview_source` scratch buffer), ensure a `WKWebView` framed to the
-  /// pane's GRID rect, and reload it from `render_preview(source_bufnr)` whenever
+  /// `b:wolf_preview_source` scratch buffer), ensure a `WKWebView` spanning the pane
+  /// below its statusbar strip, and reload it from `render_preview(source_bufnr)` whenever
   /// the source's `changedtick` advanced (the live-on-change gate; a keystroke
   /// burst is already coalesced into one tick-advancing wake). The pane's grid is
   /// recorded in `previewNamesByGrid` so `paintStatusbar` shows `Preview: <name>`
@@ -1739,11 +1750,13 @@ final class PaneContainerView: NSView {
   /// its scroll state on unzoom; a shown one would paint over the zoomed pane. Only
   /// windows bound to no pane of this view reach the removal.
   ///
-  /// `web.frame` uses the capped+CENTERED `geometry(…, fullWidth: source_full_width())
-  /// .gridRect` (the ~90-char default, or the full inset pane when the source is
-  /// full-width), and this is what `paintStatusbar`'s `.preview` span AND the draw
-  /// loop's occlusion test mirror: all three derive from the SAME
-  /// `geometry(…, fullWidth:)` off `gridRect(ofPane:)`, so they must change together.
+  /// `web.frame` is `PreviewWidthSeam.placement`'s: the pane below its strip, stopping
+  /// `dividerHitTolerance` short of a bordering divider so its line and drag stay the
+  /// container's. The page caps its own content through `PreviewWidthSeam.rootStyle`,
+  /// sent when it changes, which lands the content on the capped+CENTERED
+  /// `geometry(…, fullWidth: source_full_width()).gridRect`. `paintStatusbar`'s
+  /// `.preview` span and the draw loop's occlusion test read that same rect, which
+  /// `web.frame` contains, so the style and those two must change together.
   ///
   /// ATOMICITY, LOAD-BEARING: this one function both rebuilds `previewNamesByGrid`
   /// (cleared and repopulated below) and sets the webview frames, in the SAME pass,
@@ -1758,13 +1771,12 @@ final class PaneContainerView: NSView {
   /// The guarantee covers the map and the webview set, NOT frame freshness. Repaints
   /// that do not run through a wake — `setFrameSize` and `applyMetrics`, which both
   /// set `needsDisplay = true` without calling this function — recompute the
-  /// statusbar span from LIVE geometry on every `draw(_:)` while `web.frame` still
-  /// holds the previous `gridRect`. So the statusbar is never stale; only the
-  /// webview frame lags. `applyMetrics` is the sharper case: a font-size change
-  /// moves both `cellWidth` (hence `cap` and `paintOffsetX`) and `statusbarHeight`
-  /// (hence the grid rect's y/h) immediately while the webview stays put. Both
-  /// converge on the next wake via `syncGridSizes` → `handle.resize`. This lag is
-  /// pre-existing and orthogonal to the alignment fix above.
+  /// statusbar span from LIVE geometry on every `draw(_:)` while `web.frame` and the
+  /// page's style still hold the previous ones. So the statusbar is never stale; only
+  /// the web view lags. `applyMetrics` is the sharper case: a font-size change moves
+  /// `cellWidth` (hence the style's `max-width`) and `statusbarHeight` (hence the
+  /// frame's top) immediately while the web view stays put. Both converge on the next
+  /// wake via `syncGridSizes` → `handle.resize`.
   private func syncPreviewWebViews() {
     previewNamesByGrid.removeAll(keepingCapacity: true)
     previewDisplayPathsByGrid.removeAll(keepingCapacity: true)
@@ -1799,12 +1811,23 @@ final class PaneContainerView: NSView {
         web.isHidden = true
         continue
       }
-      // The web view frame, the occlusion test and the preview statusbar span all derive from this
-      // same `geometry(…, fullWidth:)`, so they must change together.
-      let gRect = geometry(for: gridRect(ofPane: paneRect), fullWidth: sourceFullWidth).gridRect
+      // The page centres its content on the capped `geometry(…, fullWidth:)` rect that the occlusion
+      // test and the statusbar span read, so the style and those two must change together.
+      let placement = PreviewWidthSeam.placement(
+        pane: rect(from: paneRect),
+        area: Rect(x: 0, y: 0, w: Double(bounds.width), h: Double(paneAreaHeight)),
+        statusbarHeight: Double(statusbarHeight), dividerBand: Double(Self.dividerHitTolerance))
       web.frame = CGRect(
-        x: gRect.x, y: gRect.y, width: gRect.w, height: gRect.h)
+        x: placement.frame.x, y: placement.frame.y, width: placement.frame.w,
+        height: placement.frame.h)
       web.isHidden = false
+      let style = PreviewWidthSeam.rootStyle(
+        maxCols: sourceFullWidth ? nil : Self.maxGridCols, cellWidth: Double(metrics.cellWidth),
+        padding: EditorInset.padding, placement: placement)
+      if previewRootStyles[win] != style {
+        previewRootStyles[win] = style
+        web.evaluateJavaScript(PreviewWidthSeam.applyRootStyleJS(style), completionHandler: nil)
+      }
     }
 
     // Only cheap layout runs per wake; the blocking reload is debounced. `lastPreviewLoads` updates
@@ -1986,7 +2009,11 @@ final class PaneContainerView: NSView {
           sourceBufnr: load.sourceBufnr, headLength: $0.headLength)
       }
       let htmlStart = FrameMetrics.begin()
-      web.loadHTMLString(html, baseURL: base)
+      // The style rides the `<html>` tag, so the load never paints uncapped; the descriptors above
+      // read the raw `html`, so head lengths compare raw to raw.
+      web.loadHTMLString(
+        PreviewWidthSeam.styledDocument(html, rootStyle: previewRootStyles[win] ?? ""),
+        baseURL: base)
       FrameMetrics.end(.previewLoadHTML, htmlStart)
     }
   }
@@ -2148,6 +2175,7 @@ final class PaneContainerView: NSView {
     pendingPreviewDocuments[win] = nil
     previewLiveDocuments[win] = nil
     previewForcedReloads.remove(win)
+    previewRootStyles[win] = nil
     // Dropping this restores grid painting on the very next frame when a preview closes.
     previewLoadedWins.remove(win)
   }
@@ -2249,6 +2277,13 @@ final class PaneContainerView: NSView {
     // Also before the branches, for the same early-return reason: this navigation is over, and if
     // it was the last outstanding one its document becomes live.
     previewLoadSettled(win: win, succeeded: true)
+
+    // Also before the branches: a style changed while this load was in flight is not in its
+    // `<html>` tag, and it must land before any restore measures the page.
+    if let style = previewRootStyles[win] {
+      previewWebViews[win]?.evaluateJavaScript(
+        PreviewWidthSeam.applyRootStyleJS(style), completionHandler: nil)
+    }
 
     if let fragment = pendingPreviewFragments.removeValue(forKey: win) {
       pendingPreviewRestores[win] = nil
@@ -3067,12 +3102,12 @@ final class PaneContainerView: NSView {
   /// - EDITOR panes: the grid is painted at `gRect.minX + PaneGeometry.paintOffsetX`
   ///   (the 90-column centering inset), so the text is indented by the same offset
   ///   and its right edge stays at `gRect.maxX`.
-  /// - PREVIEW panes: `syncPreviewWebViews` frames the `WKWebView` to the SAME
+  /// - PREVIEW panes: the page's root style centres its content on the SAME
   ///   capped+CENTERED `geometry(…, fullWidth:).gridRect`, so a preview's statusbar is
   ///   indented by `paintOffsetX` exactly like an editor's. In full-width mode
-  ///   `paintOffsetX == 0`, so the text lands flush at `gRect.minX`. The webview
-  ///   frame, this span, and the draw loop's occlusion test all derive from the same
-  ///   `geometry(…, fullWidth:)` and must change together.
+  ///   `paintOffsetX == 0`, so the text lands flush at `gRect.minX`. The root style,
+  ///   this span, and the draw loop's occlusion test all derive from the same
+  ///   `geometry(…, fullWidth:)` cap and must change together.
   ///
   /// The kind comes from `previewNamesByGrid` (looked up ONCE, and reused for the
   /// filename/path override below) — the same predicate `drawScrollbars` uses.

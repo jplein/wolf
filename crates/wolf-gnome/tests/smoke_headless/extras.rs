@@ -98,7 +98,7 @@ pub(crate) fn plant_window_state(smoke: &str, cwd: &Path, planted: &WindowState)
 
 /// Ends the run when any of `paths` is missing, so the leg that needs them is never asserted
 /// on evidence the scenario did not reach. `codes` names what each exit code means.
-fn require(smoke: &str, status: ExitStatus, paths: &[&PathBuf], leg: &str, codes: &str) {
+pub(crate) fn require(smoke: &str, status: ExitStatus, paths: &[&PathBuf], leg: &str, codes: &str) {
     let missing: Vec<String> = paths
         .iter()
         .filter(|path| !path.exists())
@@ -679,8 +679,13 @@ hsend quit
 exit 0
 "#;
 
-/// The scroll of the lone preview pane a frozen state saved, after checking its shape.
-fn saved_preview_scroll(smoke: &str, frozen: &Path, what: &str) -> Option<f64> {
+/// The scroll of the lone preview pane of `file` a frozen state saved, after checking its shape.
+pub(crate) fn saved_preview_scroll(
+    smoke: &str,
+    frozen: &Path,
+    what: &str,
+    file: &str,
+) -> Option<f64> {
     let saved = frozen_window_state(frozen, smoke, what);
     let window = only_window(&saved, smoke, what, frozen);
     let root = window
@@ -689,11 +694,10 @@ fn saved_preview_scroll(smoke: &str, frozen: &Path, what: &str) -> Option<f64> {
         .and_then(|tab| tab.content.root.as_ref());
     let fields = root.and_then(leaf_fields);
     assert!(
-        fields
-            .as_ref()
-            .is_some_and(|leaf| leaf.preview
-                && Path::new(leaf.path).file_name() == Some(OsStr::new(PS_FILE))),
-        "{smoke}: {what} saved the root {root:?}; want a lone preview pane of {PS_FILE}. An edit \
+        fields.as_ref().is_some_and(
+            |leaf| leaf.preview && Path::new(leaf.path).file_name() == Some(OsStr::new(file))
+        ),
+        "{smoke}: {what} saved the root {root:?}; want a lone preview pane of {file}. An edit \
          pane means `:WolfPreview` bound no preview, so no scroll was there to save. File: {}",
         frozen.display()
     );
@@ -778,7 +782,12 @@ fn preview_scroll_survives_a_close_and_relaunch_under_cage() {
 
     // --- E17a and E17b: the close saved the reported scroll ----------------------------
     require(SMOKE, status, &[&read_c, &state_c], "C", PS_CODES);
-    let s1 = saved_preview_scroll(SMOKE, &state_c, "C, frozen after the window closed");
+    let s1 = saved_preview_scroll(
+        SMOKE,
+        &state_c,
+        "C, frozen after the window closed",
+        PS_FILE,
+    );
     assert!(
         s1.is_some_and(|s| PS_SCROLL_RANGE.contains(&s)),
         "{SMOKE}: C saved the preview's scroll as {s1:?}; want a fraction in \
@@ -803,7 +812,7 @@ fn preview_scroll_survives_a_close_and_relaunch_under_cage() {
          {PS_FILE} or wheel fewer detents."
     );
     require(SMOKE, status, &[&read_q, &state_q], "Q", PS_CODES);
-    let s2 = saved_preview_scroll(SMOKE, &state_q, "Q, frozen after run 2's quit");
+    let s2 = saved_preview_scroll(SMOKE, &state_q, "Q, frozen after run 2's quit", PS_FILE);
     assert!(
         s2.is_some_and(|s| (s - want).abs() <= slack),
         "{SMOKE}: run 2 saved the preview's scroll as {s2:?}; want run 1's {s1} plus run 2's \

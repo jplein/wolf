@@ -8,8 +8,8 @@ public enum PaneContentKind {
   /// A normal text-grid pane, whose grid is painted at the centering
   /// `PaneGeometry.paintOffsetX` when the pane exceeds the column cap.
   case editor
-  /// A Markdown-preview pane, whose `WKWebView` is now framed to the capped+CENTERED
-  /// grid rect (or the full inset pane in full-width mode), so its content aligns
+  /// A Markdown-preview pane, whose page centres its content on the capped+CENTERED
+  /// grid rect (or fills the full inset pane in full-width mode), so its content aligns
   /// with the editor grid — indented by `PaneGeometry.paintOffsetX` in the ~90-char
   /// default, flush at the grid's left edge in full-width mode.
   case preview
@@ -19,7 +19,7 @@ public enum PaneContentKind {
 ///
 /// `left` is ABSOLUTE — it is `gridLeft` (the pane's grid-rect x origin in the
 /// container view's coordinates) plus the grid-centering offset (for BOTH `.editor`
-/// and `.preview`, now identical). `width` never goes negative: the grid width floors
+/// and `.preview`, which compute the same span). `width` never goes negative: the grid width floors
 /// at 0 and the offset is clamped into `[0, width]`, so `left` also never passes the
 /// grid's right edge.
 public struct StatusbarTextSpan {

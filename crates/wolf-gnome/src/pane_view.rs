@@ -129,8 +129,9 @@
 //! event carrying the whole step count; and, while the program tracks the mouse,
 //! buttonless motion. Only the primary press focuses the pane.
 //!
-//! A preview's page is not its area's but its web view's, which WebKit's own click
-//! gesture claims in the bubble phase, so the area's gesture never sees a press there.
+//! A preview's page, which spans its pane below the strip, gutters and side margins
+//! included, is not its area's but its web view's, which WebKit's own click gesture
+//! claims in the bubble phase, so the area's gesture never sees a press there.
 //! The view therefore carries one more controller, a primary-button
 //! `gtk::GestureClick` in the CAPTURE phase whose press runs
 //! [`PaneInner::on_pane_clicked`], exactly as a strip press does. It sends Neovim no
@@ -214,6 +215,7 @@ use crate::pane_zoom::{self, RestoreTarget, RestoreTargets, ZoomEvent};
 use crate::preview_coalescer::{PreviewCoalescer, RenderDecision};
 use crate::preview_link::{self, PreviewLink};
 use crate::preview_ui::{self, DocumentUpdate, PreviewFilePress, PreviewLoad};
+use crate::preview_width;
 use crate::ready_seam;
 use crate::render::{draw_cells, draw_glyph, draw_text_line, FALLBACK_BG, FALLBACK_FG};
 use crate::scrollbar;
@@ -366,6 +368,9 @@ struct PaneWidgets {
     /// `<!doctype html><html><head>` prologue, so a real `</head>` can never sit at
     /// offset 0. See [`PaneInner::load_preview_document`] for what it guards.
     head_len: Cell<usize>,
+    /// The root style ([`preview_width::root_style`]) the view's page carries or was last
+    /// sent, or empty for none. It belongs to the view and is cleared beside `head_len`.
+    root_style: RefCell<String>,
     /// The fragment a CROSS-FILE link click asked to scroll to, waiting for the
     /// linked document's `LoadEvent::Finished` edge.
     ///
@@ -437,6 +442,7 @@ impl PaneWidgets {
             loaded: Cell::new(None),
             current_load: Cell::new(None),
             head_len: Cell::new(0),
+            root_style: RefCell::new(String::new()),
             pending_fragment: RefCell::new(None),
             reported_scroll: Cell::new(None),
             pending_scroll: Cell::new(None),
@@ -2649,6 +2655,7 @@ impl PaneInner {
                 // body-swap into a missing `<head>` and a stale fragment or scroll apply to another page.
                 p.loaded.set(None);
                 p.head_len.set(0);
+                p.root_style.borrow_mut().clear();
                 *p.pending_fragment.borrow_mut() = None;
                 p.reported_scroll.set(None);
                 p.pending_scroll.set(None);
@@ -2737,8 +2744,12 @@ impl PaneInner {
         }
     }
 
-    /// Applies a waiting cross-file fragment, else a restored pane's saved scroll, once
-    /// pane `pane_id`'s new document has finished loading.
+    /// Sends the pane's root style again, then applies a waiting cross-file fragment,
+    /// else a restored pane's saved scroll, once pane `pane_id`'s new document has
+    /// finished loading.
+    ///
+    /// The style goes first, because one changed while the load was in flight is not in
+    /// the loaded document's `<html>` tag, and a scroll must land on the capped layout.
     ///
     /// Connected to `load-changed` and reached on [`webkit6::LoadEvent::Finished`]
     /// alone. That edge is produced by a real `load_html` and NEVER by an in-place
@@ -2749,6 +2760,23 @@ impl PaneInner {
     /// Each slot is TAKEN in a statement of its own, so the scroll runs once and a
     /// later unrelated load — the next edit's re-render — does not repeat it.
     fn on_preview_load_finished(&self, pane_id: PaneId) {
+        let restyle = self.panes.borrow().get(&pane_id).and_then(|p| {
+            let style = p.root_style.borrow();
+            if style.is_empty() {
+                return None;
+            }
+            Some((
+                p.web.borrow().clone()?,
+                preview_width::apply_root_style_js(&style),
+            ))
+        });
+        if let Some((view, script)) = restyle {
+            view.evaluate_javascript(&script, None, None, gio::Cancellable::NONE, |result| {
+                if let Err(err) = result {
+                    eprintln!("wolf-gnome: preview root style failed: {err}");
+                }
+            });
+        }
         let fragment = self
             .panes
             .borrow()
@@ -2826,15 +2854,17 @@ impl PaneInner {
         self.pane_area.root().and_downcast::<gtk::Window>()
     }
 
-    /// Frames pane `pane_id`'s web view to the rectangle its grid would have used —
-    /// the same [`Self::pane_grid_rect_for`] under the same [`Self::pane_cap`] — by
-    /// margins on the overlay child.
+    /// Frames pane `pane_id`'s web view to the whole pane below its statusbar strip, by
+    /// margins on the overlay child, and sends its page the root style that caps the
+    /// content when that style changed.
     ///
-    /// The cap comes from the pane's own cached `full_width`, which for a preview pane
-    /// is [`PreviewInfo::source_full_width`]: the SOURCE buffer's flag, never the
-    /// preview window's, whose entry describes a scratch buffer nobody reads. The
-    /// HTML itself is rendered at full width (`crates/wolf-core/src/nvim.rs`), so this
-    /// frame is the only thing that applies the column cap at all.
+    /// The view spans the gutters and side margins so the page's scrollbar sits at the
+    /// pane's edge and the margins scroll and click as the page. The cap is the page's,
+    /// [`preview_width::root_style`] under the same [`Self::pane_cap`] an editor grid
+    /// uses, so the content lands on [`Self::pane_grid_rect_for`]'s rect. That cap comes
+    /// from the pane's own cached `full_width`, which for a preview pane is
+    /// [`PreviewInfo::source_full_width`]: the SOURCE buffer's flag, never the preview
+    /// window's, whose entry describes a scratch buffer nobody reads.
     fn apply_preview_frame(&self, pane_id: PaneId) {
         let panes = self.panes.borrow();
         let Some(p) = panes.get(&pane_id) else {
@@ -2844,17 +2874,29 @@ impl PaneInner {
         let Some(view) = view else {
             return;
         };
-        let width = f64::from(p.area.width());
-        let height = f64::from(p.area.height());
-        let rect = self.pane_grid_rect_for(width, height, self.pane_cap(p.full_width.get()));
-        view.set_margin_start(px(rect.x));
-        view.set_margin_top(px(rect.y));
-        view.set_margin_end(px(width - (rect.x + rect.w)));
-        view.set_margin_bottom(px(height - (rect.y + rect.h)));
+        view.set_margin_start(0);
+        view.set_margin_top(px(self.statusbar.height));
+        view.set_margin_end(0);
+        view.set_margin_bottom(0);
+        let style = preview_width::root_style(self.pane_cap(p.full_width.get()), EDITOR_PADDING_PX);
+        if *p.root_style.borrow() == style {
+            return;
+        }
+        let script = preview_width::apply_root_style_js(&style);
+        *p.root_style.borrow_mut() = style;
+        view.evaluate_javascript(&script, None, None, gio::Cancellable::NONE, |result| {
+            if let Err(err) = result {
+                eprintln!("wolf-gnome: preview root style failed: {err}");
+            }
+        });
     }
 
     /// Puts `html` on screen in pane `pane_id`'s web view: IN PLACE by swapping the
     /// body where that is sound, and by a full `load_html` where it is not.
+    ///
+    /// A full load carries the pane's root style in its `<html>` tag
+    /// ([`preview_width::styled_document`]), so it never paints uncapped, while the head
+    /// offset and the body are read from the raw `html`, so offsets compare raw to raw.
     ///
     /// ## The scroll measurement — do NOT simplify this back to `load_html`
     ///
@@ -2946,11 +2988,12 @@ impl PaneInner {
         source_path: &str,
         update: DocumentUpdate,
     ) {
-        let Some((view, recorded)) = ({
+        let Some((view, recorded, root_style)) = ({
             let panes = self.panes.borrow();
-            panes
-                .get(&pane_id)
-                .and_then(|p| p.web.borrow().clone().map(|v| (v, p.head_len.get())))
+            panes.get(&pane_id).and_then(|p| {
+                let view = p.web.borrow().clone()?;
+                Some((view, p.head_len.get(), p.root_style.borrow().clone()))
+            })
         }) else {
             return;
         };
@@ -2996,7 +3039,10 @@ impl PaneInner {
             }
         }
 
-        view.load_html(html, preview_link::file_uri_for(source_path).as_deref());
+        view.load_html(
+            &preview_width::styled_document(html, &root_style),
+            preview_link::file_uri_for(source_path).as_deref(),
+        );
         if let Some(p) = self.panes.borrow().get(&pane_id) {
             p.head_len.set(head.unwrap_or(0));
         }

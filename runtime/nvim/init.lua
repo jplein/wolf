@@ -2177,7 +2177,7 @@ function _G.wolf_setup_preview(chan)
 			if src ~= nil and src ~= "" then
 				local source_bufnr = vim.b[buf].wolf_preview_source_bufnr or -1
 				-- 4th element: the SOURCE buffer's full-width flag, so the front-end
-				-- frames this preview pane's web view capped (~90-char) or full-width.
+				-- caps this preview's content (~90-char) or lets it fill the pane.
 				local full_width = false
 				if source_bufnr ~= -1 and vim.api.nvim_buf_is_valid(source_bufnr) then
 					full_width = vim.b[source_bufnr].wolf_full_width == true

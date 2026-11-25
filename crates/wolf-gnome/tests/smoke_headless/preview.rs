@@ -2343,7 +2343,8 @@ pub(crate) const PREVIEW_DARK_BG: (u8, u8, u8) = (0x1b, 0x1b, 0x1b);
 /// rather than coinciding with it.
 const PREVIEW_LIGHT_BG: (u8, u8, u8) = (0xf4, 0xf4, 0xf4);
 
-/// How many rows below the web view's own top edge assertion 6 counts ink in.
+/// How many rows below the top of the page's content assertion 6 counts ink in: the web
+/// view's own top edge plus the root padding `preview_width::root_style` gives the page.
 ///
 /// ONE baseline unit, re-typed rather than imported from `base.css`'s
 /// `--wolf-baseline`, because the document's first line box is exactly that tall:
@@ -2372,9 +2373,11 @@ const PREVIEW_LIGHT_BG: (u8, u8, u8) = (0xf4, 0xf4, 0xf4);
 /// empty on a good render.
 ///
 /// MEASURED (first-ink row inside the band, from a retained green-run capture, at
-/// GTK 4.22.4 / libadwaita 1.9.0 / WebKitGTK 2.52.4): the located `web_top` is
-/// absolute row 159 on BOTH launches, and the first row carrying any non-theme pixel
-/// is absolute row 165 — OFFSET 6 into the band, with rows 0..5 pure background. So
+/// GTK 4.22.4 / libadwaita 1.9.0 / WebKitGTK 2.52.4): the content's top is absolute
+/// row 159 on BOTH launches, and the first row carrying any non-theme pixel is
+/// absolute row 165 — OFFSET 6 into the band, with rows 0..5 pure background. The web
+/// view's own top, now that it reaches the strip, is row 139, derived as 159 less
+/// `EDITOR_PADDING_PX` rather than re-measured. So
 /// the leading `.wolf-src` anchor costs no line box here: had it cost one, the first
 /// ink would have landed at offset 24 and this band would have read empty. Offset 6
 /// against a 24-row band leaves the whole rest of the first line box in hand, so 24
@@ -2584,8 +2587,8 @@ pub(crate) fn preview_theme_pane_area() -> (f64, f64, f64, f64) {
 /// The rows BOTH bands sample, as absolute output pixel indices `y0..y1`.
 ///
 /// It starts at the pane area's vertical MIDPOINT, which puts it below everything
-/// [`PREVIEW_THEME_SOURCE_BODY`] renders (about four wrapped lines, some 96 px, under
-/// a web view whose top edge sits about 160 px down the output), and ends
+/// [`PREVIEW_THEME_SOURCE_BODY`] renders (about four wrapped lines, some 96 px, below
+/// content that starts about 160 px down the output), and ends
 /// [`BAND_BOTTOM_CLEARANCE_PX`] above the output's bottom edge.
 ///
 /// Derived at the pinned output size: rows 384..600.
@@ -2909,8 +2912,8 @@ exit 0
 ///
 /// Assertion 6 locates the web view's top edge by scanning DOWN the sampled columns
 /// for the first row that is entirely the theme colour. Everything above the web view
-/// in those columns is the preview pane's statusbar strip and its padding, painted
-/// with the EDITOR's background — so the scan only means what it says if the editor's
+/// in those columns is the preview pane's statusbar strip, painted with the EDITOR's
+/// background — so the scan only means what it says if the editor's
 /// background is not the theme colour. Assertion 4 is exactly that measurement, taken
 /// in the other pane, which is why it is a named control rather than a formality.
 ///
@@ -2919,9 +2922,10 @@ exit 0
 /// `web_top` is self-located, so a change to where the pane puts its web view moves
 /// the band WITH the view and cannot redden anything. State that plainly, or the next
 /// reader tries `apply_preview_frame` as a revert, sees green and concludes the
-/// assertion is vacuous. What assertion 6 measures is the distance from the web
-/// view's own top edge to the document's first ink, which is a property of the CSS
-/// and of nothing in this crate.
+/// assertion is vacuous. The band starts `EDITOR_PADDING_PX` below `web_top`, at the
+/// top of the root padding `preview_width::root_style` gives the page, so what
+/// assertion 6 measures is the distance from the content's top to the document's
+/// first ink: a property of `base.css`, given that padding.
 ///
 /// ## What assertion 6 does and does NOT pin of the typography row
 ///
@@ -2952,7 +2956,7 @@ exit 0
 /// | 4 | fewer than [`CONTROL_MAX_THEME_FRACTION`] of the CONTROL band is this launch's theme colour | **control, self-checking** | none. Its failure means the EDITOR's background collides with the preview theme's, and the response is to RE-DERIVE the two colours against the real render — never to raise the fraction, which would disarm the premise assertion 6's `web_top` scan rests on. | green: EXACTLY 0.0000 on both launches — 0 of the control band's 76,680 pixels, not merely fewer than the ceiling. The editor pane's own background reads `(20, 22, 27)` in run 1 and `(224, 226, 234)` in run 2, so it follows the appearance too and collides with NEITHER theme colour at either setting. That the margin is the whole ceiling rather than a sliver is what makes assertion 6's `web_top` scan safe. |
 /// | 5 | at least [`SAMPLE_MIN_THEME_FRACTION`] of the SAMPLE band is this launch's own theme colour, and at most [`SAMPLE_MAX_OTHER_FRACTION`] is the other appearance's | **discriminator** — the configured appearance reaches the rendered document | delete `manager.set_color_scheme(decided.color_scheme);` from `appearance::apply_at_launch`. Isolated: the whole fast suite and every other smoke stay green, because nothing else in the repository observes that call. | green: 1.0000 own / 0.0000 other on BOTH launches — the sample band is uniformly one colour, all 76,464 pixels of it. Red: RUN 2 (light) fired, reading `0.0000 its own PREVIEW_LIGHT_BG … and 1.0000 the other appearance's PREVIEW_DARK_BG`; run 1 (dark) stayed green. So the ambient scheme under `cage` on this host is DARK and run 1 is the weak half — see the pair-discriminates section above. Isolation CONFIRMED by a full `cargo test --workspace` under the falsifier: 49 of the target's 50 tests and every other target passed, this smoke alone failed. |
 /// | 5b | the same, with the theme's own light palette removed | **discriminator** — the light palette is what `prefers-color-scheme: light` selects | delete the `@media (prefers-color-scheme: light)` block from `wolf-core`'s `markdown/themes/default.css`; run 2 reddens. | red: run 2 (light) fired with the same 0.0000 own / 1.0000 other reading as 5's. `markdown_render.rs` REDDENED alongside — 43 passed, 2 failed: `default_theme_carries_dark_and_light_palettes` ("the light media query must mirror the light-mode link color `#0969da`") and `hr_occupies_whole_baselines_and_is_painted_by_its_border` ("the LIGHT (`prefers-color-scheme: light`) theme must color the hr via `border-top-color: #d0d0d0`"). Red smoke over a RED fast suite, so this pairing reads as the THEME being wrong rather than the applier — which is the diagnostic separating 5b from 5, where the fast suite stayed fully green. |
-/// | 6 | with `web_top` self-located from the pixels, the first [`FLUSH_BAND_PX`] rows carry at least [`MIN_FLUSH_INK_PX`] non-theme pixels | **discriminator** — the document is flush against the top of the view | add `padding-top: 48px;` to `body.wolf-markdown` in `wolf-core`'s `markdown/base.css`; both launches redden. | green: 1,987 non-theme pixels in the band on run 1 and 1,987 on run 2, against the 200 floor, with `web_top` located at row 159 on both and the first ink 6 rows into the band. Red: 0 on BOTH launches (the harness reports run 1 and stops, so run 2's 0 is read out of its own retained capture — the scenario runs both launches before any assertion). The fast suite STAYED GREEN under the falsifier: `markdown_render.rs` 45 passed, `wolf-core` unit tests 223 passed, exactly as predicted — 48 is a multiple of 24, so the grid sweep accepts it and the `padding` shorthand assertion is untouched. No fallback to `padding: 48px 40px` was needed. |
+/// | 6 | with `web_top` self-located from the pixels, the first [`FLUSH_BAND_PX`] rows from `web_top + EDITOR_PADDING_PX` carry at least [`MIN_FLUSH_INK_PX`] non-theme pixels | **discriminator** — the document is flush against the top of its root padding | add `padding-top: 48px;` to `body.wolf-markdown` in `wolf-core`'s `markdown/base.css`; both launches redden. | green: 1,987 non-theme pixels in the band on run 1 and 1,987 on run 2, against the 200 floor, with the content's top at row 159 on both and the first ink 6 rows into the band. Red: 0 on BOTH launches (the harness reports run 1 and stops, so run 2's 0 is read out of its own retained capture — the scenario runs both launches before any assertion). The fast suite STAYED GREEN under the falsifier: `markdown_render.rs` 45 passed, `wolf-core` unit tests 223 passed, exactly as predicted — 48 is a multiple of 24, so the grid sweep accepts it and the `padding` shorthand assertion is untouched. No fallback to `padding: 48px 40px` was needed. |
 ///
 /// ## The conventions it obeys
 ///
@@ -3255,11 +3259,16 @@ fn assert_preview_theme_launch(smoke: &str, launch: &ThemeLaunch<'_>) {
         });
 
     let flush_height = pixel_index(FLUSH_BAND_PX, "FLUSH_BAND_PX");
+    let content_top = web_top
+        + pixel_index(
+            wolf_gnome::editor_inset::EDITOR_PADDING_PX,
+            "the page's root padding",
+        );
     let flush = SampleRect {
         x0: preview_x0,
         x1: preview_x1,
-        y0: web_top,
-        y1: web_top + flush_height,
+        y0: content_top,
+        y1: content_top + flush_height,
     };
     assert!(
         flush.y1 <= capture.height,
@@ -3273,15 +3282,18 @@ fn assert_preview_theme_launch(smoke: &str, launch: &ThemeLaunch<'_>) {
     let flush_ink = flush.pixels() - capture.count_exactly(flush, launch.own);
     assert!(
         flush_ink >= MIN_FLUSH_INK_PX,
-        "{smoke}: {label}: the first {FLUSH_BAND_PX} rows below the web view's own top edge (row \
-         {web_top}) carry only {flush_ink} non-{} pixels, fewer than the {MIN_FLUSH_INK_PX} floor. \
-         The document is NOT flush against the top of its view: something above the first line box \
-         is painting pure background where the first line's ink should be. The named cause is \
-         `body.wolf-markdown` regaining vertical padding in `wolf-core`'s `markdown/base.css` — \
-         the document is flush to the pane edges BY DESIGN, and any inset belongs to the pane \
-         chrome. Two things this is NOT. It is not a change to \
-         `pane_view::apply_preview_frame`: {web_top} is located from the pixels, so moving the web \
-         view moves this band with it and cannot redden it. And it is not the first block's own \
+        "{smoke}: {label}: the first {FLUSH_BAND_PX} rows below the content's top (row \
+         {content_top}, the web view's own top edge at {web_top} plus the page's root padding) \
+         carry only {flush_ink} non-{} pixels, fewer than the {MIN_FLUSH_INK_PX} floor. The \
+         document is NOT flush against the top of its root padding: something above the first \
+         line box is painting pure background where the first line's ink should be. The named \
+         cause is `body.wolf-markdown` regaining vertical padding in `wolf-core`'s \
+         `markdown/base.css` — the body is flush BY DESIGN, and the inset is the root padding \
+         `preview_width::root_style` sets. A larger padding-top in that style pushes the content \
+         down and reddens this the same way. It is not a \
+         change to `pane_view::apply_preview_frame`: {web_top} is located from the pixels, so \
+         moving the web view moves this band with it and cannot redden it. Nor is it the first \
+         block's own \
          top margin: the fixture's first block is a PARAGRAPH, and `base.css` gives `p` a flat \
          `margin: 0 0 24px`, so no edge-rule selector is on this path. If a green run ever \
          measures the first ink BELOW row {FLUSH_BAND_PX}, re-measure and raise FLUSH_BAND_PX \
@@ -3488,7 +3500,7 @@ exit 0
 /// A count per line rather than a run, so the glyphs drawn across a row of a document
 /// lower its count without breaking the extent; and a threshold rather than any pixel,
 /// so a stray coincidence of the colour elsewhere cannot widen it.
-fn colour_extent(
+pub(crate) fn colour_extent(
     capture: &Capture,
     area: SampleRect,
     colour: Rgb8,
@@ -4197,12 +4209,12 @@ const PCA_INK_FLOOR: u8 = 48;
 /// above the alpha plus this.
 const PCA_ALPHA_TOLERANCE: f64 = 0.15;
 
-/// Body of [`preview_page_click_activates_the_preview_under_cage`], appended to
-/// [`POINTER_PREAMBLE`].
+/// Body of [`assert_click_activates_the_preview`], appended to [`POINTER_PREAMBLE`].
 ///
 /// Open the source, put its preview beside it with `:WolfPreviewInOtherPane`, which leaves
-/// Neovim's focus on the source, capture and read the current window back, click plain text
-/// in the preview's page, then capture and read the current window back again. Each capture
+/// Neovim's focus on the source, capture and read the current window back, click at
+/// `PCA_CLICK_X`, `PCA_CLICK_Y` in the preview pane, then capture and read the current window
+/// back again. Each capture
 /// is taken before the readback that follows it, so no typed command line is in it.
 ///
 /// ## Exit codes it adds to [`POINTER_PREAMBLE`]'s 11-15
@@ -4236,7 +4248,7 @@ sleep "$SETTLE"
 grim "$OUT_PNG_BEFORE"
 read_cur "$PCA_CUR_BEFORE"
 
-# --- Step 3: click plain text in the preview's page ---------------------------
+# --- Step 3: click in the preview pane ------------------------------------------
 # The pointer is parked at (1, 1), so this motion crosses into the pane and
 # delivers a real enter and motion before the press.
 hsend motion "$PCA_CLICK_X" "$PCA_CLICK_Y"
@@ -4271,18 +4283,23 @@ struct StripBands {
     preview: SampleRect,
 }
 
+/// The statusbar strip's layout at [`SMOKE_FONT_PT`], as `titlebar.rs` derives it.
+fn smoke_strip_layout() -> wolf_gnome::statusbar_layout::StatusbarLayout {
+    let cell = cell_metrics_for_smoke();
+    wolf_gnome::statusbar_layout::statusbar_layout(
+        cell.size_px,
+        wolf_gnome::statusbar_layout::secondary_font_size(cell.size_px),
+        wolf_gnome::statusbar_layout::STATUSBAR_VERTICAL_PADDING,
+        wolf_gnome::statusbar_layout::STATUSBAR_LINE_GAP,
+    )
+}
+
 /// Each pane's strip primary line: the rows `statusbar_layout` puts it at below the pane
 /// area's top, as `titlebar.rs` derives them, and that pane's half of
 /// [`preview_theme_pane_area`], [`LINK_SEARCH_INSET_X_PX`] clear of the window edge and the
 /// paned handle.
 fn strip_bands() -> StripBands {
-    let cell = cell_metrics_for_smoke();
-    let layout = wolf_gnome::statusbar_layout::statusbar_layout(
-        cell.size_px,
-        wolf_gnome::statusbar_layout::secondary_font_size(cell.size_px),
-        wolf_gnome::statusbar_layout::STATUSBAR_VERTICAL_PADDING,
-        wolf_gnome::statusbar_layout::STATUSBAR_LINE_GAP,
-    );
+    let layout = smoke_strip_layout();
     let (area_x, area_y, area_w, _) = preview_theme_pane_area();
     let top = area_y + layout.primary_line_top;
     let y0 = pixel_index(top, "the strip band's first row");
@@ -4404,6 +4421,100 @@ fn assert_strip_states(
     );
 }
 
+/// Runs [`PCA_BODY`] with its click at `click`, in absolute output pixels, and asserts the
+/// five assertions [`preview_page_click_activates_the_preview_under_cage`] tabulates. `pngs`
+/// names captures A and B under the runtime directory.
+fn assert_click_activates_the_preview(smoke: &str, click: (i64, i64), pngs: (&str, &str)) {
+    let runtime_dir = require_smoke_env();
+    let cwd = make_temp_cwd();
+    let body = kc_source_body();
+    write_relaunch_fixtures(smoke, &cwd, &[(PCA_SOURCE_FILE, body.as_str())]);
+
+    let cur_before = cwd.join(PCA_CUR_BEFORE_NAME);
+    let cur_after = cwd.join(PCA_CUR_AFTER_NAME);
+    let out_png_before = runtime_dir.join(pngs.0);
+    let out_png = runtime_dir.join(pngs.1);
+    for path in [&cur_before, &cur_after, &out_png_before, &out_png] {
+        clear_evidence(path, smoke);
+    }
+
+    let (click_x, click_y) = click;
+    let click_x_arg = click_x.to_string();
+    let click_y_arg = click_y.to_string();
+
+    let status = run_pointer_scenario(
+        PCA_BODY,
+        &cwd,
+        &runtime_dir,
+        &out_png,
+        &[
+            ("PCA_SOURCE_FILE", OsStr::new(PCA_SOURCE_FILE)),
+            ("PCA_CUR_BEFORE", cur_before.as_os_str()),
+            ("PCA_CUR_AFTER", cur_after.as_os_str()),
+            ("PCA_CLICK_X", OsStr::new(&click_x_arg)),
+            ("PCA_CLICK_Y", OsStr::new(&click_y_arg)),
+            ("OUT_PNG_BEFORE", out_png_before.as_os_str()),
+        ],
+    );
+
+    // --- Assertion 1 (precondition): the scenario ran; the point is on screen ---
+    assert_pointer_scenario_succeeded(smoke, status, &cwd, &out_png);
+    assert_png_present(smoke, &out_png_before);
+    assert_png_present(smoke, &out_png);
+    let extents = read_output_extents(&cwd, smoke);
+    assert_inside_extents(smoke, "the click", (click_x, click_y), extents);
+
+    // --- Assertion 2 (precondition): the editor was active when the click came ---
+    let preview_name = format!("{PREVIEW_READBACK_PREFIX}{PCA_SOURCE_FILE}");
+    let current_before = read_trimmed(&cur_before, smoke);
+    assert_eq!(
+        current_before, PCA_SOURCE_FILE,
+        "{smoke}: before the click Neovim's current window shows {current_before:?}, not the \
+         source {PCA_SOURCE_FILE:?}. {preview_name:?} means `:WolfPreviewInOtherPane` left \
+         focus on the preview, so the click below would land in an already active pane and \
+         prove nothing; any other name means the `:e` or the preview did not run as typed."
+    );
+
+    // --- Assertion 3 (precondition): capture A draws the editor strip active ----
+    let bands = strip_bands();
+    let capture_a = decode_capture(&out_png_before, smoke, "capture A");
+    assert_strip_states(
+        smoke,
+        "capture A",
+        ("editor", strip_ink(&capture_a, bands.editor)),
+        ("preview", strip_ink(&capture_a, bands.preview)),
+        &out_png_before,
+        "Assertion 2 found the source current, so the strips do not follow the active pane \
+         before any click, or the alpha premise in `assert_strip_states` is false: re-measure \
+         it before reading assertion 5.",
+    );
+
+    // --- Assertion 4 (discriminator): the click moved Neovim to the preview -----
+    let current_after = read_trimmed(&cur_after, smoke);
+    assert_eq!(
+        current_after, preview_name,
+        "{smoke}: after the click at ({click_x}, {click_y}) Neovim's current window shows \
+         {current_after:?}, not the preview {preview_name:?}. The source's name means the \
+         press never reached the pane's focus path: WebKit's own click gesture took it, and \
+         no capture-phase gesture on the web view ran `on_pane_clicked` first. Any other name \
+         means the click focused some other window."
+    );
+
+    // --- Assertion 5 (discriminator): capture B draws the preview strip active ---
+    let capture_b = decode_capture(&out_png, smoke, "capture B");
+    assert_strip_states(
+        smoke,
+        "capture B",
+        ("preview", strip_ink(&capture_b, bands.preview)),
+        ("editor", strip_ink(&capture_b, bands.editor)),
+        &out_png,
+        "Assertion 4 found the preview current in Neovim, so the front-end's active pane did not \
+         follow. The editor strip still active means `set_active_pane` never ran for the \
+         preview; both strips inactive means `draw_pane` does not draw a preview's strip \
+         active.",
+    );
+}
+
 /// A primary click in a preview pane's page makes that pane the active one, as a click on its
 /// strip does, and the click still reaches the page.
 ///
@@ -4431,95 +4542,54 @@ fn assert_strip_states(
 /// | 5 | capture B shows the preview strip active and the editor strip inactive | **discriminator** | C1b |
 #[test]
 fn preview_page_click_activates_the_preview_under_cage() {
-    const SMOKE: &str = "preview_page_click_activates_the_preview_under_cage";
-
-    let runtime_dir = require_smoke_env();
-    let cwd = make_temp_cwd();
-    let body = kc_source_body();
-    write_relaunch_fixtures(SMOKE, &cwd, &[(PCA_SOURCE_FILE, body.as_str())]);
-
-    let cur_before = cwd.join(PCA_CUR_BEFORE_NAME);
-    let cur_after = cwd.join(PCA_CUR_AFTER_NAME);
-    let out_png_before = runtime_dir.join("wolf_gnome_preview_page_click_before.png");
-    let out_png = runtime_dir.join("wolf_gnome_preview_page_click_after.png");
-    for path in [&cur_before, &cur_after, &out_png_before, &out_png] {
-        clear_evidence(path, SMOKE);
-    }
-
-    let (click_x, click_y) = kc_click_point();
-    let click_x_arg = click_x.to_string();
-    let click_y_arg = click_y.to_string();
-
-    let status = run_pointer_scenario(
-        PCA_BODY,
-        &cwd,
-        &runtime_dir,
-        &out_png,
-        &[
-            ("PCA_SOURCE_FILE", OsStr::new(PCA_SOURCE_FILE)),
-            ("PCA_CUR_BEFORE", cur_before.as_os_str()),
-            ("PCA_CUR_AFTER", cur_after.as_os_str()),
-            ("PCA_CLICK_X", OsStr::new(&click_x_arg)),
-            ("PCA_CLICK_Y", OsStr::new(&click_y_arg)),
-            ("OUT_PNG_BEFORE", out_png_before.as_os_str()),
-        ],
+    assert_click_activates_the_preview(
+        "preview_page_click_activates_the_preview_under_cage",
+        kc_click_point(),
+        (
+            "wolf_gnome_preview_page_click_before.png",
+            "wolf_gnome_preview_page_click_after.png",
+        ),
     );
+}
 
-    // --- Assertion 1 (precondition): the scenario ran; the point is on screen ---
-    assert_pointer_scenario_succeeded(SMOKE, status, &cwd, &out_png);
-    assert_png_present(SMOKE, &out_png_before);
-    assert_png_present(SMOKE, &out_png);
-    let extents = read_output_extents(&cwd, SMOKE);
-    assert_inside_extents(SMOKE, "the page click", (click_x, click_y), extents);
+/// The point [`preview_margin_click_activates_the_preview_under_cage`] clicks, in absolute
+/// output pixels: centred across the preview (right) pane, `EDITOR_PADDING_PX / 2` below its
+/// strip, in the top padding gutter and above any of the page's content.
+fn margin_click_point() -> (i64, i64) {
+    let layout = smoke_strip_layout();
+    let (area_x, area_y, area_w, _) = preview_theme_pane_area();
+    let padding = wolf_gnome::editor_inset::EDITOR_PADDING_PX;
+    (
+        pixel_target(area_x + area_w * 3.0 / 4.0, "the margin click's x"),
+        pixel_target(
+            area_y + layout.height + padding / 2.0,
+            "the margin click's y",
+        ),
+    )
+}
 
-    // --- Assertion 2 (precondition): the editor was active when the click came ---
-    let preview_name = format!("{PREVIEW_READBACK_PREFIX}{PCA_SOURCE_FILE}");
-    let current_before = read_trimmed(&cur_before, SMOKE);
-    assert_eq!(
-        current_before, PCA_SOURCE_FILE,
-        "{SMOKE}: before the click Neovim's current window shows {current_before:?}, not the \
-         source {PCA_SOURCE_FILE:?}. {preview_name:?} means `:WolfPreviewInOtherPane` left \
-         focus on the preview, so the click below would land in an already active pane and \
-         prove nothing; any other name means the `:e` or the preview did not run as typed."
-    );
-
-    // --- Assertion 3 (precondition): capture A draws the editor strip active ----
-    let bands = strip_bands();
-    let capture_a = decode_capture(&out_png_before, SMOKE, "capture A");
-    assert_strip_states(
-        SMOKE,
-        "capture A",
-        ("editor", strip_ink(&capture_a, bands.editor)),
-        ("preview", strip_ink(&capture_a, bands.preview)),
-        &out_png_before,
-        "Assertion 2 found the source current, so the strips do not follow the active pane \
-         before any click, or the alpha premise in `assert_strip_states` is false: re-measure \
-         it before reading assertion 5.",
-    );
-
-    // --- Assertion 4 (discriminator): the click moved Neovim to the preview -----
-    let current_after = read_trimmed(&cur_after, SMOKE);
-    assert_eq!(
-        current_after, preview_name,
-        "{SMOKE}: after the click in the preview's page Neovim's current window shows \
-         {current_after:?}, not the preview {preview_name:?}. The source's name means the \
-         press never reached the pane's focus path: WebKit's own click gesture took it, and \
-         no capture-phase gesture on the web view ran `on_pane_clicked` first. Any other name \
-         means the click focused some other window."
-    );
-
-    // --- Assertion 5 (discriminator): capture B draws the preview strip active ---
-    let capture_b = decode_capture(&out_png, SMOKE, "capture B");
-    assert_strip_states(
-        SMOKE,
-        "capture B",
-        ("preview", strip_ink(&capture_b, bands.preview)),
-        ("editor", strip_ink(&capture_b, bands.editor)),
-        &out_png,
-        "Assertion 4 found the preview current in Neovim, so the front-end's active pane did not \
-         follow. The editor strip still active means `set_active_pane` never ran for the \
-         preview; both strips inactive means `draw_pane` does not draw a preview's strip \
-         active.",
+/// A primary click in a preview pane's top padding gutter makes that pane the active one, as
+/// a click in its page does.
+///
+/// [`preview_page_click_activates_the_preview_under_cage`]'s scenario and assertions, with
+/// the click at [`margin_click_point`]. Below the strip the gutter is the web view's, whose
+/// root padding fills it, so the press takes the page's path to the pane's focus.
+///
+/// ## Assertions
+///
+/// | # | assertion | kind | ID |
+/// | --- | --- | --- | --- |
+/// | 1-3 | as in [`preview_page_click_activates_the_preview_under_cage`] | precondition | — |
+/// | 4, 5 | after the click, the current window is the preview, and capture B draws its strip active | guard | G10a |
+#[test]
+fn preview_margin_click_activates_the_preview_under_cage() {
+    assert_click_activates_the_preview(
+        "preview_margin_click_activates_the_preview_under_cage",
+        margin_click_point(),
+        (
+            "wolf_gnome_preview_margin_click_before.png",
+            "wolf_gnome_preview_margin_click_after.png",
+        ),
     );
 }
 

@@ -171,6 +171,7 @@ mod packaged;
 mod panes;
 mod pointer;
 mod preview;
+mod preview_margins;
 mod preview_render;
 mod recovery;
 mod restore;

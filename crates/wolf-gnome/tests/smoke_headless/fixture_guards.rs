@@ -50,6 +50,7 @@ use super::preview::{
     UNSAVED_COVER_FILE, UNSAVED_COVER_HEADING, UNSAVED_MARKER, UNSAVED_OCR_COVER,
     UNSAVED_OCR_MARKER, UNSAVED_READBACK_NAME,
 };
+use super::preview_margins::PM_FILE;
 use super::preview_render::{PICKOVER_OTHER_FILE, PICKOVER_SOURCE_FILE, PICKOVER_WINS_NAME};
 use super::recovery::{
     RESTART_OCR_BANNER, RESTART_OCR_HEADING, RESTART_OCR_OVERLAY, RESTART_OCR_UNSAVED, STALL_FILE,
@@ -343,6 +344,9 @@ use super::*;
 ///   writes no fixture and reads only `stty size` readbacks and a frozen state.
 ///   `a_restored_search_sidebar_runs_its_query_under_cage` asserts on the case smoke's terms
 ///   over the case smoke's fixtures, so it is covered through that smoke's rows.
+/// * `preview_margins_frame_and_scroll_the_page_under_cage` captures three PNGs and OCRs none:
+///   its observables are colour extents and a frozen state's scroll. Its fixture is registered
+///   in [`RELAUNCH_FIXTURE_NAMES`] for the generic loop's sake.
 /// * The New Tab smokes in `new_tab.rs` assert on [`EMPTY_STATE_OCR`] and
 ///   [`TG_OCR_TREE_ROW`], covered through their owners' rows, and on the empty tab's title,
 ///   `new_tab::NT_OCR_TITLE`, which has no row: [`TEMP_CWD_PREFIX`] spells it, so the
@@ -1841,6 +1845,11 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         PS_FILE,
         "PS_FILE",
         "preview_scroll_survives_a_close_and_relaunch_under_cage",
+    ),
+    (
+        PM_FILE,
+        "PM_FILE",
+        "preview_margins_frame_and_scroll_the_page_under_cage",
     ),
     (
         DZ_FILE,
