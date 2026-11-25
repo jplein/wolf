@@ -184,6 +184,7 @@ mod terminal;
 mod terminal_colours;
 mod terminal_terminfo;
 mod titlebar;
+mod tree_reveal;
 mod zoom_pane;
 
 use scrub_lists::{PACKAGED_SCRUB_ALWAYS, PACKAGED_SCRUB_FONT_STACK, PACKAGED_SCRUB_GTK_RUNTIME};

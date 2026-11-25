@@ -55,8 +55,9 @@
 //! A refresh then passes two gates ([`crate::tree_gate`]): it is refused outright
 //! while the tree is off screen, with the sidebar hidden or on its Search page (and
 //! owed once when it returns), and it rebuilds only when the snapshot VERSION
-//! advanced. A pending reveal is retried either way,
-//! because a skipped rebuild still leaves selection and scroll to settle.
+//! advanced. A pending reveal is retried either way, because a skipped rebuild still
+//! leaves selection and scroll to settle. A rebuild also reveals the current file
+//! again: `remove_all` drops the selection and returns the list to its first row.
 //!
 //! **Present limitation: manual expansion does not survive a version advance.** A
 //! current-file change advances no version, so expansion survives opening a file,
@@ -71,10 +72,16 @@
 //! The currently-edited file (from `Snapshot::current_file`, delivered on the
 //! existing render wake) is highlighted via the [`CURRENT_FILE_CSS`] class and
 //! revealed by expanding the synthetic root and then its ancestor directories,
-//! selecting its row, and scrolling it into view with `ListView::scroll_to` (the gtk
-//! `v4_12` feature). Because the current file can arrive before the tree has
-//! streamed in, the requested reveal is stashed in `pending_reveal` and retried on
-//! each refresh.
+//! selecting its row at once, and scrolling it into view with `ListView::scroll_to`
+//! (the gtk `v4_12` feature) later, from [`queue_reveal_scroll`]'s frame-clock tick.
+//! Because the current file can arrive before the tree has streamed in, the
+//! requested reveal is stashed in `pending_reveal` and retried on each refresh.
+//!
+//! **The scroll never runs from `reveal` itself.** A `scroll_to` before the list's
+//! first allocation aligns against a zero-height page: the list stays at its top, and
+//! the rows between the root and the target keep no widget, so they draw blank until
+//! a scroll or a collapse. Rows not yet laid out are top-aligned rather than
+//! minimally scrolled, so the tick also waits one frame past the first it sees.
 //!
 //! The bold is moved by a REGISTRY rather than by a rebuild, and that is what the
 //! version gate costs. `connect_bind` records each file row's label under its
@@ -153,6 +160,74 @@ const CURRENT_FILE_CSS_DATA: &str = ".wolf-current-file { font-weight: bold; }";
 /// means a refresh is already pending), mirroring the picker's wake channel.
 const TREE_WAKE_CHANNEL_CAP: usize = 1;
 
+/// The file a refresh reveals: the `pending` reveal, or, when the refresh `rebuilt`
+/// the root store, the `current` file in its place.
+///
+/// Only a rebuild falls back to `current`, because only a rebuild loses the
+/// revealed row's selection and scroll. Revealing on every refresh would scroll the
+/// list back to the current file under a user who scrolled away from it.
+#[must_use]
+fn reveal_target(rebuilt: bool, pending: Option<&Path>, current: Option<&Path>) -> Option<PathBuf> {
+    pending
+        .or(if rebuilt { current } else { None })
+        .map(Path::to_path_buf)
+}
+
+/// The scroll a reveal owes the list view, run by [`queue_reveal_scroll`]'s tick.
+#[derive(Default)]
+struct RevealScroll {
+    /// A reveal selected a row and its scroll has not run yet.
+    owed: Cell<bool>,
+    /// A tick callback is installed on the list view.
+    ticking: Cell<bool>,
+    /// The frame counter of the first frame the tick saw since the latest reveal.
+    seen_frame: Cell<Option<i64>>,
+}
+
+/// Owes the list view a scroll to its selected row, and runs it from a tick on the
+/// list view's frame clock on a frame after the first the tick sees.
+///
+/// A `scroll_to` before the list's first allocation divides by a zero page, so GTK
+/// leaves the list at its top and binds no widget for the rows between the root and
+/// the target: they draw blank. A frame's layout runs after its tick, so waiting one
+/// frame past the first is what gives the rows an area; a row without one is aligned
+/// to the top of the view rather than minimally scrolled.
+///
+/// The tick runs only while the list view is mapped, because a tick callback keeps
+/// the frame clock running while the widget is realized, mapped or not. Unmapped, it
+/// withdraws and leaves the scroll owed, and the `map` handler [`build`] installs
+/// calls this again. The tick holds only `Cell`s and widget clones, so no `RefCell`
+/// borrow is live across `scroll_to` (rule R1).
+fn queue_reveal_scroll(list_view: &gtk::ListView, scroll: &Rc<RevealScroll>) {
+    scroll.owed.set(true);
+    scroll.seen_frame.set(None);
+    if !list_view.is_mapped() || scroll.ticking.get() {
+        return;
+    }
+    scroll.ticking.set(true);
+    let scroll = scroll.clone();
+    list_view.add_tick_callback(move |list_view, clock| {
+        if !list_view.is_mapped() {
+            scroll.ticking.set(false);
+            return glib::ControlFlow::Break;
+        }
+        if scroll.seen_frame.get().is_none() {
+            scroll.seen_frame.set(Some(clock.frame_counter()));
+            return glib::ControlFlow::Continue;
+        }
+        let selected = list_view
+            .model()
+            .and_downcast::<gtk::SingleSelection>()
+            .map_or(gtk::INVALID_LIST_POSITION, |selection| selection.selected());
+        if selected != gtk::INVALID_LIST_POSITION {
+            list_view.scroll_to(selected, gtk::ListScrollFlags::NONE, None);
+        }
+        scroll.owed.set(false);
+        scroll.ticking.set(false);
+        glib::ControlFlow::Break
+    });
+}
+
 /// The tree's shared, interior-mutable state. All access happens on the single GTK
 /// main thread, so `RefCell` (not a `Mutex`) is sufficient.
 struct TreeInner {
@@ -169,8 +244,11 @@ struct TreeInner {
     selection: gtk::SingleSelection,
     /// The scrolled window holding the list view (the sidebar's root widget).
     scroller: gtk::ScrolledWindow,
-    /// The list view; retained so `reveal` can scroll a revealed row into view.
+    /// The list view, whose frame clock runs a reveal's scroll; see
+    /// [`queue_reveal_scroll`].
     list_view: gtk::ListView,
+    /// The scroll a reveal owes the list view, shared with its tick and `map` handler.
+    reveal_scroll: Rc<RevealScroll>,
     /// Resolves the SELECTED tab's core, which a search starts on and a file opens
     /// in.
     core: CoreSource,
@@ -219,7 +297,10 @@ impl TreeInner {
     /// the search's entries into the shared list, rebuilds the root store from the
     /// single synthetic root and re-expands it. A pending reveal is retried EITHER
     /// WAY — a skipped rebuild leaves the structure alone but selection and scroll
-    /// still have to settle. No-op if the search is gone.
+    /// still have to settle. A rebuild with nothing pending reveals the current file
+    /// again, because `remove_all` dropped its selection and scrolled the list back
+    /// to its first row; a refresh without one reveals nothing more, which would pull
+    /// a user's scroll back on every render wake. No-op if the search is gone.
     fn refresh(&self) {
         // No search at all: the empty state before its first re-root, or a closed
         // sidebar. Nothing to read and nothing to draw.
@@ -265,8 +346,10 @@ impl TreeInner {
             self.expand_root();
         }
 
+        // Each in its own statement: `reveal` borrows both again.
         let pending = self.pending_reveal.borrow().clone();
-        if let Some(abs) = pending {
+        let current = self.current_abs.borrow().clone();
+        if let Some(abs) = reveal_target(rebuild, pending.as_deref(), current.as_deref()) {
             self.reveal(&abs);
         }
     }
@@ -383,9 +466,11 @@ impl TreeInner {
     }
 
     /// Reveals `abs` in the tree: expands its ancestor directories (top-down,
-    /// re-scanning after each expansion since positions shift) and selects its row.
-    /// Leaves `pending_reveal` set if the file has not streamed in yet (so the next
-    /// refresh retries); clears it on success.
+    /// re-scanning after each expansion since positions shift), selects its row, and
+    /// owes the list view the scroll that brings it into view, which
+    /// [`queue_reveal_scroll`] runs once the rows are laid out. Leaves
+    /// `pending_reveal` untouched if the file has not streamed in yet (so a pending
+    /// reveal is retried on the next refresh); clears it on success.
     fn reveal(&self, abs: &Path) {
         let rel = {
             let entries = self.entries.borrow();
@@ -412,10 +497,7 @@ impl TreeInner {
 
         if let Some(pos) = self.find_row(&rel) {
             self.selection.set_selected(pos);
-            // Scroll the (possibly deeply-nested, off-screen) revealed row into
-            // view. Requires the gtk `v4_12` feature.
-            self.list_view
-                .scroll_to(pos, gtk::ListScrollFlags::NONE, None);
+            queue_reveal_scroll(&self.list_view, &self.reveal_scroll);
             *self.pending_reveal.borrow_mut() = None;
         }
     }
@@ -866,6 +948,7 @@ pub fn build(
         selection,
         scroller,
         list_view: list_view.clone(),
+        reveal_scroll: Rc::new(RevealScroll::default()),
         core,
         opener,
         search_core: RefCell::new(Weak::new()),
@@ -900,6 +983,16 @@ pub fn build(
                 if let Some(inner) = inner_weak.upgrade() {
                     inner.refresh_coalesced();
                 }
+            }
+        });
+    }
+
+    // A reveal's tick withdraws while the list is unmapped; mapping it again re-arms an owed scroll.
+    {
+        let scroll = inner.reveal_scroll.clone();
+        list_view.connect_map(move |list_view| {
+            if scroll.owed.get() {
+                queue_reveal_scroll(list_view, &scroll);
             }
         });
     }
@@ -1141,5 +1234,69 @@ mod tests {
              2, but the count was {}",
             memo.build_count()
         );
+    }
+
+    // === reveal_target ===
+
+    /// A refresh reveals a pending reveal whether or not it rebuilt, and falls back to
+    /// the current file only after a rebuild, which is what lost the revealed row's
+    /// selection and scroll.
+    ///
+    /// Each row's expectation is a literal path, never one derived from the inputs.
+    ///
+    /// Reverts that must redden it: ignoring `rebuilt` and returning `pending` alone
+    /// fails the "rebuilt, no pending" row; returning `pending.or(current)` whatever
+    /// `rebuilt` is fails the "not rebuilt, no pending" row.
+    #[test]
+    fn reveal_target_rereveals_the_current_file_only_after_a_rebuild() {
+        let current = Path::new("/wsroot/notes/current.md");
+        let pending = Path::new("/wsroot/pending.md");
+
+        // (row, rebuilt, pending, current, want)
+        type Row<'a> = (
+            &'a str,
+            bool,
+            Option<&'a Path>,
+            Option<&'a Path>,
+            Option<PathBuf>,
+        );
+        let rows: [Row<'_>; 5] = [
+            ("not rebuilt, no pending", false, None, Some(current), None),
+            (
+                "not rebuilt, pending",
+                false,
+                Some(pending),
+                None,
+                Some(PathBuf::from("/wsroot/pending.md")),
+            ),
+            (
+                "rebuilt, no pending",
+                true,
+                None,
+                Some(current),
+                Some(PathBuf::from("/wsroot/notes/current.md")),
+            ),
+            (
+                "rebuilt, pending",
+                true,
+                Some(pending),
+                Some(current),
+                Some(PathBuf::from("/wsroot/pending.md")),
+            ),
+            ("rebuilt, nothing", true, None, None, None),
+        ];
+
+        for (row, rebuilt, pending, current, want) in rows {
+            assert_eq!(
+                reveal_target(rebuilt, pending, current),
+                want,
+                "reveal_target, row {row:?}: a refresh must reveal the pending file whenever one is \
+                 stashed, and fall back to the current file only when it rebuilt the root store. \
+                 A rebuild's remove_all drops the revealed row's selection and returns the list to \
+                 its first row, so without the fallback the sidebar loses the current file on \
+                 every streamed batch; with it on every refresh, each render wake would pull a \
+                 user's scroll back to the current file."
+            );
+        }
     }
 }

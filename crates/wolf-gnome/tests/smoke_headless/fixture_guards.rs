@@ -106,6 +106,7 @@ use super::terminal::{
     TP_OCR_WORD,
 };
 use super::titlebar::TB_READ_NAME;
+use super::tree_reveal::{ABOVE_TERMS, CURRENT_TERM, TRIGGER_TERM};
 use super::*;
 
 /// Every lowercased substring the OCR-asserting cage smokes must — or must not —
@@ -181,6 +182,11 @@ use super::*;
 /// as well. [`TG_OCR_KEEP`] is content, the heading the sidebar band reads only while the
 /// sidebar is hidden. The chord smoke asserts on the same terms as the click smoke, so it is
 /// covered through the click smoke's rows.
+///
+/// [`ABOVE_TERMS`], [`CURRENT_TERM`] and [`TRIGGER_TERM`] are the sixth: the tree rows the
+/// sidebar's launch reveal must bring into view, so their generated files carry their terms and
+/// stay out of [`RELAUNCH_FIXTURE_NAMES`]. `tree_reveal.rs`'s own guard checks that each term
+/// names its one row and no other.
 ///
 /// Every smoke that OCRs a capture registers each term it asserts on here, and a
 /// smoke that OCRs nothing registers none; the second project-search smoke is covered
@@ -816,6 +822,46 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
         TOAST_OCR_TERM,
         "TOAST_OCR_TERM",
         "terminal_drawer_hides_a_message_toast_under_cage",
+    ),
+    (
+        ABOVE_TERMS[0],
+        "ABOVE_TERMS[0]",
+        "restored_editor_reveal_draws_the_rows_above_the_current_file_under_cage",
+    ),
+    (
+        ABOVE_TERMS[1],
+        "ABOVE_TERMS[1]",
+        "restored_editor_reveal_draws_the_rows_above_the_current_file_under_cage",
+    ),
+    (
+        ABOVE_TERMS[2],
+        "ABOVE_TERMS[2]",
+        "restored_editor_reveal_draws_the_rows_above_the_current_file_under_cage",
+    ),
+    (
+        ABOVE_TERMS[3],
+        "ABOVE_TERMS[3]",
+        "restored_editor_reveal_draws_the_rows_above_the_current_file_under_cage",
+    ),
+    (
+        ABOVE_TERMS[4],
+        "ABOVE_TERMS[4]",
+        "restored_editor_reveal_draws_the_rows_above_the_current_file_under_cage",
+    ),
+    (
+        ABOVE_TERMS[5],
+        "ABOVE_TERMS[5]",
+        "restored_editor_reveal_draws_the_rows_above_the_current_file_under_cage",
+    ),
+    (
+        CURRENT_TERM,
+        "CURRENT_TERM",
+        "restored_editor_reveal_draws_the_rows_above_the_current_file_under_cage",
+    ),
+    (
+        TRIGGER_TERM,
+        "TRIGGER_TERM",
+        "restored_editor_reveal_draws_the_rows_above_the_current_file_under_cage",
     ),
 ];
 
