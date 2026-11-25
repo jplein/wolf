@@ -1,0 +1,29 @@
+# Retrospective: the GNOME sidebar drew blank rows after a launch reveal
+
+Last verified at commit `8ce1e72484c8960ef4eb4a86df1682d4f284aeec`.
+
+The task fixed `crates/wolf-gnome/src/tree_view.rs`. A launch reveal of a current file below the fold left the rows above it blank, so the reveal scrolls from a frame tick after layout, and a root-store rebuild reveals the current file again. The task added the cage smoke `tree_reveal.rs` with its fixture guard and `ASSERTED_OCR_TERMS` rows, and the note `notes/wolf-gnome/the-sidebar-reveal.md`. It took ten invocations at $22.03 in all, with one review round trip.
+
+## What went well
+
+- **`regina on linux` let the coder measure the cause and not guess it.** `coder-1` reproduced the bug red at the base (its request 1). It then added temporary bind and refresh logging, which showed page size 0 at the `scroll_to` and rows 1 to 82 left unbound (request 2), and removed the logging before it committed. Review 1 §2 checked that this window explains the user's thirteen blank rows, and every falsifier ran as one Linux command (requests 6 to 11).
+- **A pure seam made two falsifiers cheap.** `reveal_target` takes the pending reveal, the current file and a `rebuilt` flag, so C5a and C5b are rows of the in-source table test T3. They run in milliseconds under `--lib` (requests 10 and 11), not through `cage`.
+- **The fixture guard caught term collisions without a compositor.** `fixture_guards.rs` and its `ASSERTED_OCR_TERMS` registry let `test-writer-1` add eight rows and the guard T2, which proves no fixture name carries another row's OCR term. Review 1 §3 relied on it.
+- **The tests README had a place for what the smoke cannot see.** Its "What is still unproven" list took C4's measured green, and plan 3 §3 could cite it in the test's doc rather than restate it.
+- **Wiring was one line.** wolf-gnome has no Bazel target, by a documented decision, so `mod tree_reveal;` in `smoke_headless/main.rs` was all the wiring. The Linux gate runs the cage smokes and fails if their tools are missing, so the new smoke ran in `implementation-1`.
+
+## What did not go well
+
+- **One review round trip cost $2.91 for a falsifier the test doc claimed before it was measured.** Plan 2 §4 said C4, deleting the `connect_map` re-arm, turns leg A red only if the launch reveal ran unmapped, and green otherwise. `test-writer-1` wrote C4 into row A of the assertion table in `tree_reveal.rs` without the condition. `coder-1` measured it green (request 9), and review 1 §5 rejected the table for contradicting the tests README; the rejection added `architect-3`, `test-writer-2`, `coder-2`, `technical-writer-2` and `reviewer-2`, over about 13 minutes.
+- **Three agents saw the contradiction, and the one who flagged it could not act.** `coder-1` reported C4 green and that nothing observes the re-arm, but did not mention the table. `technical-writer-1` named the stale row in its report and did not edit it, as the file is the test writer's. Its definition says a comment that must change is a `rejected`, and one that is "merely stale" is a note. It read a false falsifier claim as merely stale, and `reviewer-1` read it as blocking.
+- **This task added one more "predicted red" column.** The table in `tree_reveal.rs` has the column that [zoom-rules-2](zoom-rules-2.md) recommendation 1 and [application-state-3](application-state-3.md) recommendation 3 asked to drop. `grep -c 'predicted red'` finds it in 12 files under `crates/wolf-gnome/tests/smoke_headless/`. Here the false claim sat in the falsifying-edit column beside it, so dropping that column alone would not have prevented it.
+- **The architect read GTK's source by download, at 40% of the task's cost.** `architect-2` ($8.76, 87 turns, 27 minutes) found no GTK sources on the macOS worker and fetched `gtklistbase.c`, `gtklistitemmanager.c`, `gtklistview.c` and `gtkwidget.c` with `curl`. The reading paid off, since plan 2's H1 is what `coder-1` measured. But a scratch run on Linux would have shown page size 0 directly, without the reading.
+- **The `tree_view.rs` entry is at its word budget.** `technical-writer-1` cut seven phrases from the entry in `crates/wolf-gnome/src/README.md` to fit one bullet, and left it at 247 of 250 words. `crates/wolf-gnome/tests/README.md` grew to 136,912 bytes, and `smoke_headless/main.rs` is 282,820 bytes, which `architect-2` read in `sed -n` ranges.
+- **`architect-1` was interrupted** about three minutes in, before it wrote a plan, and `architect-2` was resumed in its place. Nothing in the repository invited it.
+
+## Recommendations
+
+1. **Keep measured outcomes out of the smoke doc tables.** This is recommendation 1 of [zoom-rules-2](zoom-rules-2.md) and 3 of [application-state-3](application-state-3.md), come up again, and wider. In the tables under `crates/wolf-gnome/tests/smoke_headless/`, keep the ID and the assertion. Drop both the "predicted red" column and the list of falsifying edits, which live in the plan and the coder's report. The test writer cannot measure either and the coder cannot edit the test file, so this task's $2.91 round trip would not have happened.
+2. **Say that a comment contradicting a measurement is a `rejected`.** In `.claude/skills/regina/agents/technical-writer.md`, next to "one that is merely stale is a note in your report", add that a comment contradicting a measured result or another document must change. `technical-writer-1` would then have sent C4's row back before `reviewer-1` ran, saving one review ($1.47 to $2.26).
+3. **Give the architect `regina on linux`.** This is recommendation 1 of [nerd-font-3](nerd-font-3.md), come up again. For a Linux-only GTK bug, a scratch diagnosis run would have replaced most of `architect-2`'s source download.
+4. **Split the wolf-gnome READMEs.** This is recommendation 7 of [nerd-font-3](nerd-font-3.md), come up again. Here the `tree_view.rs` entry was trimmed to 247 of 250 words to take one bullet.
