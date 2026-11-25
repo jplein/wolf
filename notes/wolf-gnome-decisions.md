@@ -104,7 +104,7 @@ Eight things are process-scoped, each because a second copy would be wrong rathe
 
 ## Window structure
 
-The widget tree, the pane area while a tab is zoomed, the overlay stacking order, and the focus regime that keeps GTK keyboard focus off every pane area, since a destroyed focus widget kills key dispatch. [Window structure](wolf-gnome/window-structure.md) records each, with why the pane chrome is painted rather than built from widgets.
+The widget tree, the pane area while a tab is zoomed, the overlay stacking order, how a press on a preview's page reaches its pane, and the focus regime that keeps GTK keyboard focus off every pane area, since a destroyed focus widget kills key dispatch. [Window structure](wolf-gnome/window-structure.md) records each, with why the pane chrome is painted rather than built from widgets.
 
 ## Terminal panes
 

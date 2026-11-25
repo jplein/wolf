@@ -636,14 +636,14 @@ Purpose: one tab's GTK glue: `layout`'s pane tree as nested `gtk::Paned`, a `gtk
 
 **Decisions**
 
-- A dragged divider writes the tree's weights, since rebuilds destroy paneds, and re-applies on each `max-position` notify, since nested allocation reports intermediate values; a resize's clamp is refused ([why](../../../notes/wolf-gnome/pane-weights-and-dividers.md)).
-- `request_layout_rebuild` waits for a wake with a grid, then applies the [extras](../../../notes/wolf-gnome/application-state.md#restoring-the-extras); views are captured only at [§4's moments](../../../notes/wolf-gnome/application-state.md#capture-moments).
+- A dragged divider writes the tree's weights, since rebuilds destroy paneds, and re-applies per `max-position` notify against nested allocation's intermediate values; a resize's clamp is refused ([why](../../../notes/wolf-gnome/pane-weights-and-dividers.md)).
+- `request_layout_rebuild` applies the [extras](../../../notes/wolf-gnome/application-state.md#restoring-the-extras) once a wake brings a grid; views are captured only at [§4's moments](../../../notes/wolf-gnome/application-state.md#capture-moments).
 - [`preview_coalescer.rs`](#preview_coalescerrs)'s state is per tab: a rebuild replaces `panes`.
-- Pointer input is one all-button `gtk::GestureDrag` ([why](../../../notes/crates/wolf-gnome/src/pane_view.rs.md#one-drag-gesture)), pinning target and button at press; editor panes take only the primary.
+- An area's pointer input is one all-button `gtk::GestureDrag` ([why](../../../notes/crates/wolf-gnome/src/pane_view.rs.md#one-drag-gesture)), pinning target and button at press; editor panes take only the primary. A preview page's capture-phase primary click activates its pane, claiming nothing ([why](../../../notes/wolf-gnome/window-structure.md)).
 - A terminal pane paints through its own [`TerminalCanvas`](terminal/README.md#canvasrs) ([why](../../../notes/wolf-gnome/terminal-panes.md)).
 - Each pane's status and `b:wolf_full_width` cache per wake: a use-time read re-enters `draw_pane`'s guard, and paint, pointer and resize must agree.
-- One funnel sends every grid resize, against the size last requested, not the lagging snapshot; it runs each wake, as a lifted cap re-divides a still allocation.
-- The drawer's paned exists only while one is bound, re-taking the tab's share each wake; a zoom shows its host alone, touching no weight or share ([why](../../../notes/wolf-gnome/window-structure.md)). `reset_after_restart` clears the drawer `detect_closes` misses.
+- One funnel sends every grid resize against the size last requested, not the lagging snapshot, each wake, as a lifted cap re-divides a still allocation.
+- The drawer's paned exists only while bound, re-taking the tab's share each wake; a zoom shows its host alone ([why](../../../notes/wolf-gnome/window-structure.md)). `reset_after_restart` clears the drawer `detect_closes` misses.
 
 #### `pane_zoom.rs`
 

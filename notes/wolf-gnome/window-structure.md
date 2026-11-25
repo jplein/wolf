@@ -68,4 +68,10 @@ Input has two regimes. Keys are global: a capture-phase controller on the window
 
 What the context claims arrives instead as a `commit` string, and becomes core input through [`im_ui.rs`](../../crates/wolf-gnome/src/README.md#im_uirs)'s rulebook, or session input through [`terminal/input.rs`](../../crates/wolf-gnome/src/terminal/README.md#inputrs)'s.
 
-Pointer input is per pane, on each drawing area. Resize flows per pane through the geometry seam into `resize_grid` and then resizes the outer grid; the authoritative sizes come back from core. A terminal pane also sends its pointer to its session and sizes the session itself ([Terminal panes](terminal-panes.md)).
+Pointer input is per pane, on each drawing area, except over a preview's page. Resize flows per pane through the geometry seam into `resize_grid` and then resizes the outer grid; the authoritative sizes come back from core. A terminal pane also sends its pointer to its session and sizes the session itself ([Terminal panes](terminal-panes.md)).
+
+**A press on a preview's page is the web view's, and the area's gesture never sees it.** GTK picks the view, which is the area's sibling in the host overlay rather than its child. So the view carries a primary-button `gtk::GestureClick` of its own, whose press runs the same focus path as a press on the strip. It sits on the view and not on the host overlay, where it would also see every strip press and handle it twice.
+
+That gesture runs in the capture phase, because WebKitGTK's own click gesture claims every press in the bubble phase and would deny a bubble-phase gesture before it began. It never claims the sequence: a claim stops the press before WebKit sees it, and the link click and the drag selection go with it. It sends Neovim no mouse event, since the pointer is over the page rather than the scratch buffer's grid, and with WebKit owning the sequence no drag or release would follow, leaving Neovim's mouse mid-drag.
+
+**Do not route the press to the area with `set_can_target(false)` on the view.** It kills scrolling and link following together, and with them most of what makes the pane a preview rather than a picture.
