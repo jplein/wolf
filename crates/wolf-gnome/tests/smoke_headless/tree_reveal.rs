@@ -471,8 +471,11 @@ fn top_of_tree_reading(text: &str) -> String {
 /// | ID | assertion | falsifying edit to `tree_view.rs` | predicted red |
 /// | --- | --- | --- | --- |
 /// | — | precondition: the scenario reached each capture | none | n/a |
-/// | A | capture A reads [`ABOVE_TERMS`] and [`CURRENT_TERM`] | `reveal` calls `scroll_to` at once (C1); the tick scrolls on its first frame (C3); no `connect_map` re-arm (C4) | A |
+/// | A | capture A reads [`ABOVE_TERMS`] and [`CURRENT_TERM`] | `reveal` calls `scroll_to` at once (C1); the tick scrolls on its first frame (C3) | A |
 /// | B | capture B reads them and [`TRIGGER_TERM`] | `reveal_target` ignores `rebuilt` (C2) | B |
+///
+/// Nothing here observes the `map` re-arm, because the launch reveal runs with the list mapped:
+/// see `tests/README.md`, "What is still unproven".
 ///
 /// At the base commit leg A is red: that is the reproduction.
 #[test]

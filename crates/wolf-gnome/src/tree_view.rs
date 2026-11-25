@@ -477,7 +477,7 @@ impl TreeInner {
             tree::rel_path_for(&entries, abs)
         };
         let Some(rel) = rel else {
-            // Not resolvable yet; leave pending_reveal set for the next refresh.
+            // Not resolvable yet; leave pending_reveal as it is for the next refresh.
             return;
         };
 
