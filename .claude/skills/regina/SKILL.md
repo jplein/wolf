@@ -1,10 +1,10 @@
 ---
 name: regina
-description: Runs a request of wolf tasks through regina on this Mac with the Linux secondary nixos, from task files to a tested, documented integration branch. Use it when the user asks for regina; never inside a regina worker.
+description: Runs a request of wolf tasks through regina on this Mac with the Linux secondary mugatu, from task files to a tested, documented integration branch. Use it when the user asks for regina; never inside a regina worker.
 tools: Read, Write, Glob, Grep, Bash
 ---
 
-You are acting as the Orchestrator. You do not write the change, its tests or its documentation, and you coordinate no agents yourself. You write the task files, start a run of regina, and watch it: regina runs the architect, the test writer, the coder, the technical writer, the reviewer and the retrospective agent in its workers, runs the gates on this Mac and on `nixos`, and makes every commit.
+You are acting as the Orchestrator. You do not write the change, its tests or its documentation, and you coordinate no agents yourself. You write the task files, start a run of regina, and watch it: regina runs the architect, the test writer, the coder, the technical writer, the reviewer and the retrospective agent in its workers, runs the gates on this Mac and on `mugatu`, and makes every commit.
 
 If `REGINA_AGENT` is set in your environment, stop: you are one agent inside such a run, and this skill is not for you.
 
@@ -31,9 +31,9 @@ So a task that edits `.claude/skills/regina/` changes no agent of its own reques
 
 2. **Check the starting directory and the hosts.**
    - The starting directory has no uncommitted change to a tracked file, because regina reads commits.
-   - `ssh -o BatchMode=yes nixos true` succeeds.
-   - The remote's state root exists: `ssh -o BatchMode=yes nixos test -d /home/jplein/.local/state/regina-wolf`. It is this harness's directory, named by the template's `start`, so when it is missing create it with `ssh -o BatchMode=yes nixos mkdir -p /home/jplein/.local/state/regina-wolf`.
-   - Regina is at the same commit on both machines: `git -C "${REGINA_SOURCE:-$HOME/dev/jplein/regina}" rev-parse HEAD` here and `ssh nixos git -C /home/jplein/dev/jplein/regina rev-parse HEAD`, whose `result/bin/regina` is built from it. A different protocol makes every remote gate fail.
+   - `ssh -o BatchMode=yes mugatu true` succeeds.
+   - The remote's state root exists: `ssh -o BatchMode=yes mugatu test -d /home/jplein/.local/state/regina-wolf`. It is this harness's directory, named by the template's `start`, so when it is missing create it with `ssh -o BatchMode=yes mugatu mkdir -p /home/jplein/.local/state/regina-wolf`.
+   - Regina is at the same commit on both machines: `git -C "${REGINA_SOURCE:-$HOME/dev/jplein/regina}" rev-parse HEAD` here and `ssh mugatu git -C /home/jplein/dev/jplein/regina rev-parse HEAD`, whose `result/bin/regina` is built from it. A different protocol makes every remote gate fail.
    - The keychain item `regina-claude-token` exists: `security find-generic-password -s regina-claude-token >/dev/null`.
    - `./gates.sh` ([build.md](../../../build.md#the-verification-gate)) prints `0` for every gate. If one does not, do no work on the request: tell the user, who chooses between stopping and a run whose task is to make the gates pass.
 
@@ -45,7 +45,7 @@ So a task that edits `.claude/skills/regina/` changes no agent of its own reques
 
 6. **Enqueue and run**: `.workspace/<branch>/regina enqueue wolf <label> <files>`, then `.workspace/<branch>/regina run` in the background. Follow it with `.workspace/<branch>/regina status --watch`.
 
-7. **Deal with what failed.** `.workspace/<branch>/regina status <id>` gives a failed attempt's details. The logs are under `.workspace/<branch>/state/tasks/<id>/home/.regina`, with `gates/<gate>-<N>.linux.log` for the Linux secondary. Read the agent and gate logs before deciding, then `.workspace/<branch>/regina retry <id>` and `.workspace/<branch>/regina run` again. An unreachable `nixos` or a gate past its timeout leaves the attempt `interrupted`, and a plain `retry` resumes it. Report to the user, without retrying, a task that failed for a reason a retry will not change. A task that needs different instructions is a new task file under a new label.
+7. **Deal with what failed.** `.workspace/<branch>/regina status <id>` gives a failed attempt's details. The logs are under `.workspace/<branch>/state/tasks/<id>/home/.regina`, with `gates/<gate>-<N>.linux.log` for the Linux secondary. Read the agent and gate logs before deciding, then `.workspace/<branch>/regina retry <id>` and `.workspace/<branch>/regina run` again. An unreachable `mugatu` or a gate past its timeout leaves the attempt `interrupted`, and a plain `retry` resumes it. Report to the user, without retrying, a task that failed for a reason a retry will not change. A task that needs different instructions is a new task file under a new label.
 
 8. **Finish**: when no task is open, `.claude/skills/regina/regina-run.sh finish <branch> <label>`. It fast-forwards the integration branch, in its worktree, to what regina landed. Then run `./gates.sh` in `.worktrees/<branch>`, the first macOS build of the result outside a worker. Regina already judged Linux per task.
 
@@ -66,7 +66,7 @@ A task file is a header and a body, in the format regina's `crates/regina-cli/RE
 
 - You write only under `.workspace/<branch>`, besides the remote state root step 2 may create and the `clean` step 9 runs when the user asks. Never edit the starting directory, the worktree, or a task's workspace under the state root.
 - Do not change the starting directory while a run is open: no commit, no checkout, no edit to a tracked file. Keep notes of your own outside the checkout. The wrapper refuses every command but `status` once it has moved, and the way back is to check the starting commit out again.
-- Run one wolf run at a time on this Mac: they share `nixos`'s state root and its lock.
+- Run one wolf run at a time on this Mac: they share `mugatu`'s state root and its lock.
 - Every regina command for a run goes through `.workspace/<branch>/regina`. Any other `regina` is another build, with another flow and other definitions.
 - Never merge to main, and never merge the integration branch into the starting branch. Both are the user's.
 - Settle a disagreement with an agent's result by reading its log and its output document, not by guessing. Each is under `.workspace/<branch>/state/tasks/<id>/home/.regina`.

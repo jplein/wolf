@@ -84,7 +84,7 @@ start() {
     [ -z "${REGINA_AGENT:-}" ] ||
         refuse "REGINA_AGENT is set: this is a regina worker, which starts no run"
     [ "$(uname -s)" = Darwin ] ||
-        refuse "the template is for a macOS host with the Linux secondary nixos"
+        refuse "the template is for a macOS host with the Linux secondary mugatu"
     locate "$1"
 
     [ "$(git -C "$origin" branch --show-current)" != "$branch" ] ||
@@ -197,7 +197,7 @@ EOF
     "$run/regina" register
     echo "tool      $origin at $commit"
     echo "binary    $regina"
-    echo "regina    $regina_src at $regina_commit (nixos's start must be the same protocol)"
+    echo "regina    $regina_src at $regina_commit (mugatu's start must be the same protocol)"
     echo "branch    $branch"
     echo "worktree  $worktree ($how)"
     echo "run       $run"

@@ -1,6 +1,6 @@
 # The regina harness
 
-This directory runs wolf's tasks through regina, checked out at `~/dev/jplein/regina`, with this Mac as the primary worker and `nixos` as a Linux secondary. [`SKILL.md`](SKILL.md) is the procedure; [build.md](../../../build.md#under-regina) has what `gates.sh` needs from a regina environment.
+This directory runs wolf's tasks through regina, checked out at `~/dev/jplein/regina`, with this Mac as the primary worker and `mugatu` as a Linux secondary. [`SKILL.md`](SKILL.md) is the procedure; [build.md](../../../build.md#under-regina) has what `gates.sh` needs from a regina environment.
 
 **Nothing under `.claude/` is gated.** Prettier, the Markdown checker and doc-lint all skip it, so formatting and the comment limits are kept by hand: format a file here with `prettier --ignore-path /dev/null --write <file>`.
 
@@ -31,7 +31,7 @@ Purpose: the configuration `start` writes into the run directory.
 
 **Decisions**
 
-- `start` gives the remote its own `--state`, whose lock a `serve` session needs and a `run` on `nixos` would otherwise hold. Every wolf run shares it, so one runs at a time.
+- `start` gives the remote its own `--state`, whose lock a `serve` session needs and a `run` on `mugatu` would otherwise hold. Every wolf run shares it, so one runs at a time.
 - `profile = host`: Podman refuses `seatbelt-default`, and under `light` 3 to 6 cage smokes die of `SIGBUS` on Podman's 64 MB `/dev/shm`, which `host` lifts from regina 7b72b1e, and starve on 2 CPUs and 4 GiB.
 - `timeout = 3600` covers session, push and image provisioning besides the gate, measured at about 2 minutes for the first image build and 3m51s for a cold Linux gate. Too tight costs a `retry`, too loose only a slower hang detection.
 - `ssh` gives the session and the push `ConnectTimeout=30`, ample for a local banner's second, and `ServerAliveInterval=30` with `ServerAliveCountMax=4`. A host sending no banner hung requests 20 minutes; against a silent listener ssh failed in 30.00 s, and without `ConnectTimeout` waited past 120 s. `sshd` answers ServerAlive whatever the gate prints, so a lost host fails in 2 minutes, a silent gate never; four misses ride out a blip.
