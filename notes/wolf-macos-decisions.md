@@ -209,6 +209,16 @@ Navigations are counted, not flagged. Two can straddle one page load, because th
 
 Recovery is one step and self-limiting. A failed in-place update clears that window's live-document descriptor and re-arms the reload gate, so the next pass takes the full path: at most one extra load, no loop, and normal service resumes as soon as one commits.
 
+## A preview's content width
+
+A preview's `WKWebView` spans its pane below the statusbar strip, and the page caps its own content. A view framed to the capped grid rect puts the page's scrollbar beside the content and leaves the margins and padding gutters to the container, dead to the wheel. The page instead carries an inline style on its root element, [`PreviewWidthSeam`](../crates/wolf-macos/Sources/WolfKeyMap/README.md#previewwidthseamswift)'s: the pane padding, plus a `max-width` of the column cap centred by auto side margins unless the source is full width, so the content lands where an editor's capped grid paints.
+
+The style goes on `<html>`, never `<body>`, because `base.css` owns the body's box: its zero padding is what the first-block margin rules and the baseline grid rest on. It reaches the page two ways. Every full load carries it in the document's `<html>` tag, so a load never paints uncapped, and a script sets it on each change and once more after each finished load, which lands a change made while that load was in flight. Core's render is untouched, so the head stays byte-identical and the body swap above stays sound.
+
+On a side or the bottom that borders a divider, the view stops `dividerHitTolerance` short of the pane's edge. The container strokes its dividers beneath its subviews and takes the divider drag within that tolerance, so a view reaching the edge would hide the line and swallow the press that drags it, and two side-by-side previews could not be resized. The side inset applies to both sides together, and the page's side padding shrinks by as much, so the auto-margin centring still lands on the editor's capped grid rect.
+
+The statusbar strip stays chrome rather than a margin: the view starts below it, so a wheel or press there never reaches the page. Two consequences are accepted. Content wider than the cap, such as a wide table, spills into the right margin instead of scrolling inside the cap, and scrolled content passes under the top padding gutter up to the strip.
+
 ## Key equivalents over a preview
 
 A click in a preview leaves its `WKWebView` the window's first responder, and while it is, WebKit claims every key equivalent and sends it to the page. When the page leaves the key unhandled, WebKit sends the binding's command up the web view's responder chain with its own sink, `WKResponderChainSink`, at the end. An unbound ⌘ or ⌃ chord's command is `noop:`. Only when the sink receives the command does WebKit resend the event through `NSApp.sendEvent`, where the main menu sees a ⌘ chord and `PaneContainerView.keyDown` passes an unbound ⌃ chord to Neovim.
@@ -282,7 +292,7 @@ The Mono face is the one cascaded because it is drawn unscaled, and every Mono g
 ## Present limitations
 
 - Only windows opened via the overridden split commands (`<C-w>s`/`v`, `:split`/`:vsplit`, Split Horizontal and Split Vertical) become panes. Help, quickfix, preview, and `:diffsplit` windows do not, and floating or external windows are ignored.
-- The grid is capped at a hard-coded 90 columns and centered in a wider pane, with the margins painted in the grid's own background. Making the cap configurable is a possible enhancement.
+- Content is capped at a hard-coded 90 columns and centered in a wider pane, with an editor's margins painted in the grid's own background and a preview's in the page's. Making the cap configurable is a possible enhancement.
 - Scrollbar thumbs are non-interactive; thumb-drag is deferred.
 - Markdown preview ships one theme. Cursor-follow anchors to the containing block's top inside a fenced code block, an HTML block or a table, and inside a paragraph hard-wrapped across several short source lines; an image's alt text collapses to a single anchor just after the image. The marker rules are in [the preview position-marker contract](wolf-core-decisions.md).
 - A symbols-face icon draws unscaled, about one em wide, over part of the cell after it, rather than fitted to its own cell as Ghostty fits it.

@@ -10,7 +10,7 @@ The devShell is not optional: it supplies GTK, exports `WOLF_NVIM_BIN` and `WOLF
 
 Rules that are decidable from their arguments are pinned in each seam's own `#[cfg(test)] mod tests`, which is the point of the seam split in [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md).
 
-Some seams' tables are files here instead: [`drawer_share.rs`](#drawer_sharers), [`gdk_key.rs`](#gdk_keyrs), [`terminal_seams.rs`](#terminal_seamsrs), [`other_pane_seam.rs`](#other_pane_seamrs), [`open_request.rs`](#open_requestrs), [`pane_zoom.rs`](#pane_zoomrs), [`pane_views.rs`](#pane_viewsrs), [`sidebar_toggles.rs`](#sidebar_togglesrs), [`titlebar_background.rs`](#titlebar_backgroundrs), [`restore_caps.rs`](#restore_capsrs), [`app_state_seam.rs`](#app_state_seamrs), [`stacking.rs`](#stackingrs), [`tab_focus.rs`](#tab_focusrs) and [`tab_titles.rs`](#tab_titlesrs).
+Some seams' tables are files here instead: [`drawer_share.rs`](#drawer_sharers), [`gdk_key.rs`](#gdk_keyrs), [`terminal_seams.rs`](#terminal_seamsrs), [`other_pane_seam.rs`](#other_pane_seamrs), [`open_request.rs`](#open_requestrs), [`pane_zoom.rs`](#pane_zoomrs), [`pane_views.rs`](#pane_viewsrs), [`preview_root_style.rs`](#preview_root_stylers), [`sidebar_toggles.rs`](#sidebar_togglesrs), [`titlebar_background.rs`](#titlebar_backgroundrs), [`restore_caps.rs`](#restore_capsrs), [`app_state_seam.rs`](#app_state_seamrs), [`stacking.rs`](#stackingrs), [`tab_focus.rs`](#tab_focusrs) and [`tab_titles.rs`](#tab_titlesrs).
 
 The other files below cover what a seam cannot reach: a real Neovim, a real window, the built binary together with the manifest that shaped it, and the store output `nix build .#wolf-gnome` installs — a different artifact from the checkout build, making different claims.
 
@@ -211,6 +211,17 @@ The other files below cover what a seam cannot reach: a real Neovim, a real wind
 - Pure: no display, no Neovim and no compositor. What the pane area shows for an answer is [`smoke_headless/zoom_pane.rs`](#smoke_headlesszoom_paners)'s question.
 - A case for a rule both front-ends apply belongs on both, or the two ports can drift silently.
 
+#### `preview_root_style.rs`
+
+**Covers**
+
+- `preview_width`'s rules. A capped `root_style`'s content box lands on `editor_inset::grid_rect`'s capped rect in a pane wider and in one narrower than the cap, its width exactly and its left edge within the floor `grid_rect` takes; a full-width cap pads without capping.
+- `styled_document` over a real `render_html(…, WidthMode::Full)` puts the style on the `<html>` tag alone and leaves the document byte-identical from `<head>` on, or returns a document it cannot style unchanged; `apply_root_style_js` decodes to exactly the style.
+
+**Gotchas**
+
+- Pure: no display, no Neovim and no compositor. The content box comes from `content_box`, a model of CSS block layout for a `border-box` root; whether WebKitGTK lays the page out so is [`smoke_headless/preview_margins.rs`](#smoke_headlesspreview_marginsrs)'s question.
+
 #### `release_profile.rs`
 
 **Covers**
@@ -377,7 +388,11 @@ Pointer smokes, driven through [Pointer injection](#pointer-injection) and read 
 
 #### `smoke_headless/preview.rs`
 
-Markdown preview smokes: opening a preview and returning to the source, a link click that also makes the preview it repoints active, a click in a preview's page making it active, read from Neovim's current window and from the strips' pixels, an unsaved buffer, the configured appearance, a view created after launch, Ctrl+Shift+P and Ctrl+Shift+W still firing after a click in the preview, and Preview and Edit in Another Pane reusing the other pane, where a press from a lone pane splits. Its guard keeps the smokes' burst delay below the coalescer's trailing delay.
+Markdown preview smokes: opening a preview and returning to the source, a link click that also makes the preview it repoints active, a click in a preview's page, or in its top padding gutter, making it active, read from Neovim's current window and from the strips' pixels, an unsaved buffer, the configured appearance, a view created after launch, Ctrl+Shift+P and Ctrl+Shift+W still firing after a click in the preview, and Preview and Edit in Another Pane reusing the other pane, where a press from a lone pane splits. Its guard keeps the smokes' burst delay below the coalescer's trailing delay.
+
+#### `smoke_headless/preview_margins.rs`
+
+The preview's content-width smoke, read from raw pixels and the frozen window state, with no OCR. One launch at `FULLWIDTH_SMOKE_FONT_PT`, where the cap binds, previews a code block above several viewports of one-line paragraphs in a lone pane. The page's background must span the pane below the strip with the code block on the capped grid rect, `:WolfFullWidth` must widen the block to the pane less its padding, and a second toggle must bring it back. A wheel over the left side margin must then scroll the page, read from the saved preview scroll; every failed assertion is reported by its ID.
 
 #### `smoke_headless/preview_render.rs`
 

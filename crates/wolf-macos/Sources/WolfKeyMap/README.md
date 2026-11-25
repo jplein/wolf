@@ -408,7 +408,7 @@ Purpose: The per-pane pixel/cell coordinate seam — a grid rect positioned insi
 
 **Gotchas**
 
-- `paintOffsetX` is non-zero exactly when the cap centers the grid. The preview web view's frame, the statusbar text span (via `StatusbarTextSpan`) and the occlusion test all add that same offset, so they must derive from one shared `PaneGeometry` or the pane's contents will disagree about where the left edge is.
+- `paintOffsetX` is non-zero exactly when the cap centers the grid. The statusbar text span (via `StatusbarTextSpan`) and the occlusion test both add that same offset, so they must derive from one shared `PaneGeometry` or the pane's contents will disagree about where the left edge is. A preview page centres its content on that edge through CSS instead, which `PreviewWidthSeamTests` holds against this rect.
 
 #### `PaneModeSeam.swift`
 
@@ -624,6 +624,24 @@ Purpose: Which preview windows need their web view reloaded, and the click-to-fo
 - `PreviewLoad` is a struct rather than a tuple so `Optional` inequality compiles, which is what lets the gate be one dictionary comparison.
 - `clickFocusJS` registers `mousedown` in the capture phase. The hosting `WKWebView` swallows AppKit mouse events, so the container's `mouseDown` never fires over a preview pane, and capture stops an inner element that halts propagation from suppressing the focus notification.
 
+#### `PreviewWidthSeam.swift`
+
+Purpose: Where a Markdown preview's web view sits in its pane, and the inline style on the page's root element `<html>` that caps and centres the content inside it. [A preview's content width](../../../../notes/wolf-macos-decisions.md#a-previews-content-width) owns why the page caps rather than the frame. Foundation only.
+
+**Public API**
+
+- `Placement` — the web view's `frame`, in the container's flipped coordinates, and the `sideInset` and `bottomInset` it stops short of the pane by. Public memberwise init.
+- `placement(pane:area:statusbarHeight:dividerBand:) -> Placement` — the pane below its strip, pulled in by `dividerBand` at an edge inside `area`, on both sides when either side is.
+- `rootStyle(maxCols:cellWidth:padding:placement:) -> String` — `name:value` declarations joined by `;`: the padding less the placement's insets, and a `max-width` only where `PaneGeometry` would cap. A `nil` `maxCols` is a full-width source.
+- `styledDocument(_:rootStyle:) -> String` — the style inserted after the first `<html` ahead of `<head>`, with `&` and `"` escaped; the document unchanged for an empty style or no such tag.
+- `applyRootStyleJS(_:) -> String` — sets the root's `style` attribute to exactly the style.
+
+**Decisions**
+
+- The top is never inset, because the strip covers the divider band there.
+- Nothing from `<head>` on is touched, so `PreviewScrollSeam.splitDocument` and `updateStrategy` keep reading the raw document and compare head lengths raw to raw.
+- The script's literal goes through [`PreviewLinkSeam`](#previewlinkseamswift)'s JSON escaper, never raw interpolation.
+
 #### `ScrollAccumulator.swift`
 
 Purpose: Accumulates the sub-cell `deltaY` values that trackpads and high-resolution wheels deliver into discrete whole-cell line steps, so the caller can forward a whole number of line-scroll events to Neovim.
@@ -718,12 +736,12 @@ Purpose: The horizontal sibling of `StatusbarLayout` — the absolute left edge 
 
 **Decisions**
 
-- Both kinds compute the same span. A preview's `WKWebView` is framed to the same capped and centered grid rect as an editor's text grid, so a preview statusbar indents by `paintOffsetX` exactly like an editor's; in full-width mode that inset is 0 and both land flush at `gridLeft`. The parameter is retained because it is the seam where the two would split again if preview framing ever diverged.
+- Both kinds compute the same span. A preview page's root style ([`PreviewWidthSeam`](#previewwidthseamswift)) centres its content on the same capped grid rect as an editor's text grid, so a preview statusbar indents by `paintOffsetX` exactly like an editor's; in full-width mode that inset is 0 and both land flush at `gridLeft`. The parameter is retained because it is the seam where the two would split again if the preview's content placement ever diverged.
 - The clamp of `paintOffsetX` into `[0, gridWidth]` is defensive — `PaneGeometry` already floors it at 0 — and is what guarantees `width` stays non-negative and `left` never passes the grid's right edge.
 
 **Gotchas**
 
-- The preview web view's frame, this span, and the draw loop's occlusion test all derive from the same `geometry(_:fullWidth:)` applied to `gridRect(ofPane:)`, and must change together.
+- The preview page's root style, this span, and the draw loop's occlusion test all rest on the same `geometry(_:fullWidth:)` cap applied to `gridRect(ofPane:)`, and must change together. The web view's frame is `PreviewWidthSeam.placement`'s, which contains that rect.
 
 #### `TabFocusSeam.swift`
 

@@ -158,6 +158,14 @@ A Markdown preview follows the configured appearance through a chain whose links
 
 **Do not move the theme's `color-scheme` declaration to `:root`.** Measured and falsified: the declaration sits on `body.wolf-markdown`, `getComputedStyle(documentElement).colorScheme` computes `normal`, and dark takes anyway; injecting it on the root changed nothing in either direction.
 
+## The preview's content width
+
+A preview's web view spans its pane below the statusbar strip, through its margins on the host overlay, and the page caps its own content. A view framed to the capped grid rect puts the page's scrollbar beside the content and leaves the margins and padding gutters to the drawing area, dead to the wheel. The page instead carries an inline style on its root element, [`preview_width.rs`](../crates/wolf-gnome/src/README.md#preview_widthrs)'s: the pane padding, plus a `max-width` of the column cap centred by auto side margins unless the source is full width, under the same `pane_cap` an editor's grid takes.
+
+The style goes on `<html>`, never `<body>`, because `base.css` owns the body's box: its zero padding is what the first-block margin rules and the baseline grid rest on. It reaches the page two ways. Every full load carries it in the document's `<html>` tag, so a load never paints uncapped, and a script sets it on each change and once more after each finished load, which lands a change made while that load was in flight. Core's render is untouched, so the head stays byte-identical and the in-place body swap stays sound.
+
+The view reaches its pane's edges with no band kept clear for a divider, because a `gtk::Paned` handle is a widget of its own, allocated between the two children. The statusbar strip stays chrome rather than a margin: GTK has no public way to hand a scroll event to a WebKitGTK view, and a `scrollBy` script cannot reproduce WebKit's own wheel and kinetic scrolling. Content wider than the cap, such as a wide table, spills into the right margin, and scrolled content passes under the top padding gutter up to the strip.
+
 ## Following a link in the preview
 
 Every link clicked in a preview is cancelled and acted on out of band, and every divergence from macOS narrows what may be launched. [Following a link in the preview](wolf-gnome/following-a-link-in-the-preview.md) records the decision handler, the base URI and its security bound.
