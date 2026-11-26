@@ -112,6 +112,7 @@ use super::terminal::{
     TP_OCR_WORD,
 };
 use super::titlebar::TB_READ_NAME;
+use super::titlebar_tabs::{HT_DIR, HT_OCR_DIR};
 use super::tree_reveal::{ABOVE_TERMS, CURRENT_TERM, TRIGGER_TERM};
 use super::*;
 
@@ -197,6 +198,11 @@ use super::*;
 /// [`TB_OCR_A`], [`TB_OCR_B`] and [`TB_OCR_C`] are the seventh: the tab bar smoke reads each
 /// tab's title, which is its directory, so [`TB_DIR_A`], [`TB_DIR_B`] and [`TB_DIR_C`] carry
 /// their terms and stay out of [`RELAUNCH_FIXTURE_NAMES`], with an exemption block of their own.
+///
+/// [`HT_OCR_DIR`] is the second tab's title in the `gtk-titlebar-style` smokes, so [`HT_DIR`]
+/// carries it, with an exemption block as well; `native_keeps_the_tab_bar_row_under_cage`
+/// asserts on it too and is covered through this row. Both smokes also assert on the temp
+/// cwd's basename, the first tab's title, which has no row: the temp-cwd guard would refuse it.
 ///
 /// Every smoke that OCRs a capture registers each term it asserts on here, and a
 /// smoke that OCRs nothing registers none; the second project-search smoke is covered
@@ -890,6 +896,11 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
         TB_OCR_C,
         "TB_OCR_C",
         "each_tab_is_titled_by_its_own_directory_under_cage",
+    ),
+    (
+        HT_OCR_DIR,
+        "HT_OCR_DIR",
+        "tabs_join_the_header_bar_from_the_second_tab_under_cage",
     ),
 ];
 
@@ -2298,6 +2309,12 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// never drawn. The block after the toggle-group one asserts that, and that no term is in
 /// `project`, the temp cwd's prefixes, a filler or a readback name the cmdline strip draws.
 ///
+/// The `gtk-titlebar-style` smokes add one more. [`HT_DIR`] is the second tab's title, so it
+/// carries [`HT_OCR_DIR`] and is absent from [`RELAUNCH_FIXTURE_NAMES`]. Their header band holds
+/// the first tab's `project` beside it under `tabs` and must not under `native`, so neither name
+/// may carry the other's term. The block after the tab bar one asserts that, and that no prefix
+/// or filler the header could draw carries [`HT_OCR_DIR`].
+///
 /// ## The fixtures whose CONTENT is checked too
 ///
 /// Most relaunch fixtures are a bare heading, so the name is the only thing that
@@ -3324,6 +3341,40 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
                  change the OCR const."
             );
         }
+    }
+
+    // The `gtk-titlebar-style` smokes' exemption: HT_DIR is the second tab's title, so it carries
+    // HT_OCR_DIR, and the header band must tell it from the first tab's `project`.
+    assert!(
+        HT_DIR.to_lowercase().contains(HT_OCR_DIR),
+        "HT_DIR = {HT_DIR:?} no longer contains HT_OCR_DIR = {HT_OCR_DIR:?}. The second tab is \
+         titled `~/{HT_DIR}`, and the term is what the titlebar-tabs smokes read off it, so they \
+         would assert on a word nothing draws."
+    );
+    assert!(
+        !HT_DIR
+            .to_lowercase()
+            .contains(&TEMP_CWD_BASENAME.to_lowercase())
+            && !TEMP_CWD_BASENAME.to_lowercase().contains(HT_OCR_DIR),
+        "HT_DIR = {HT_DIR:?} and TEMP_CWD_BASENAME = {TEMP_CWD_BASENAME:?} spell each other's \
+         term. The native smoke's header must draw the second tab's title and not the first's, \
+         and the tabs smoke's must draw both, so either title carrying the other's term would \
+         satisfy a must-contain, or break a must-not-contain, with nothing moved. Rename \
+         HT_DIR."
+    );
+    let mut titlebar_tabs_page: Vec<(&str, &str)> = vec![
+        (TEMP_CWD_PREFIX, "TEMP_CWD_PREFIX"),
+        (RUNTIME_DIR_PREFIX, "RUNTIME_DIR_PREFIX"),
+    ];
+    titlebar_tabs_page.extend(SIDEBAR_FILLER_FILES.iter().map(|name| (*name, "a filler")));
+    for (text, text_const) in titlebar_tabs_page {
+        assert!(
+            !text.to_lowercase().contains(HT_OCR_DIR),
+            "{text_const} = {text:?} contains HT_OCR_DIR = {HT_OCR_DIR:?}. It can be page text in \
+             the titlebar-tabs smokes' captures, as a path the header would draw unabbreviated, \
+             so it would draw the term with no tab titled by HT_DIR. Rename it; do NOT change \
+             the OCR const."
+        );
     }
 
     // This body reaches pixels through WebKit. `preview` is an ordinary word, so it must

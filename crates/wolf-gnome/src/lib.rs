@@ -55,6 +55,7 @@
 //! - [`mod@preview_width`]: the root style that caps and centres a preview page's content.
 //! - [`mod@preview_coalescer`]: when the preview's render runs during a typing burst.
 //! - [`mod@tabs_ui`]: the native tabs of one window, each with a captive Neovim of its own.
+//! - [`mod@tab_bar_slot`]: whether the tab bar sits below the header bar or inside it.
 //! - [`mod@terminal`]: how a terminal pane paints its session and routes its input.
 //! - [`mod@save_ui`]: the Save and Save As rules.
 //! - [`actions`]: the action namespace and accelerator table as data.
@@ -159,6 +160,7 @@ pub mod sidebar_toggles;
 pub mod stacking;
 pub mod state_seam;
 pub mod statusbar_layout;
+pub mod tab_bar_slot;
 pub mod tab_view;
 pub mod tabs_ui;
 pub mod terminal;

@@ -8,6 +8,9 @@
 //!
 //! The pointer helper's files and every readback live under the runtime dir, never in a
 //! directory a tab is rooted at.
+//!
+//! The smoke pins `gtk-titlebar-style: native`, because its clicks and its band are the tab
+//! bar's own row.
 
 use super::extras::{plant_window_state, planted_window, tab_bar_y, two_tab_x, EXTRAS_HELPERS};
 use super::open_folder::{canonical, make_dir};
@@ -98,7 +101,7 @@ exit 0
 
 /// The tab bar's band, the full output width from the header's bottom edge down
 /// [`TAB_BAR_HEIGHT_EXPECTED`], as `extras::tab_bar_y` places the bar.
-fn tab_bar_band() -> SampleRect {
+pub(crate) fn tab_bar_band() -> SampleRect {
     let width = exact_f64(CAGE_OUTPUT_W_EXPECTED, "CAGE_OUTPUT_W_EXPECTED");
     SampleRect {
         x0: 0,
@@ -199,6 +202,10 @@ fn each_tab_is_titled_by_its_own_directory_under_cage() {
 
     let body = with_nvim_pid_helper(&format!("{EXTRAS_HELPERS}\n{TAB_BAR_BODY}"));
     let status = pointer_command(&body, &cwd, &runtime_dir, &out_png)
+        .env(
+            "WOLF_CONFIG_DIR",
+            titlebar_pinned_config_dir(&cwd, GTK_TITLEBAR_NATIVE),
+        )
         .env("CMD_FIFO", rt.join(POINTER_CMD_FIFO_NAME))
         .env("ACK_FILE", rt.join(POINTER_ACK_NAME))
         .env("HELPER_ERR", pointer_err_path(rt))

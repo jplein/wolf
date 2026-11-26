@@ -2,6 +2,9 @@
 //! editor's `Normal` background, focused and in backdrop, follow a live `:set background`, and
 //! take `WolfTitlebar`'s background once it is set. The title and the tabs' text keep
 //! libadwaita's foreground for the configured appearance, while the desktop reports the other.
+//!
+//! Both pin `gtk-titlebar-style: native`, because their bands read the tab bar's own row.
+//! `titlebar_tabs.rs` checks the colour of the tabs inside the header bar.
 
 use super::editor::SAVE_AS_GDK_DEBUG;
 use super::lighthouse::{rgb8, stage_init_lua, Background, Lighthouse};
@@ -225,7 +228,7 @@ struct TbBands {
 }
 
 /// A rectangle from four derived edges, asserting it is not empty.
-fn tb_rect(x0: f64, x1: f64, y0: f64, y1: f64, what: &str) -> SampleRect {
+pub(crate) fn tb_rect(x0: f64, x1: f64, y0: f64, y1: f64, what: &str) -> SampleRect {
     let rect = SampleRect {
         x0: pixel_index(x0, what),
         x1: pixel_index(x1, what),
@@ -244,8 +247,9 @@ fn tb_rect(x0: f64, x1: f64, y0: f64, y1: f64, what: &str) -> SampleRect {
 /// The bands, with no pixel literal.
 ///
 /// The header bar is the rows above [`OVERLAY_ORIGIN_Y_EXPECTED`], the one-tab pane area's top.
-/// With two tabs the tab bar sits below it and is [`TAB_BAR_HEIGHT_EXPECTED`] tall, and the
-/// pane area starts below the bar. The grid's rows lie below the pane's statusbar strip, its
+/// With two tabs under `gtk-titlebar-style: native`, which the smokes pin, the tab bar sits in
+/// its own row below it and is [`TAB_BAR_HEIGHT_EXPECTED`] tall, and the pane area starts below
+/// the bar. The grid's rows lie below the pane's statusbar strip, its
 /// top padding and two cell rows, as `editor_inset::grid_rect` places them, so the fixture's
 /// line and the cursor are above the band; its columns are [`BAND_X_INSET_PX`] inside the pane
 /// area and its rows stop [`BAND_BOTTOM_CLEARANCE_PX`] above the output's bottom, clear of the
@@ -331,14 +335,19 @@ fn tb_bands() -> TbBands {
 
 /// What one background band reads: the share exactly `expected`, and the most common colour
 /// with its share, for the table and the failure messages.
-struct TbReading {
-    expected: Rgb8,
-    exact: f64,
-    dominant: Rgb8,
-    dominant_share: f64,
+pub(crate) struct TbReading {
+    pub(crate) expected: Rgb8,
+    pub(crate) exact: f64,
+    pub(crate) dominant: Rgb8,
+    pub(crate) dominant_share: f64,
 }
 
-fn tb_read(capture: &Capture, rects: &[SampleRect], expected: Rgb8, what: &str) -> TbReading {
+pub(crate) fn tb_read(
+    capture: &Capture,
+    rects: &[SampleRect],
+    expected: Rgb8,
+    what: &str,
+) -> TbReading {
     let mut counts: std::collections::BTreeMap<Rgb8, usize> = std::collections::BTreeMap::new();
     for rect in rects {
         for y in rect.y0..rect.y1 {
@@ -399,7 +408,7 @@ fn tb_ink(capture: &Capture, rect: SampleRect, bg: Rgb8, scheme: Background) -> 
     ink
 }
 
-fn hex((r, g, b): Rgb8) -> String {
+pub(crate) fn hex((r, g, b): Rgb8) -> String {
     format!("#{r:02x}{g:02x}{b:02x}")
 }
 
@@ -460,7 +469,14 @@ fn titlebar_smoke(smoke: &str, background: Background) {
 
     let init_lua = stage_init_lua(smoke, &runtime_dir, TB_STAGE_NAME, &lighthouse);
     let cwd = make_temp_cwd();
-    let config = smoke_config_dir_at(&cwd, TB_CONFIG_SUFFIX, SMOKE_FONT_PT, name);
+    let config = smoke_config_dir_at(
+        &cwd,
+        TB_CONFIG_SUFFIX,
+        SMOKE_FONT_PT,
+        name,
+        // The bands read the tab bar's own row.
+        Some(GTK_TITLEBAR_NATIVE),
+    );
 
     let read = runtime_dir.join(TB_READ_NAME);
     let png_focused = runtime_dir.join(TB_PNG_FOCUSED_NAME);

@@ -25,12 +25,13 @@
 //!
 //! ## The bar autohides, and that is load-bearing
 //!
-//! [`adw::TabBar::set_autohide`] is left at its default of `true`, so a
-//! one-tab window is byte-identical in geometry to one with no tab layer at all.
-//! The cage smokes' `PANE_ORIGIN_Y_EXPECTED` is only correct while the bar is
-//! hidden; turning autohide off shifts the pane origin by the bar's height and
-//! breaks all eight pointer smokes loudly through their shared origin assertion,
-//! which is the guard.
+//! [`adw::TabBar::set_autohide`] is left at its default of `true`. At one page the
+//! bar sits in its row below the header bar under either `gtk-titlebar-style`
+//! ([`crate::tab_bar_slot`]), so a one-tab window is byte-identical in geometry to
+//! one with no tab layer at all. The cage smokes' `PANE_ORIGIN_Y_EXPECTED` is only
+//! correct while the bar is hidden; turning autohide off shifts the pane origin by
+//! the bar's height and breaks the pointer smokes loudly through their shared
+//! origin assertion, which is the guard.
 //!
 //! ## The close signal is a VETO, not a notification
 //!
@@ -472,7 +473,8 @@ type SelectedCallback = Rc<dyn Fn(Option<&TabHandle>)>;
 struct TabsInner {
     /// The view holding every page.
     view: adw::TabView,
-    /// The bar drawn above the `gtk::Paned`.
+    /// The bar, below the header bar or inside it ([`crate::tab_bar_slot`]). Held here so a
+    /// move between the two never drops it.
     bar: adw::TabBar,
     /// The cell metrics, handed to each new tab's pane view.
     metrics: Rc<CellMetrics>,
@@ -805,10 +807,24 @@ impl TabsHandle {
         self.inner.view.clone().upcast::<gtk::Widget>()
     }
 
-    /// The tab bar, for placement between the header bar and the `gtk::Paned`.
+    /// The tab bar, which [`crate::tab_bar_slot::TabBarSlot`] places below the header bar
+    /// or inside it.
     #[must_use]
     pub fn bar_widget(&self) -> gtk::Widget {
         self.inner.bar.clone().upcast::<gtk::Widget>()
+    }
+
+    /// How many pages the view holds. Unlike [`TabsHandle::len`], it counts a page dragged in
+    /// from another window and not one dragged out to another.
+    #[must_use]
+    pub fn n_pages(&self) -> usize {
+        usize::try_from(self.inner.view.n_pages()).unwrap_or(0)
+    }
+
+    /// Runs `f` on each change of [`TabsHandle::n_pages`]. The view owns `f`, so it must hold
+    /// only weak references to anything that owns the view.
+    pub fn connect_n_pages(&self, f: impl Fn() + 'static) {
+        self.inner.view.connect_n_pages_notify(move |_view| f());
     }
 
     /// Opens one tab: starts its own [`WolfCore`] in [`TabParts::cwd`], then builds

@@ -186,6 +186,7 @@ mod terminal;
 mod terminal_colours;
 mod terminal_terminfo;
 mod titlebar;
+mod titlebar_tabs;
 mod tree_reveal;
 mod zoom_pane;
 
@@ -598,6 +599,9 @@ const PANE_ORIGIN_X_EXPECTED: f64 = 280.375;
 /// statusbar strip plus the top padding, so this is the header bar's height plus the
 /// strip plus `EDITOR_PADDING_PX`, plus the probe's sub-cell phase.
 ///
+/// It is the one-tab value under either `gtk-titlebar-style`, and under `tabs` the
+/// two-tab value as well, which `titlebar_tabs.rs`'s HT1 checks.
+///
 /// **This pair is the TEXT GRID's corner, and [`OVERLAY_ORIGIN_X_EXPECTED`] /
 /// [`OVERLAY_ORIGIN_Y_EXPECTED`] are the pane AREA's.** They are two different
 /// points, measured two different ways — this pair from a click-to-cell readback,
@@ -658,15 +662,19 @@ const OVERLAY_ORIGIN_X_EXPECTED: f64 = 251.0;
 /// height, and nothing else. See [`OVERLAY_ORIGIN_X_EXPECTED`] for the measurement,
 /// its date, the cage output size, and the button cross-check that confirms it.
 ///
-/// This is the ONE-TAB value, and it is the value every other smoke here uses,
-/// because `adw::TabBar::set_autohide` is left at `true`: at one page the bar
-/// allocates zero height and the window's geometry is byte-identical to a build with
-/// no tab layer at all. See [`TAB_BAR_HEIGHT_EXPECTED`] for the two-page figure and
-/// for why an `is_visible()` assertion on the bar would say nothing.
+/// This is the ONE-TAB value under either `gtk-titlebar-style`, and it is the value every
+/// other smoke here uses, because `adw::TabBar::set_autohide` is left at `true`: at one page
+/// the bar allocates zero height and the window's geometry is byte-identical to a build with
+/// no tab layer at all. Under `tabs` it is the two-tab value as well, since the bar then sits
+/// in the header bar, whose height `titlebar_tabs.rs`'s `TABS_HEADER_GROWTH_PX` checks. Under
+/// `native` see [`TAB_BAR_HEIGHT_EXPECTED`] for the two-page figure and for why an
+/// `is_visible()` assertion on the bar would say nothing.
 const OVERLAY_ORIGIN_Y_EXPECTED: f64 = 47.0;
 
 /// Allocated height, in output pixels, of the `adw::TabBar` once a SECOND page
-/// exists — the strip between the `adw::HeaderBar` and the `gtk::Paned`.
+/// exists under `gtk-titlebar-style: native` — the row between the `adw::HeaderBar`
+/// and the `gtk::Paned`. Under `tabs` that row is never shown, so every smoke that
+/// reads this constant pins `native` through [`titlebar_pinned_config_dir`].
 ///
 /// MEASURED under `cage` on a 1280x720 output at [`SMOKE_FONT_PT`], from a temporary
 /// tick callback printing the bar's and the window overlay's allocations, exactly the
@@ -1518,6 +1526,9 @@ fn seed_smoke_spell_override(state_dir: &Path) {
 /// `WOLF_FONT_PT` wins (`config_seam::resolve_font_pt`'s documented precedence),
 /// and is written anyway so the file is honest about what it configures.
 ///
+/// It carries no `gtk-titlebar-style`, so every smoke runs under the key's default, `tabs`,
+/// unless it pins a style through [`titlebar_pinned_config_dir`].
+///
 /// ## Why a SIBLING and not a child
 ///
 /// The same reason [`smoke_state_dir`] is: a child of `cwd` would be walked by the
@@ -1525,11 +1536,11 @@ fn seed_smoke_spell_override(state_dir: &Path) {
 /// and a picker candidate, changing the page density every OCR assertion is
 /// calibrated against.
 fn smoke_config_dir(cwd: &Path) -> PathBuf {
-    smoke_config_dir_at(cwd, "", SMOKE_FONT_PT, SMOKE_APPEARANCE)
+    smoke_config_dir_at(cwd, "", SMOKE_FONT_PT, SMOKE_APPEARANCE, None)
 }
 
-/// [`smoke_config_dir`] with an extra name suffix and an explicit `font-size` and
-/// `appearance`.
+/// [`smoke_config_dir`] with an extra name suffix, an explicit `font-size` and
+/// `appearance`, and a `gtk-titlebar-style` when `titlebar_style` is `Some`.
 ///
 /// Some smokes need TWO seeded config directories in one scenario, such as
 /// `config_font_size_changes_the_grid_under_cage` at two different font sizes
@@ -1537,7 +1548,13 @@ fn smoke_config_dir(cwd: &Path) -> PathBuf {
 /// different appearances. Deriving them all here keeps the sibling-not-child rule
 /// and the seeded file's shape in one place; see [`smoke_config_dir`] for why each
 /// matters.
-fn smoke_config_dir_at(cwd: &Path, suffix: &str, font_pt: &str, appearance: &str) -> PathBuf {
+fn smoke_config_dir_at(
+    cwd: &Path,
+    suffix: &str,
+    font_pt: &str,
+    appearance: &str,
+    titlebar_style: Option<&str>,
+) -> PathBuf {
     let name = cwd.file_name().unwrap_or_else(|| {
         panic!(
             "smoke cwd {} has no final path component, so no `<name>-config` sibling can be \
@@ -1555,12 +1572,39 @@ fn smoke_config_dir_at(cwd: &Path, suffix: &str, font_pt: &str, appearance: &str
         )
     });
     let dir = parent.join(format!("{}-config{suffix}", name.to_string_lossy()));
-    write_smoke_config(&dir, font_pt, appearance);
+    write_smoke_config(&dir, font_pt, appearance, titlebar_style);
     dir
 }
 
+/// `gtk-titlebar-style`'s value that keeps the tab bar in its own row below the header bar.
+const GTK_TITLEBAR_NATIVE: &str = "native";
+
+/// `gtk-titlebar-style`'s value that makes the tab bar of a window of two or more tabs the
+/// header bar's title widget. The shared seeded file carries no key, so it is every smoke's
+/// effective style.
+const GTK_TITLEBAR_TABS: &str = "tabs";
+
+/// A sibling config directory whose file is [`smoke_config_dir`]'s plus
+/// `gtk-titlebar-style: {style}`, for a smoke to hand its app as `WOLF_CONFIG_DIR` after
+/// [`cage_command`] set the shared one; a later `.env` wins.
+///
+/// A smoke pins [`GTK_TITLEBAR_NATIVE`] when, with two or more tabs open, it clicks or reads the
+/// tab bar's own row, or derives a size or position that includes it: `tabs` moves that row into
+/// the header bar.
+fn titlebar_pinned_config_dir(cwd: &Path, style: &str) -> PathBuf {
+    smoke_config_dir_at(
+        cwd,
+        &format!("-{style}"),
+        SMOKE_FONT_PT,
+        SMOKE_APPEARANCE,
+        Some(style),
+    )
+}
+
 /// Creates `dir` and writes a `wolf-config.yaml` into it pinning
-/// [`SMOKE_FONT_FAMILY`], `font_pt`, [`SMOKE_LINE_HEIGHT`] and `appearance`.
+/// [`SMOKE_FONT_FAMILY`], `font_pt`, [`SMOKE_LINE_HEIGHT`] and `appearance`, and
+/// `gtk-titlebar-style` when `titlebar_style` is `Some`. `None` writes no key, so the
+/// app takes the key's default, `tabs`.
 ///
 /// Split out from [`smoke_config_dir`] because some smokes need the same file at
 /// two DIFFERENT values — such as `config_font_size_changes_the_grid_under_cage`
@@ -1573,7 +1617,7 @@ fn smoke_config_dir_at(cwd: &Path, suffix: &str, font_pt: &str, appearance: &str
 ///
 /// ## Why `appearance` is pinned, and why to [`SMOKE_APPEARANCE`]
 ///
-/// `appearance` is the one seeded field that is NOT required — `wolf_core`'s
+/// `appearance` is a seeded field that is NOT required — `wolf_core`'s
 /// `ConfigSection` gives it a `#[serde(default)]` of `auto` — so an unpinned file
 /// leaves every smoke running in `auto`. That is the same class of hazard the
 /// family and the size are pinned against, one step further out: in `auto` the
@@ -1589,7 +1633,7 @@ fn smoke_config_dir_at(cwd: &Path, suffix: &str, font_pt: &str, appearance: &str
 /// once, and their sparse-text segmentation is calibrated on a light-on-dark grid.
 /// Changing this is therefore a change to every OCR assertion in this binary; do not
 /// adjust it to make one of them pass.
-fn write_smoke_config(dir: &Path, font_pt: &str, appearance: &str) {
+fn write_smoke_config(dir: &Path, font_pt: &str, appearance: &str, titlebar_style: Option<&str>) {
     std::fs::create_dir_all(dir).unwrap_or_else(|e| {
         panic!(
             "failed to create the smoke config dir {}: {e}. Without it the app under cage resolves \
@@ -1599,10 +1643,13 @@ fn write_smoke_config(dir: &Path, font_pt: &str, appearance: &str) {
         )
     });
     let path = dir.join(CONFIG_FILE_NAME);
-    let yaml = format!(
+    let mut yaml = format!(
         "config:\n  font-family: {SMOKE_FONT_FAMILY}\n  font-size: {font_pt}\n  \
          line-height: {SMOKE_LINE_HEIGHT}\n  appearance: {appearance}\n"
     );
+    if let Some(style) = titlebar_style {
+        yaml.push_str(&format!("  gtk-titlebar-style: {style}\n"));
+    }
     std::fs::write(&path, yaml).unwrap_or_else(|e| {
         panic!(
             "failed to write the smoke config {}: {e}. An absent file is NOT a benign fallback: \
@@ -4554,6 +4601,30 @@ fn assert_probe_cell_and_pane_origin(
     out_png: &Path,
     raw: &str,
 ) -> (f64, f64) {
+    assert_probe_cell_and_pane_origin_at(
+        smoke,
+        probe_cell,
+        metrics,
+        extents,
+        out_png,
+        raw,
+        PANE_ORIGIN_Y_EXPECTED,
+    )
+}
+
+/// [`assert_probe_cell_and_pane_origin`] against `expected_y` in place of
+/// [`PANE_ORIGIN_Y_EXPECTED`], for a window whose grid starts at a measured offset from the
+/// one-tab origin, such as `titlebar_tabs.rs`'s two tabs in the header bar. The x band and
+/// every message are the same.
+fn assert_probe_cell_and_pane_origin_at(
+    smoke: &str,
+    probe_cell: (i64, i64),
+    metrics: &CellMetrics,
+    extents: (i64, i64),
+    out_png: &Path,
+    raw: &str,
+    expected_y: f64,
+) -> (f64, f64) {
     let (line, col) = probe_cell;
     assert!(
         line >= MIN_PROBE_CELL && col >= MIN_PROBE_CELL,
@@ -4587,7 +4658,7 @@ fn assert_probe_cell_and_pane_origin(
          surface-local `640.00000000, 360.00000000`); (3) the `adw::HeaderBar` height changed — a \
          libadwaita/GTK bump; (4) `window::TREE_PANE_WIDTH` or the `gtk::Paned` divider width \
          changed; (5) the cage output size changed. Derived origin ({origin_x}, {origin_y}); \
-         expected ({PANE_ORIGIN_X_EXPECTED}, {PANE_ORIGIN_Y_EXPECTED}); cell_w {}, cell_h {}; \
+         expected ({PANE_ORIGIN_X_EXPECTED}, {expected_y}); cell_w {}, cell_h {}; \
          probe ({PROBE_X}, {PROBE_Y}) -> (line {line}, col {col}); reported output extents \
          {width}x{height}. Raw readback was {raw:?}. PNG kept at {}. If \
          PANE_ORIGIN_X_EXPECTED is still the -1.0 placeholder this failure is EXPECTED and is how \
@@ -4598,16 +4669,16 @@ fn assert_probe_cell_and_pane_origin(
         out_png.display()
     );
     assert!(
-        (origin_y - PANE_ORIGIN_Y_EXPECTED).abs() <= PANE_ORIGIN_TOLERANCE_PX + metrics.cell_h,
+        (origin_y - expected_y).abs() <= PANE_ORIGIN_TOLERANCE_PX + metrics.cell_h,
         "{smoke}: the editor pane's derived Y ORIGIN is {origin_y}, outside the band \
-         {PANE_ORIGIN_Y_EXPECTED} +/- ({PANE_ORIGIN_TOLERANCE_PX} + cell_h). Same five candidate \
+         {expected_y} +/- ({PANE_ORIGIN_TOLERANCE_PX} + cell_h). Same five candidate \
          causes as the X band, in the same order, but a Y-only shift points hardest at (1) and (3) \
          — the STATUSBAR STRIP's height and the `adw::HeaderBar`'s — because those two are the \
          whole of what sits above the grid, and only the strip is ours. The strip is a value: \
          `statusbar_layout(metrics.size_px, secondary_font_size(..), ..)`, so a font-size change \
          moves it too. Derived \
          origin ({origin_x}, {origin_y}); expected ({PANE_ORIGIN_X_EXPECTED}, \
-         {PANE_ORIGIN_Y_EXPECTED}); cell_w {}, cell_h {}; probe ({PROBE_X}, {PROBE_Y}) -> \
+         {expected_y}); cell_w {}, cell_h {}; probe ({PROBE_X}, {PROBE_Y}) -> \
          (line {line}, col {col}); reported output extents {width}x{height}. Raw readback was \
          {raw:?}. PNG kept at {}. If PANE_ORIGIN_Y_EXPECTED is still the -1.0 placeholder this \
          failure is EXPECTED and is how the constant is obtained.",

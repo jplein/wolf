@@ -10,6 +10,9 @@
 //!
 //! The two-launch smokes reuse [`POINTER_PREAMBLE`] for their first launch: its helper outlives
 //! that app, and the body quits the app, reaps it and launches the second run itself.
+//!
+//! The smokes that click a tab, through [`tab_bar_y`] and [`two_tab_x`], pin
+//! `gtk-titlebar-style: native`, because those points are on the tab bar's own row.
 
 use wolf_core::app_state::{Drawer, Frame, Sidebar, SidebarMode, Tab, TabContent};
 
@@ -28,7 +31,7 @@ pub(crate) const SECOND_TAB_CENTRE_FRACTION: f64 = 0.75;
 /// How long planting a window state may take to flush before the smoke gives up on it.
 const PLANT_FLUSH: Duration = Duration::from_secs(5);
 
-/// The tab bar's centre row, with two or more tabs open.
+/// The tab bar's centre row, with two or more tabs open under `gtk-titlebar-style: native`.
 pub(crate) fn tab_bar_y() -> i64 {
     pixel_target(
         OVERLAY_ORIGIN_Y_EXPECTED + TAB_BAR_HEIGHT_EXPECTED / 2.0,
@@ -404,6 +407,10 @@ fn pane_cursors_are_captured_and_restored_under_cage() {
     let tab_y = tab_bar_y();
     let body = format!("{EXTRAS_HELPERS}\n{CV_BODY}");
     let status = pointer_command(&body, &cwd, &runtime_dir, &out_png)
+        .env(
+            "WOLF_CONFIG_DIR",
+            titlebar_pinned_config_dir(&cwd, GTK_TITLEBAR_NATIVE),
+        )
         .env("CV_A", CV_A_FILE)
         .env("CV_B", CV_B_FILE)
         .env("CV_C", CV_C_FILE)
@@ -955,6 +962,10 @@ fn each_tab_keeps_its_sidebar_page_under_cage() {
     let tab_y = tab_bar_y();
     let body = format!("{EXTRAS_HELPERS}\n{SB_BODY}");
     let status = pointer_command(&body, &cwd, &runtime_dir, &shot_1)
+        .env(
+            "WOLF_CONFIG_DIR",
+            titlebar_pinned_config_dir(&cwd, GTK_TITLEBAR_NATIVE),
+        )
         .env("SB_FILES_X", files_x.to_string())
         .env("SB_TOGGLE_Y", toggle_y.to_string())
         .env("TAB1_X", tab1_x.to_string())

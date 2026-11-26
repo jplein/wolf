@@ -2143,7 +2143,7 @@ pub(crate) const TABS_READ_E_NAME: &str = "tb_reade.txt";
 pub(crate) const TABS_READ_F_NAME: &str = "tb_readf.txt";
 
 /// Fraction of the output WIDTH at which the FIRST tab's centre sits with two tabs
-/// open.
+/// open under `gtk-titlebar-style: native`.
 ///
 /// MEASURED with [`TAB_BAR_HEIGHT_EXPECTED`], from the same tick callback: the bar
 /// spans the whole 1280 px output (it is above the `gtk::Paned`, not inside the
@@ -2373,6 +2373,9 @@ exit 0
 /// tab's core, that the bar costs the editor grid real rows, that `close-page`'s veto
 /// is answered, and that closing a tab shuts its Neovim down and leaves the other's.
 ///
+/// It pins `gtk-titlebar-style: native`, because leg (c) counts the row the bar takes and
+/// leg (e) clicks that row.
+///
 /// ## Which capture proves what, and which one does NOT
 ///
 /// Capture A carries the first heading with one tab open; capture B the second and
@@ -2398,7 +2401,7 @@ exit 0
 /// | 3 | leg (a): exactly one live Neovim at launch | precondition — the baseline of every later count | none | n/a |
 /// | 4 | leg (c): exactly two live Neovims after Ctrl+Shift+T | **discriminator** | NT1a: in `AppShell::new_tab`, delete the `open_tab` call | scenario exit 22 |
 /// | 5 | leg (c)'s `getcwd()` does not end in [`TABS_SUBDIR`] | **discriminator** | NT2b: in `AppShell::new_tab`, set the planned tab's `cwd` to the selected tab's `WolfCore::live_cwd` | scenario exit 23 |
-/// | 6 | `H2 < H1` | **discriminator** | NT3a: in `window::build`, drop `content.append(&tabs.bar_widget())` | scenario exit 24 |
+/// | 6 | `H2 < H1` | **discriminator** | NT3a: keep the bar out of the window's content box under `native` | scenario exit 24 |
 /// | 7 | leg (e)'s buffer tail is [`TABS_FIRST_FILE`] | **discriminator** | NT4a: in `TabsHandle::selected_core`, answer `entries().last()` instead of the selected tab | scenario exit 25, naming [`TABS_SECOND_NAME`] |
 /// | 8 | leg (f): exactly one live Neovim after the middle-click | **discriminator** | NT5a: in the `CloseTab` arm, delete both `deregister(page)` and `entry.shutdown()` | scenario exit 26 |
 /// | 9 | leg (f): the app survives closing one of two tabs | **discriminator** | NT6a: in `close_outcome`, `live_pages <= 1` → `<= 2` | scenario exit 27 |
@@ -2492,6 +2495,9 @@ fn native_tabs_open_switch_and_close_under_cage() {
     // The new tab's Neovim starts at HOME, the temp cwd's parent.
     let cd_target = format!("{TEMP_CWD_BASENAME}/{TABS_SUBDIR}");
 
+    // The click is aimed at the tab bar's own row.
+    let config = titlebar_pinned_config_dir(&cwd, GTK_TITLEBAR_NATIVE);
+
     let body = with_nvim_pid_helper(POINTER_TABS_BODY);
     let status = run_pointer_scenario(
         &body,
@@ -2499,6 +2505,7 @@ fn native_tabs_open_switch_and_close_under_cage() {
         &runtime_dir,
         &out_png,
         &[
+            ("WOLF_CONFIG_DIR", config.as_os_str()),
             ("TABS_FIRST_FILE", OsStr::new(TABS_FIRST_FILE)),
             ("TABS_SECOND_NAME", OsStr::new(TABS_SECOND_NAME)),
             ("TABS_SUBDIR", OsStr::new(TABS_SUBDIR)),
@@ -2531,8 +2538,9 @@ fn native_tabs_open_switch_and_close_under_cage() {
          Neovim into, so New Tab roots its tab at the selected tab's `live_cwd` rather than \
          opening an empty tab.\n\
          Exit 24: the editor did not lose a row, and the number the scenario printed says which \
-         cause. EQUAL: the `adw::TabBar` took no height — check that `window::build` still appends \
-         it between the header bar and the `gtk::Paned`. GREATER: the new page was never \
+         cause. EQUAL: the `adw::TabBar` took no height — check that the pinned `native` reached the \
+         app and that the bar still sits between the header bar and the `gtk::Paned` under it. \
+         GREATER: the new page was never \
          selected, so it is never mapped, reports 0x0, and its Neovim keeps the core's initial \
          rows.\n\
          Exit 25: after the click on the first tab's bar entry, the keys reached a Neovim whose \
@@ -2833,6 +2841,8 @@ exit 0
 /// defers it to its next idle moment, is unmeasured here; the re-issued readback is what keeps
 /// a deferred reload from reading as none.
 ///
+/// It pins `gtk-titlebar-style: native`, because its switch clicks the tab bar's own row.
+///
 /// ## Assertions
 ///
 /// | # | assertion | kind | falsifier | predicted red |
@@ -2877,6 +2887,9 @@ fn a_file_saved_in_one_tab_reloads_in_another_on_switch_under_cage() {
     let click_x_env = click_x.to_string();
     let click_y_env = click_y.to_string();
 
+    // The click is aimed at the tab bar's own row.
+    let config = titlebar_pinned_config_dir(&cwd, GTK_TITLEBAR_NATIVE);
+
     let body = with_nvim_pid_helper(RELOAD_BODY);
     let status = run_pointer_scenario(
         &body,
@@ -2884,6 +2897,7 @@ fn a_file_saved_in_one_tab_reloads_in_another_on_switch_under_cage() {
         &runtime_dir,
         &out_png,
         &[
+            ("WOLF_CONFIG_DIR", config.as_os_str()),
             ("RELOAD_FILE", OsStr::new(RELOAD_FILE)),
             ("RELOAD_FILE_ABS", file.as_os_str()),
             ("RELOAD_PROJECT_BASE", OsStr::new(TEMP_CWD_BASENAME)),

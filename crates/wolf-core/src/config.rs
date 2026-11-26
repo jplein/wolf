@@ -3,7 +3,8 @@
 //! This is the GUI-toolkit-free config module: it resolves the per-platform
 //! preferences directory (macOS `~/Library/Preferences/Wolf`, Linux
 //! `~/.config/wolf`), and reads — or creates-with-defaults — a
-//! `wolf-config.yaml` holding `config: { font-family, font-size, line-height }`.
+//! `wolf-config.yaml` holding `config: { font-family, font-size, line-height,
+//! appearance, macos-option-as-alt, gtk-titlebar-style }`.
 
 use std::path::{Path, PathBuf};
 
@@ -58,6 +59,29 @@ fn default_macos_option_as_alt() -> bool {
     DEFAULT_MACOS_OPTION_AS_ALT
 }
 
+/// Where the GTK front-end draws its tab bar: Ghostty's `gtk-titlebar-style`.
+///
+/// `Tabs` puts the tab bar inside the header bar while the window holds two or
+/// more tabs; `Native` keeps it in a row of its own below the header bar.
+/// Serialized as kebab-case (`tabs`/`native`) in `wolf-config.yaml`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum GtkTitlebarStyle {
+    /// The tab bar joins the header bar from the second tab on.
+    Tabs,
+    /// The tab bar sits in its own row below the header bar.
+    Native,
+}
+
+/// The built-in default titlebar style: tabs in the header bar (`tabs`).
+const DEFAULT_GTK_TITLEBAR_STYLE: GtkTitlebarStyle = GtkTitlebarStyle::Tabs;
+
+/// The default titlebar style, used as the `#[serde(default)]` for the on-disk
+/// `gtk-titlebar-style` field so a config that predates the key parses to `Tabs`.
+fn default_gtk_titlebar_style() -> GtkTitlebarStyle {
+    DEFAULT_GTK_TITLEBAR_STYLE
+}
+
 /// The resolved user configuration surfaced to the front-end.
 ///
 /// A GUI-toolkit-free value type: `font_family` is a CoreText/Pango family name,
@@ -77,6 +101,9 @@ pub struct WolfConfig {
     /// On macOS, whether the Option key acts as Alt (`<M-…>` mappings) rather
     /// than composing accented characters; defaults to `false` (option-as-option).
     pub macos_option_as_alt: bool,
+    /// Where the tab bar is drawn (`tabs`/`native`); defaults to `tabs`. Read by
+    /// the GTK front-end alone, once at launch.
+    pub gtk_titlebar_style: GtkTitlebarStyle,
 }
 
 /// The on-disk file shape: a single top-level `config:` key wrapping the section.
@@ -85,10 +112,11 @@ struct ConfigFile {
     config: ConfigSection,
 }
 
-/// The `config:` section's three kebab-case fields (`font-family`, `font-size`,
-/// `line-height`). ALL are required: a partial section deserializes to an error,
-/// which [`load_or_create`] treats as "fall back to defaults" (never a partial
-/// merge).
+/// The `config:` section's kebab-case fields. The three font fields
+/// (`font-family`, `font-size`, `line-height`) are required: a section missing
+/// one deserializes to an error, which [`load_or_create`] treats as "fall back to
+/// defaults" (never a partial merge). `appearance`, `macos-option-as-alt` and
+/// `gtk-titlebar-style` default when absent.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct ConfigSection {
@@ -103,6 +131,10 @@ struct ConfigSection {
     /// failing the whole section (unlike the required font fields).
     #[serde(default = "default_macos_option_as_alt")]
     macos_option_as_alt: bool,
+    /// Back-compat: a config file predating this key parses to `Tabs` rather than
+    /// failing the whole section (unlike the required font fields).
+    #[serde(default = "default_gtk_titlebar_style")]
+    gtk_titlebar_style: GtkTitlebarStyle,
 }
 
 /// Resolves the per-platform preferences directory that holds `wolf-config.yaml`.
@@ -142,6 +174,7 @@ pub fn default_config() -> WolfConfig {
         line_height: DEFAULT_LINE_HEIGHT,
         appearance: DEFAULT_APPEARANCE,
         macos_option_as_alt: DEFAULT_MACOS_OPTION_AS_ALT,
+        gtk_titlebar_style: DEFAULT_GTK_TITLEBAR_STYLE,
     }
 }
 
@@ -167,6 +200,7 @@ pub fn load_or_create(dir: &Path) -> WolfConfig {
                 line_height: file.config.line_height,
                 appearance: file.config.appearance,
                 macos_option_as_alt: file.config.macos_option_as_alt,
+                gtk_titlebar_style: file.config.gtk_titlebar_style,
             },
             Err(e) => {
                 tracing::warn!(
@@ -211,6 +245,7 @@ fn write_defaults(path: &Path, config: &WolfConfig) {
             line_height: config.line_height,
             appearance: config.appearance,
             macos_option_as_alt: config.macos_option_as_alt,
+            gtk_titlebar_style: config.gtk_titlebar_style,
         },
     };
     match serde_yaml::to_string(&file) {
@@ -290,6 +325,10 @@ mod tests {
         assert_eq!(
             actual.macos_option_as_alt, expected.macos_option_as_alt,
             "{ctx}: macos_option_as_alt"
+        );
+        assert_eq!(
+            actual.gtk_titlebar_style, expected.gtk_titlebar_style,
+            "{ctx}: gtk_titlebar_style"
         );
     }
 

@@ -3,6 +3,9 @@
 //! reopening, stops at both floors, and stays out of a new tab opened from that tab. A dragged
 //! share also survives a window shrink that clamps the editor and a grow back, and each tab of
 //! a window keeps its own share across a relaunch.
+//!
+//! The two smokes that open a second tab pin `gtk-titlebar-style: native`, because their
+//! two-tab pane area and their tab clicks include the tab bar's own row.
 
 use super::extras::{tab_bar_y, two_tab_x, EXTRAS_HELPERS};
 use super::terminal::{drawer_paned_at, drawer_strip_edges, pin_terminal_smoke_shell};
@@ -241,6 +244,10 @@ fn drawer_divider_drag_resizes_and_is_remembered_under_cage() {
     let body = format!("{DRAWER_DIVIDER_HELPERS}\n{DRAWER_DIVIDER_BODY}");
     let mut cmd = pointer_command(&body, &cwd, &runtime_dir, &out_png);
     pin_terminal_smoke_shell(&mut cmd)
+        .env(
+            "WOLF_CONFIG_DIR",
+            titlebar_pinned_config_dir(&cwd, GTK_TITLEBAR_NATIVE),
+        )
         .env("HANDLE_X", handle_x.to_string())
         .env("HANDLE_Y", handle_y.to_string())
         .env("DRAGGED_Y", dragged_y.to_string())
@@ -1021,6 +1028,10 @@ fn each_tab_keeps_its_drawer_share_across_a_relaunch_under_cage() {
     let body = format!("{EXTRAS_HELPERS}\n{DRAWER_DIVIDER_HELPERS}\n{TAB_SHARES_BODY}");
     let mut cmd = pointer_command(&body, &cwd, &runtime_dir, &out_png);
     pin_terminal_smoke_shell(&mut cmd)
+        .env(
+            "WOLF_CONFIG_DIR",
+            titlebar_pinned_config_dir(&cwd, GTK_TITLEBAR_NATIVE),
+        )
         .env("HANDLE_X", handle_x.to_string())
         .env("HANDLE_Y", handle_y.to_string())
         .env("DRAGGED_Y", dragged_y.to_string())

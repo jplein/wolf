@@ -224,12 +224,14 @@ fn config_font_size_changes_the_grid_under_cage() {
         CONFIG_GRID_SMALL_SUFFIX,
         CONFIG_GRID_SMALL_FONT_PT,
         SMOKE_APPEARANCE,
+        None,
     );
     let config_large = smoke_config_dir_at(
         &cwd,
         CONFIG_GRID_LARGE_SUFFIX,
         CONFIG_GRID_LARGE_FONT_PT,
         SMOKE_APPEARANCE,
+        None,
     );
     assert_ne!(
         config_small,
@@ -580,12 +582,14 @@ fn configured_appearance_reaches_neovims_background_under_cage() {
         APPEARANCE_DARK_SUFFIX,
         SMOKE_FONT_PT,
         APPEARANCE_FORCED_DARK,
+        None,
     );
     let config_light = smoke_config_dir_at(
         &cwd,
         APPEARANCE_LIGHT_SUFFIX,
         SMOKE_FONT_PT,
         APPEARANCE_FORCED_LIGHT,
+        None,
     );
     assert_ne!(
         config_dark,

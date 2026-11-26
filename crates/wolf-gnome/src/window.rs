@@ -95,6 +95,7 @@ use crate::search_panel::{self, SearchPanelHandle};
 use crate::shell::{self, AppShell, ShellParts, HISTORY_BACK_ACTION, HISTORY_FORWARD_ACTION};
 use crate::sidebar;
 use crate::state_seam::{self, RestorePlan, TabPlan};
+use crate::tab_bar_slot::TabBarSlot;
 use crate::tab_view::{self, CoreCell, TabHandle, TabParts, TabsHandle, TabsParts};
 use crate::tabs_ui::TabId;
 use crate::terminal::input as terminal_input;
@@ -173,6 +174,9 @@ struct WindowInner {
     /// The ordinal of this window's first frame-clock `after-paint`, set only while
     /// the readiness probe is pending; see [`crate::ready_seam`].
     first_paint: Cell<Option<u32>>,
+    /// Places the tab bar as pages come and go; held for the window's lifetime alone, since
+    /// its handler holds a `Weak`.
+    _tab_bar_slot: TabBarSlot,
     /// Presents the window, held while [`WindowParts::present`] deferred it.
     show: RefCell<Option<PaintedCallback>>,
     /// What waits for this window's first painted frame, or `None` once it has
@@ -641,8 +645,8 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     paned.set_end_child(Some(&overlay));
     paned.set_position(TREE_PANE_WIDTH);
 
-    // No title widget is deliberate: one changes the header bar's natural height, which is a term of
-    // `PANE_ORIGIN_Y_EXPECTED`. See notes/wolf-gnome/window-structure.md
+    // Its own title at one tab and always under `native`; from two tabs under `tabs` the bar replaces
+    // it, styled to keep the header's height. See notes/wolf-gnome/window-structure.md
     let header = adw::HeaderBar::new();
 
     // Both start insensitive until the first render wake's `refresh_nav_buttons`: with no snapshot
@@ -672,12 +676,12 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     header.pack_end(&menu_button);
     let titlebar = TitlebarStyle::install(id, &header, &tabs.bar_widget());
 
-    // Header, tab bar, then the split. The bar autohides at one page, keeping one-tab geometry equal
-    // to no tab layer. See notes/wolf-gnome/window-structure.md
+    // Header, then the split. The slot puts the bar between them, autohiding at one tab, or in the
+    // header from two tabs under `tabs`. See notes/wolf-gnome/window-structure.md
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
     content.append(&header);
-    content.append(&tabs.bar_widget());
     content.append(&paned);
+    let tab_bar_slot = TabBarSlot::install(config.gtk_titlebar_style, &header, &content, &tabs);
 
     // The restored size, or the defaults. Window POSITION is never restored:
     // Wayland gives a client neither its own position nor screen geometry.
@@ -782,6 +786,7 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
             window: window.clone(),
             tabs: tabs.clone(),
             shell,
+            _tab_bar_slot: tab_bar_slot,
             first_paint: Cell::new(None),
             show: RefCell::new(None),
             painted: RefCell::new(Some(Vec::new())),

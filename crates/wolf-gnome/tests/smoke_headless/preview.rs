@@ -2995,12 +2995,14 @@ fn preview_document_follows_the_configured_appearance_under_cage() {
         PREVIEW_THEME_DARK_SUFFIX,
         SMOKE_FONT_PT,
         APPEARANCE_FORCED_DARK,
+        None,
     );
     let config_light = smoke_config_dir_at(
         &cwd,
         PREVIEW_THEME_LIGHT_SUFFIX,
         SMOKE_FONT_PT,
         APPEARANCE_FORCED_LIGHT,
+        None,
     );
     let state_dark = smoke_state_dir_at(&cwd, PREVIEW_THEME_DARK_SUFFIX);
     let state_light = smoke_state_dir_at(&cwd, PREVIEW_THEME_LIGHT_SUFFIX);
@@ -3624,7 +3626,13 @@ fn preview_created_after_launch_renders_without_a_portal_under_cage() {
     );
 
     // Forced dark, for the picker smoke's reason: both colours read below are dark-palette values.
-    let config = smoke_config_dir_at(&cwd, NEWVIEW_SUFFIX, SMOKE_FONT_PT, APPEARANCE_FORCED_DARK);
+    let config = smoke_config_dir_at(
+        &cwd,
+        NEWVIEW_SUFFIX,
+        SMOKE_FONT_PT,
+        APPEARANCE_FORCED_DARK,
+        None,
+    );
 
     let control_png = runtime_dir.join(NEWVIEW_CONTROL_PNG_NAME);
     let sample_png = runtime_dir.join(NEWVIEW_SAMPLE_PNG_NAME);

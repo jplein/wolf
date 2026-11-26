@@ -682,7 +682,13 @@ fn preview_highlights_a_fenced_code_block_under_cage() {
 
     // Its own config at a forced dark appearance: the asserted colours are the dark palette's, so a
     // re-pin of the shared seeded value would sample a light document while still finding rows.
-    let config = smoke_config_dir_at(&cwd, CODEHL_SUFFIX, SMOKE_FONT_PT, APPEARANCE_FORCED_DARK);
+    let config = smoke_config_dir_at(
+        &cwd,
+        CODEHL_SUFFIX,
+        SMOKE_FONT_PT,
+        APPEARANCE_FORCED_DARK,
+        None,
+    );
 
     let out_png = runtime_dir.join(CODEHL_PNG_NAME);
     let wins = runtime_dir.join(CODEHL_WINS_NAME);
@@ -1311,7 +1317,13 @@ fn preview_inline_code_keeps_the_baseline_grid_under_cage() {
     write_relaunch_fixtures(SMOKE, &cwd, &[(CODEGRID_SOURCE_FILE, CODEGRID_SOURCE_BODY)]);
 
     // Its own config at a forced dark appearance: both asserted colours are the dark palette's.
-    let config = smoke_config_dir_at(&cwd, CODEGRID_SUFFIX, SMOKE_FONT_PT, APPEARANCE_FORCED_DARK);
+    let config = smoke_config_dir_at(
+        &cwd,
+        CODEGRID_SUFFIX,
+        SMOKE_FONT_PT,
+        APPEARANCE_FORCED_DARK,
+        None,
+    );
 
     let out_png = runtime_dir.join(CODEGRID_PNG_NAME);
     let wins = runtime_dir.join(CODEGRID_WINS_NAME);
@@ -2395,7 +2407,13 @@ fn file_picker_covers_the_live_preview_under_cage() {
 
     // Its own config at a forced dark appearance: the asserted colours are the dark palette's, so a
     // re-pin of the shared seeded value would sample a light document while still finding edges.
-    let config = smoke_config_dir_at(&cwd, PICKOVER_SUFFIX, SMOKE_FONT_PT, APPEARANCE_FORCED_DARK);
+    let config = smoke_config_dir_at(
+        &cwd,
+        PICKOVER_SUFFIX,
+        SMOKE_FONT_PT,
+        APPEARANCE_FORCED_DARK,
+        None,
+    );
 
     let control_png = runtime_dir.join(PICKOVER_CONTROL_PNG_NAME);
     let sample_png = runtime_dir.join(PICKOVER_SAMPLE_PNG_NAME);

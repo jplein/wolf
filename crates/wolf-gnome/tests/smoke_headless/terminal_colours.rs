@@ -360,13 +360,19 @@ fn terminal_pane_paints_lighthouses_ansi_colours_under_cage() {
 
     let cwd = make_temp_cwd();
     write_relaunch_fixtures(SMOKE, &cwd, &[]);
-    let config_dark =
-        smoke_config_dir_at(&cwd, TC_DARK_SUFFIX, SMOKE_FONT_PT, Background::Dark.name());
+    let config_dark = smoke_config_dir_at(
+        &cwd,
+        TC_DARK_SUFFIX,
+        SMOKE_FONT_PT,
+        Background::Dark.name(),
+        None,
+    );
     let config_light = smoke_config_dir_at(
         &cwd,
         TC_LIGHT_SUFFIX,
         SMOKE_FONT_PT,
         Background::Light.name(),
+        None,
     );
     let state_dark = smoke_state_dir_at(&cwd, TC_DARK_SUFFIX);
     let state_light = smoke_state_dir_at(&cwd, TC_LIGHT_SUFFIX);

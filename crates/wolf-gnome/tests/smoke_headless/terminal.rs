@@ -2640,7 +2640,8 @@ pub(crate) fn near_fixture_body() -> String {
     body
 }
 
-/// Fraction of the output WIDTH at which the SECOND tab's centre sits with two tabs open.
+/// Fraction of the output WIDTH at which the SECOND tab's centre sits with two tabs open
+/// under `gtk-titlebar-style: native`.
 ///
 /// [`TABS_FIRST_TAB_CENTRE_FRACTION`] records the measurement: two pages split the
 /// 1280 px bar evenly, with centres at x = 320 and x = 960. Three quarters is the second,
@@ -2897,7 +2898,8 @@ fn neovim_panes_stay_visible_beside_terminals_under_cage() {
         clear_evidence(path, SMOKE);
     }
 
-    // The tab centres, pinned before cage starts as the native-tabs smoke's click is.
+    // The tab centres, pinned before cage starts as the native-tabs smoke's click is. They are on
+    // the tab bar's own row, so the smoke pins `gtk-titlebar-style: native`.
     let output_w = exact_f64(CAGE_OUTPUT_W_EXPECTED, "the expected cage output width");
     let tab1_x = pixel_target(
         output_w * TABS_FIRST_TAB_CENTRE_FRACTION,
@@ -2915,6 +2917,10 @@ fn neovim_panes_stay_visible_beside_terminals_under_cage() {
     let (_, _, last_png) = &captures[captures.len() - 1];
     let mut cmd = pointer_command(NEAR_BODY, &cwd, &runtime_dir, last_png);
     pin_terminal_smoke_shell(&mut cmd)
+        .env(
+            "WOLF_CONFIG_DIR",
+            titlebar_pinned_config_dir(&cwd, GTK_TITLEBAR_NATIVE),
+        )
         .env("NEAR_FIXTURE", NEAR_FIXTURE_FILE)
         .env("NEAR_PROJECT_BASE", TEMP_CWD_BASENAME)
         .env("NEAR_TAB1_X", tab1_x.to_string())

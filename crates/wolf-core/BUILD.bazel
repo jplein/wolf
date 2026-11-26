@@ -299,6 +299,15 @@ rust_test(
 )
 
 rust_test(
+    name = "gtk_titlebar_style",
+    srcs = ["tests/gtk_titlebar_style.rs"],
+    crate_root = "tests/gtk_titlebar_style.rs",
+    size = "small",
+    edition = "2021",
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
+rust_test(
     name = "recent_dirs",
     srcs = ["tests/recent_dirs.rs"],
     crate_root = "tests/recent_dirs.rs",

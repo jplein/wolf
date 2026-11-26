@@ -9,6 +9,9 @@
 //!
 //! The pointer helper's files and every readback live under the runtime dir, never in the cwd:
 //! the origin's sidebar lists the cwd, and the helper's file names spell [`NT_OCR_TITLE`].
+//!
+//! Every smoke pins `gtk-titlebar-style: native`, because the tab clicks aim at the tab bar's
+//! own row.
 
 use super::editor::EMPTY_STATE_OCR;
 use super::extras::{tab_bar_y, two_tab_x, EXTRAS_HELPERS};
@@ -255,6 +258,10 @@ fn run_new_tab(run: &NewTabRun<'_>, cwd: &Path, runtime_dir: &CageRuntime<'_>) -
         .env("ACK_FILE", rt.join(POINTER_ACK_NAME))
         .env("HELPER_ERR", pointer_err_path(rt))
         .env("READY_FILE", pointer_ready_path(rt))
+        .env(
+            "WOLF_CONFIG_DIR",
+            titlebar_pinned_config_dir(cwd, GTK_TITLEBAR_NATIVE),
+        )
         .env("BTN_MIDDLE", POINTER_BUTTON_MIDDLE)
         .env("TAB0_X", tab0_x.to_string())
         .env("TAB1_X", tab1_x.to_string())

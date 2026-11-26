@@ -719,7 +719,7 @@ fn read_selection(path: &Path, smoke: &str) -> (String, [i64; 4]) {
 /// which would break the row correspondence every assertion here rests on — quietly.
 /// If the target row is past `winheight(0)` the click lands on a different buffer
 /// line than intended. Both fail loudly here instead.
-fn assert_fixture_fits(smoke: &str, dims: (i64, i64), probe_line: i64, rows_below: i64) {
+pub(crate) fn assert_fixture_fits(smoke: &str, dims: (i64, i64), probe_line: i64, rows_below: i64) {
     let (win_width, win_height) = dims;
     assert!(
         win_width > FIXTURE_LINE_WIDTH,
