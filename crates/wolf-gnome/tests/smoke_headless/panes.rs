@@ -2608,12 +2608,12 @@ fn native_tabs_open_switch_and_close_under_cage() {
         winheight_two < winheight_one,
         "{SMOKE}: the new tab's editor pane reports {winheight_two} row(s) with two tabs open \
          against {winheight_one} with one, so the editor lost no row when the second tab \
-         appeared. EQUAL: `window::build` no longer appends `tabs.bar_widget()` to the content \
-         box between the header bar and the `gtk::Paned`, so the bar exists and is allocated \
-         nothing. GREATER: the new page was never selected, so its `DrawingArea` reports 0x0, \
-         `pane_view::pending_resize` refuses that size, and the new Neovim keeps the core's \
-         initial rows. The scenario exits 24 on this, so reaching the assertion means the \
-         readback shape changed."
+         appeared. EQUAL: the bar is not in the window's content box between the header bar \
+         and the `gtk::Paned`, so it exists and is allocated nothing; check that the pinned \
+         `native` reached the app. GREATER: the new page was never selected, so its \
+         `DrawingArea` reports 0x0, `pane_view::pending_resize` refuses that size, and the new \
+         Neovim keeps the core's initial rows. The scenario exits 24 on this, so reaching the \
+         assertion means the readback shape changed."
     );
 
     // Assertion 7 (discriminator): capture C stays green when keys go to the wrong core, so only this

@@ -3,8 +3,8 @@
 //! take `WolfTitlebar`'s background once it is set. The title and the tabs' text keep
 //! libadwaita's foreground for the configured appearance, while the desktop reports the other.
 //!
-//! Both pin `gtk-titlebar-style: native`, because their bands read the tab bar's own row.
-//! `titlebar_tabs.rs` checks the colour of the tabs inside the header bar.
+//! Its smokes pin `gtk-titlebar-style: native`, because their bands read the tab bar's own
+//! row. `titlebar_tabs.rs` checks the colour of the tabs inside the header bar.
 
 use super::editor::SAVE_AS_GDK_DEBUG;
 use super::lighthouse::{rgb8, stage_init_lua, Background, Lighthouse};

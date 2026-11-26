@@ -201,8 +201,9 @@ use super::*;
 ///
 /// [`HT_OCR_DIR`] is the second tab's title in the `gtk-titlebar-style` smokes, so [`HT_DIR`]
 /// carries it, with an exemption block as well; `native_keeps_the_tab_bar_row_under_cage`
-/// asserts on it too and is covered through this row. Both smokes also assert on the temp
-/// cwd's basename, the first tab's title, which has no row: the temp-cwd guard would refuse it.
+/// asserts on it too and is covered through this row. The `gtk-titlebar-style` smokes also
+/// assert on the temp cwd's basename, the first tab's title, which has no row: the temp-cwd
+/// guard would refuse it.
 ///
 /// Every smoke that OCRs a capture registers each term it asserts on here, and a
 /// smoke that OCRs nothing registers none; the second project-search smoke is covered

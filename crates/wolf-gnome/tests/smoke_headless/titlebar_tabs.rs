@@ -92,9 +92,9 @@ const HT_CODES: &str = "Exit 170: the launch did not run exactly one Neovim. 171
      header entry did not leave exactly one Neovim. 175: no readback appeared after that close, \
      so keys no longer reach Neovim.";
 
-/// The shell helpers both bodies use, after [`EXTRAS_HELPERS`]: a readback of the focused
-/// window's size or cursor, exiting with the second argument when it never appears, and a
-/// left click that parks the pointer back at the probe.
+/// The shell helpers the smokes' bodies use, after [`EXTRAS_HELPERS`]: a readback of the
+/// focused window's size or cursor, exiting with the second argument when it never appears,
+/// and a left click that parks the pointer back at the probe.
 const HT_HELPERS: &str = r#"
 read_dims() {
     wtype -- ":call writefile([printf('%d %d', winwidth(0), winheight(0))], '$1')"
@@ -729,10 +729,17 @@ fn native_keeps_the_tab_bar_row_under_cage() {
     );
 }
 
-/// The two pinned config files and the shared one parse to their styles with the smoke font
-/// kept, so a pin can neither be misspelled nor fail the section back to the defaults' font.
+/// Each pinned config file and the shared one parse to their styles with the smoke font kept,
+/// so a pin can neither be misspelled nor fail the section back to the defaults' font.
 ///
 /// Pure: no compositor and no cage slot. It removes the temp cwd's parent it made.
+///
+/// ## Assertions
+///
+/// | ID | assertion | falsifying edit | predicted red |
+/// | --- | --- | --- | --- |
+/// | B7 | each file keeps [`SMOKE_FONT_FAMILY`] | C6a: `#[serde(rename = "classic")]` on `GtkTitlebarStyle::Native` | the `native` pin's font family is `iA Writer Mono S` |
+/// | B8 | each file parses to its style, the shared one to the default | C6b: `DEFAULT_GTK_TITLEBAR_STYLE` → `GtkTitlebarStyle::Native` | the shared seeded config parses to `Native` |
 #[test]
 fn titlebar_pins_parse_to_their_styles() {
     const GUARD: &str = "titlebar_pins_parse_to_their_styles";

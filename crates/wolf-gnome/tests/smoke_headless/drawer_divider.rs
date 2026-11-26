@@ -4,7 +4,7 @@
 //! share also survives a window shrink that clamps the editor and a grow back, and each tab of
 //! a window keeps its own share across a relaunch.
 //!
-//! The two smokes that open a second tab pin `gtk-titlebar-style: native`, because their
+//! The smokes that open a second tab pin `gtk-titlebar-style: native`, because their
 //! two-tab pane area and their tab clicks include the tab bar's own row.
 
 use super::extras::{tab_bar_y, two_tab_x, EXTRAS_HELPERS};

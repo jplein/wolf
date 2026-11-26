@@ -36,7 +36,9 @@
 //! bar there would unroot a tab mid-gesture. So the notify queues an idle, which reads the page
 //! count when it runs and moves the bar only when the answer differs from the applied one. The
 //! count is the view's, not the tab registry's, because a tab dragged to or from another window
-//! changes the view alone.
+//! changes the view alone. The idle runs at `HIGH_IDLE`, ahead of the frame clock's paint,
+//! because an input event is delivered inside a frame whose paint would otherwise draw the bar
+//! once in the place it is leaving.
 //!
 //! ## Focus is sampled before the move
 //!
@@ -170,15 +172,16 @@ impl TabBarSlot {
 
 /// Queues one re-placement for the main loop, outside the signal that asked for it.
 fn schedule(weak: Weak<SlotInner>) {
-    glib::idle_add_local_once(move || {
+    glib::idle_add_local_full(glib::Priority::HIGH_IDLE, move || {
         let Some(slot) = weak.upgrade() else {
-            return;
+            return glib::ControlFlow::Break;
         };
         // No root means the window has closed.
         if slot.bar.root().is_none() {
-            return;
+            return glib::ControlFlow::Break;
         }
         slot.apply(tab_bar_placement(slot.style, slot.tabs.n_pages()));
+        glib::ControlFlow::Break
     });
 }
 
