@@ -38,8 +38,13 @@
 //! `close-page` asks whether the page may close and the handler MUST answer, with
 //! [`adw::TabView::close_page_finish`], and return [`glib::Propagation::Stop`]. An
 //! unanswered veto leaves the page on screen forever with no error and no message.
-//! The last page's close is answered with a REFUSAL and routed into the window's own
-//! close — see [`crate::tabs_ui::close_outcome`].
+//!
+//! Before it answers yes, the handler asks [`crate::tabs_ui::close_page_now`]. An
+//! unconfirmed close of a live tab is refused and asks the tab's Neovim, after
+//! selecting the page, since commands drain from the selected tab only and its
+//! message must show; its drained `close_tab` confirms the tab and closes it. The last
+//! page's close is answered with a REFUSAL and routed into the window's own close —
+//! see [`crate::tabs_ui::close_outcome`].
 //!
 //! ## Restore
 //!
@@ -67,7 +72,7 @@ use adw::prelude::*;
 use gtk::glib;
 
 use wolf_core::app_state::Tab;
-use wolf_core::{CoreConfig, Liveness, TerminalId, WakeFn, WolfConfig, WolfCore};
+use wolf_core::{CloseTabAnswer, CoreConfig, Liveness, TerminalId, WakeFn, WolfConfig, WolfCore};
 
 use crate::appearance;
 use crate::drawer::DrawerShare;
@@ -209,6 +214,9 @@ struct TabInner {
     empty_style: EmptyStateStyle,
     /// [`TabParts::new_tab_sidebar`], kept in memory only.
     new_tab_sidebar: Option<bool>,
+    /// Set by [`TabHandle::confirm_close`]: the `close-page` veto closes this tab without
+    /// asking its Neovim.
+    close_confirmed: Cell<bool>,
 }
 
 /// A cloneable handle to ONE tab.
@@ -263,6 +271,35 @@ impl TabHandle {
     #[must_use]
     pub fn liveness(&self) -> Option<Liveness> {
         self.inner.core.borrow().as_ref().map(WolfCore::liveness)
+    }
+
+    /// Marks this tab's next close as confirmed, so the `close-page` veto closes it
+    /// without asking its Neovim: a drained `close_tab`, which is Neovim's own verdict,
+    /// or a programmatic close.
+    pub fn confirm_close(&self) {
+        self.inner.close_confirmed.set(true);
+    }
+
+    /// Whether [`TabHandle::confirm_close`] has confirmed this tab's close.
+    #[must_use]
+    pub fn close_confirmed(&self) -> bool {
+        self.inner.close_confirmed.get()
+    }
+
+    /// Asks this tab's Neovim for Close Tab's check through
+    /// [`WolfCore::request_close_tab`], blocking up to core's RPC timeout.
+    /// [`CloseTabAnswer::NoAnswer`] when the core is gone.
+    ///
+    /// The core is borrowed in its own statement, so no borrow outlives the ask.
+    #[must_use]
+    pub fn request_close_tab(&self) -> CloseTabAnswer {
+        let answer = self
+            .inner
+            .core
+            .borrow()
+            .as_ref()
+            .map(WolfCore::request_close_tab);
+        answer.unwrap_or(CloseTabAnswer::NoAnswer)
     }
 
     /// This tab's restart state.
@@ -642,6 +679,7 @@ impl TabsInner {
                 empty_state,
                 empty_style,
                 new_tab_sidebar: parts.new_tab_sidebar,
+                close_confirmed: Cell::new(false),
             }),
         };
         // The real title arrives with this tab's first refresh; until then the bar
@@ -698,6 +736,20 @@ impl TabsInner {
     /// Answers the `close-page` VETO. See the module docs: every arm must call
     /// [`adw::TabView::close_page_finish`] and return [`glib::Propagation::Stop`].
     fn on_close_page(&self, page: &adw::TabPage) -> glib::Propagation {
+        // No borrow outlives the ask: the arms below take the core with `borrow_mut`.
+        if let Some(entry) = self.entry_for(page) {
+            let closes = tabs_ui::close_page_now(entry.close_confirmed(), entry.liveness(), || {
+                // Commands drain from the selected tab only, and its refusal must show.
+                if !entry.is_selected() {
+                    self.view.set_selected_page(page);
+                }
+                entry.request_close_tab()
+            });
+            if !closes {
+                self.view.close_page_finish(page, false);
+                return glib::Propagation::Stop;
+            }
+        }
         // Bound in its own statement: the arms below take `borrow_mut`.
         let live_pages = self.entries.borrow().len();
         match tabs_ui::close_outcome(live_pages) {
@@ -871,22 +923,25 @@ impl TabsHandle {
     }
 
     /// Replaces `old` with a tab opened from `parts` at `old`'s page position, SELECTED,
-    /// then closes `old` through the ordinary `close-page` path, which shuts its
-    /// Neovim down. `None`, with `old` untouched, when the new tab's core fails to start.
+    /// then closes `old` through the ordinary `close-page` path, confirmed since a
+    /// replacement is not a user's close, which shuts its Neovim down. `None`, with `old` untouched, when the new tab's core fails to start.
     ///
     /// The new tab opens FIRST: closing a window's last page closes the window.
     /// No core borrow may be held across this call, since the close takes `old`'s
     /// core out with a `borrow_mut`.
     pub fn replace(&self, old: &TabHandle, parts: TabParts) -> Option<TabHandle> {
         let opened = self.inner.open_tab(parts, Some(old.page_position()))?;
+        old.confirm_close();
         self.inner.view.close_page(old.page());
         Some(opened)
     }
 
-    /// Closes `tab` through the `close-page` veto, as the bar's close button does: one tab
-    /// of several closes and its Neovim shuts down, and the last tab's close closes the
-    /// window. No core borrow may be held across this call, since either close takes a
-    /// core out with a `borrow_mut`.
+    /// Closes `tab` through the `close-page` veto, as the bar's close button does. Unless
+    /// [`TabHandle::confirm_close`] confirmed it, a live tab's Neovim is asked first and
+    /// the close is refused, to come back as a drained `close_tab`. A closing tab of
+    /// several shuts its Neovim down, and the last tab's close closes the window. No core
+    /// borrow may be held across this call, since the ask borrows the tab's core and
+    /// either close takes a core out with a `borrow_mut`.
     pub fn close(&self, tab: &TabHandle) {
         self.inner.view.close_page(tab.page());
     }

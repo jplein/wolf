@@ -104,6 +104,9 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
   private(set) var handle: WolfCoreHandle?
 
   private var window: MainWindow?
+  /// Set for a drained `close_tab`, Neovim's own verdict, so `windowShouldClose(_:)` does not
+  /// ask again.
+  private var closeConfirmed = false
   private var paneContainer: PaneContainerView?
   /// Accessed by `WakeBridge` / `TreeWakeBridge` (via `WindowRegistry`) to
   /// refresh the sidebar on render/tree wakes.
@@ -454,6 +457,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
     guard let handle else { return }
     for cmd in handle.drain_commands() {
       guard let kind = CommandKind(ffi: cmd.kind()) else { continue }
+      if kind == .closeTab { closeConfirmed = true }
       CommandDispatcher.dispatch(
         kind, window: window, coordinator: coordinator, originatingCwd: currentCwd,
         controller: self)
@@ -1010,6 +1014,22 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
   }
 
   // MARK: - NSWindowDelegate
+
+  /// The should-close path of the tab's close button, the red close button and Close Tab,
+  /// decided by `CloseTabSeam`. An unconfirmed close of a live tab answers no and asks the
+  /// tab's Neovim, after raising the tab so its refusal shows; its drained `close_tab` then
+  /// closes the window. A drained `close_tab` or a confirmed termination closes at once.
+  func windowShouldClose(_ sender: NSWindow) -> Bool {
+    let handle = self.handle
+    let liveness = handle.map { NvimLiveness(rawValue: $0.liveness()) ?? .alive } ?? .dead
+    return CloseTabSeam.shouldClose(
+      confirmed: closeConfirmed || coordinator?.isTerminating == true, liveness: liveness,
+      ask: {
+        raise()
+        guard let handle else { return .noAnswer }
+        return CloseTabAnswer(rawValue: handle.request_close_tab()) ?? .noAnswer
+      })
+  }
 
   func windowWillClose(_ notification: Notification) {
     teardown()

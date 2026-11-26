@@ -143,8 +143,9 @@ declare_commands! {
         /// (filling the whole pane area, every other pane hidden) and not. A
         /// front-end action: nothing of it reaches Neovim.
         ZoomPane,
-        /// Close the tab that queued it, and its window when that is the window's
-        /// only tab: what the `:q` and `:qa` families send.
+        /// Close Tab: close the tab, and its window when that is the window's only
+        /// tab, once the tab's Neovim finds nothing unsaved. It is also what the `:q`
+        /// and `:qa` families send.
         CloseTab,
     }
 }

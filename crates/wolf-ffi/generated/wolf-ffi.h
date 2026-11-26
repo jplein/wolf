@@ -520,6 +520,7 @@ struct __swift_bridge__$FfiColor __swift_bridge__$WolfCoreHandle$theme_titlebar_
 void* __swift_bridge__$WolfCoreHandle$pane_status_for_grid(void* self, uint64_t grid);
 void* __swift_bridge__$WolfCoreHandle$win_buffer(void* self, int64_t win);
 void* __swift_bridge__$WolfCoreHandle$window_cursor(void* self, int64_t win);
+uint8_t __swift_bridge__$WolfCoreHandle$request_close_tab(void* self);
 void __swift_bridge__$WolfCoreHandle$open(void* self, void* path);
 void __swift_bridge__$WolfCoreHandle$chdir(void* self, void* path);
 void __swift_bridge__$WolfCoreHandle$set_background(void* self, bool dark);

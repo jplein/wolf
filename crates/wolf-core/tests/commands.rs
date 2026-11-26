@@ -32,7 +32,7 @@ use common::{
     ch, key, poll_until, probe_values, settle_for, type_str, FlushWaiter, FLUSH_TIMEOUT,
     POLL_INTERVAL,
 };
-use wolf_core::{Command, Key, Liveness, MenuGroup, WolfCore, COMMAND_SPECS};
+use wolf_core::{CloseTabAnswer, Command, Key, Liveness, MenuGroup, WolfCore, COMMAND_SPECS};
 
 /// The outer/global grid id. Window content lives on grids `>= 2`; grid 1 is
 /// never a window grid in these scenarios.
@@ -1014,6 +1014,193 @@ fn zq_on_last_pane_discards_and_emits_close_tab() {
     );
 
     core.shutdown().expect("shutdown should be Ok");
+}
+
+/// What `request_close_tab()` refusing would show: the toast it reads back is the echo Neovim
+/// made inside the request itself, so an empty toast beside `Refused` means that echo is lost.
+const ASKED: &str = "request_close_tab() (Refused with no toast means an echo made inside the \
+                     RPC request does not reach the toast)";
+
+/// On an unmodified tab, `request_close_tab()` answers `Closing`, and Neovim has notified
+/// `close_tab`, which the front-end's drain then acts on.
+#[test]
+fn request_close_tab_answers_closing_and_notifies_close_tab() {
+    let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
+    wait_for_initial_window(&core, &waiter);
+
+    assert_eq!(
+        probe(&core, &["&modified"]),
+        ["0"],
+        "premise: a freshly opened file must be unmodified"
+    );
+    // Discard anything queued during setup so we observe only the request's command.
+    let _ = core.drain_commands();
+
+    let answer = core.request_close_tab();
+    assert_eq!(
+        answer,
+        CloseTabAnswer::Closing,
+        "an unmodified tab must answer Closing; Refused means the check counted an unmodified \
+         buffer or the answer is mapped the wrong way round, and NoAnswer that the request failed \
+         or wolf_close_tab returned no boolean"
+    );
+    expect_close_tab(
+        &core,
+        "request_close_tab() on an unmodified tab (Closing without it means wolf_close_tab \
+         answered true without running the quit's check and notify)",
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// With the current buffer modified, `request_close_tab()` answers `Refused`, the tab shows
+/// E37 alone, and nothing notifies `close_tab`.
+#[test]
+fn request_close_tab_refuses_with_e37_for_the_current_buffer() {
+    let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
+    wait_for_initial_window(&core, &waiter);
+
+    insert_text(&core, &waiter, "x");
+    assert_eq!(
+        probe(&core, &["&modified"]),
+        ["1"],
+        "premise: the typed text must leave the current buffer modified"
+    );
+    // Discard anything queued during setup so we observe only the request's (non-)effect.
+    let _ = core.drain_commands();
+
+    let answer = core.request_close_tab();
+    assert_eq!(
+        answer,
+        CloseTabAnswer::Refused,
+        "a modified current buffer must refuse the close; Closing means the check was skipped or \
+         forced, and NoAnswer that the request failed"
+    );
+    let (toast, drained) = refused(&core, &waiter, ASKED, E37);
+    assert!(
+        !toast.contains("E162"),
+        "a refusal for the current buffer must be E37 alone; the toast reads {toast:?}, so the \
+         current buffer was reported as another buffer"
+    );
+    assert!(
+        !drained.contains(&Command::CloseTab),
+        "a refused request must not notify close_tab; got {drained:?}, so the tab would close \
+         over its unsaved edit"
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// With a modified buffer that no window shows, `request_close_tab()` answers `Refused` and
+/// names that buffer with E162: the check covers the whole tab's Neovim, as `:qa` does.
+#[test]
+fn request_close_tab_refuses_with_e162_for_a_hidden_buffer() {
+    let (core, waiter, file) = common::start_core_with_temp_md(DOC);
+    wait_for_initial_window(&core, &waiter);
+
+    let (_second, second_name) = hide_a_modified_second_file(&core, &waiter, file.path());
+    // Discard anything queued during setup so we observe only the request's (non-)effect.
+    let _ = core.drain_commands();
+
+    let answer = core.request_close_tab();
+    assert_eq!(
+        answer,
+        CloseTabAnswer::Refused,
+        "a hidden modified buffer must refuse the close; Closing means the check looked at the \
+         current buffer or the tab's windows only"
+    );
+    let (toast, drained) = refused(&core, &waiter, ASKED, &e162(&second_name));
+    assert!(
+        !toast.contains("E37"),
+        "the current buffer is unmodified, so the refusal must be E162 alone; the toast reads \
+         {toast:?}"
+    );
+    assert!(
+        !drained.contains(&Command::CloseTab),
+        "a refused request must not notify close_tab; got {drained:?}"
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// `:WolfCloseTab` and `require('wolf').close_tab()` run the same check before they notify:
+/// with the current buffer modified, each refuses with E37 and notifies no `close_tab`.
+#[test]
+fn close_tab_faces_check_before_they_notify() {
+    let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
+    wait_for_initial_window(&core, &waiter);
+
+    insert_text(&core, &waiter, "x");
+    assert_eq!(
+        probe(&core, &["&modified"]),
+        ["1"],
+        "premise: the typed text must leave the current buffer modified"
+    );
+    // Discard anything queued during setup so we observe only each face's (non-)effect.
+    let _ = core.drain_commands();
+
+    // (what is typed, the face it reaches)
+    let faces = [
+        ("WolfCloseTab", ":WolfCloseTab"),
+        (
+            "lua require('wolf').close_tab()",
+            "require('wolf').close_tab()",
+        ),
+    ];
+    for (typed, face) in faces {
+        ex_command(&core, typed);
+        let (_toast, drained) =
+            refused(&core, &waiter, &format!("{face} on a modified buffer"), E37);
+        assert!(
+            !drained.contains(&Command::CloseTab),
+            "{face} on a modified buffer must refuse and notify no close_tab; got {drained:?}, \
+             so this face still notifies without asking"
+        );
+
+        assert_eq!(
+            probe(&core, &["&modified"]),
+            ["1"],
+            "premise: the buffer must still be modified after {face}'s refusal"
+        );
+        poll_until(
+            &waiter,
+            &format!(
+                "premise: the probe's typed command to clear {face}'s toast, so the next face's \
+                 E37 can only be its own"
+            ),
+            || toast_text(&core),
+            String::is_empty,
+        );
+    }
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// A Neovim killed under the core cannot answer, so `request_close_tab()` answers `NoAnswer`,
+/// on which the front-end closes the tab unchecked.
+#[test]
+fn request_close_tab_gives_no_answer_from_a_dead_neovim() {
+    let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
+    wait_for_initial_window(&core, &waiter);
+
+    ex_command(&core, "lua (vim.uv or vim.loop).kill(vim.fn.getpid(), 9)");
+    poll_until(
+        &waiter,
+        "premise: liveness() to become Dead after Neovim's SIGKILL of itself",
+        || core.liveness(),
+        |liveness| *liveness == Liveness::Dead,
+    );
+
+    let answer = core.request_close_tab();
+    assert_eq!(
+        answer,
+        CloseTabAnswer::NoAnswer,
+        "a dead Neovim must give NoAnswer, so the front-end closes the tab unchecked; Refused \
+         means a failed request reads as a refusal, which would leave a crashed tab unclosable"
+    );
+
+    core.shutdown()
+        .expect("shutdown should be Ok even after a crash");
 }
 
 // Pure registry tests: they start no core, so they pin `COMMAND_SPECS` and `Command::from_id`

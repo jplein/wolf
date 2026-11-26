@@ -83,8 +83,9 @@ pub enum UiAction {
     NewWindow,
     /// Close the application window (via `close-request`, never `destroy`).
     CloseWindow,
-    /// Close the selected tab, whose Neovim queued the command, through the tab bar's
-    /// `close-page` path, so the window closes with its last tab.
+    /// Close Tab: close the selected tab through the tab bar's `close-page` path, so the
+    /// window closes with its last tab. From the palette or the menu the tab's Neovim is
+    /// asked first; a drained `close_tab` is its verdict and closes at once.
     CloseTab,
     /// Minimize the application window.
     MinimizeWindow,
@@ -460,7 +461,7 @@ mod tests {
             want: Want::Exact(UiAction::ZoomPane),
         },
         Case {
-            desc: "31 CloseTab: closes the selected tab, whose Neovim queued it, and the window on its last tab",
+            desc: "31 CloseTab: closes the selected tab once its Neovim finds nothing unsaved, and the window on its last tab",
             command: Command::CloseTab,
             want: Want::Exact(UiAction::CloseTab),
         },

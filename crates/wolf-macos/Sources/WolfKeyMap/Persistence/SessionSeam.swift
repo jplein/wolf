@@ -157,11 +157,13 @@ public enum SessionSeam {
   /// Groups every view close of one runloop turn into a burst, and makes a keep
   /// commit in that burst write the tree read at the burst's first close.
   ///
-  /// The tree is read at the first close because a tabbed window's close button
-  /// closes each tab's window in turn: by the last close, which is the keep, the
-  /// earlier tabs are torn down and have left the group, so a fresh read would
-  /// keep only the last tab. A tab closed alone ends its burst on the next turn,
-  /// so a later close reads afresh and the closed tab stays dropped.
+  /// The tree is read at the first close because the tabs that close in one turn
+  /// close their windows in turn: by the last close, which is the keep, the earlier
+  /// tabs are torn down and have left the group, so a fresh read would keep only the
+  /// last tab. Only tabs whose close is not refused close in one turn; a tab whose
+  /// Neovim is asked closes on its own `close_tab`, in a turn of its own. A tab
+  /// closed alone ends its burst on the next turn, so a later close reads afresh and
+  /// the closed tab stays dropped.
   ///
   /// The collaborators are injected: `scheduleEnd` runs the burst's end on the next
   /// turn (production: `DispatchQueue.main.async`), `read` walks the live tree, and

@@ -40,6 +40,7 @@ swift_library(
     srcs = [
         "Sources/WolfKeyMap/AppearanceSeam.swift",
         "Sources/WolfKeyMap/CellMetricsMath.swift",
+        "Sources/WolfKeyMap/CloseTabSeam.swift",
         "Sources/WolfKeyMap/CmdlineSeam.swift",
         "Sources/WolfKeyMap/CommandInstallSeam.swift",
         "Sources/WolfKeyMap/CommandSeam.swift",
@@ -238,6 +239,7 @@ swift_test(
     srcs = [
         "Tests/WolfKeyMapTests/AppearanceSeamTests.swift",
         "Tests/WolfKeyMapTests/CellMetricsMathTests.swift",
+        "Tests/WolfKeyMapTests/CloseTabSeamTests.swift",
         "Tests/WolfKeyMapTests/CmdlineSeamTests.swift",
         "Tests/WolfKeyMapTests/CommandInstallSeamTests.swift",
         "Tests/WolfKeyMapTests/CommandSeamTests.swift",
@@ -306,6 +308,7 @@ swift_test(
     name = "WolfMacOSTests",
     srcs = [
         "Tests/WolfMacOSTests/CloseTabDispatchTests.swift",
+        "Tests/WolfMacOSTests/CloseTabMenuTests.swift",
         "Tests/WolfMacOSTests/ExtrasRestoreTests.swift",
         "Tests/WolfMacOSTests/FileTreeViewTests.swift",
         "Tests/WolfMacOSTests/InstallCommandMenuTests.swift",

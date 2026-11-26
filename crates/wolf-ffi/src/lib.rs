@@ -50,15 +50,15 @@ use std::time::Duration;
 use wolf_core::app_state as app;
 use wolf_core::{
     choose_pane, project_directory, rank_buffers, rank_matches_top_n, rank_palette, AppStateStore,
-    Appearance, BufInfo, BufferRow, Cmdline, Command, CommandMru, CoreConfig, CursorShape,
-    FileSearch, FocusDir, Grid, HighlightTable, InputEvent, Key, KeyEvent, LayoutIntent, Liveness,
-    MarkdownCursor, MouseAction, MouseButton, MouseEvent, OpenListener, OpenRequest, OpenTarget,
-    OpenWait, PaletteRow, PaletteRowKind, PaletteWindow, PaneChoice, PanePlacement, PaneStatus,
-    PreviewInfo, Pum, ResolvedStyle, Rgb, ScrollDirection, ScrollEvent, SearchMatch, SearchOptions,
-    SearchSession, SplitOrientation, TabFiles, TabId, TerminalCell, TerminalCellWidth,
-    TerminalCommand, TerminalCursor, TerminalCursorStyle, TerminalFrame, TerminalId,
-    TerminalMouseEvent, TerminalMouseKind, TerminalScrollEvent, TerminalTarget, TerminalUnderline,
-    Toast, WakeFn, WinInfo, WolfCore,
+    Appearance, BufInfo, BufferRow, CloseTabAnswer, Cmdline, Command, CommandMru, CoreConfig,
+    CursorShape, FileSearch, FocusDir, Grid, HighlightTable, InputEvent, Key, KeyEvent,
+    LayoutIntent, Liveness, MarkdownCursor, MouseAction, MouseButton, MouseEvent, OpenListener,
+    OpenRequest, OpenTarget, OpenWait, PaletteRow, PaletteRowKind, PaletteWindow, PaneChoice,
+    PanePlacement, PaneStatus, PreviewInfo, Pum, ResolvedStyle, Rgb, ScrollDirection, ScrollEvent,
+    SearchMatch, SearchOptions, SearchSession, SplitOrientation, TabFiles, TabId, TerminalCell,
+    TerminalCellWidth, TerminalCommand, TerminalCursor, TerminalCursorStyle, TerminalFrame,
+    TerminalId, TerminalMouseEvent, TerminalMouseKind, TerminalScrollEvent, TerminalTarget,
+    TerminalUnderline, Toast, WakeFn, WinInfo, WolfCore,
 };
 
 // Re-export the bridge's transparent structs so rlib consumers (the Rust tests) can name them;
@@ -231,7 +231,8 @@ mod command_kind {
     pub const SPLIT_VERTICAL: u8 = 29;
     /// Toggle the active pane between zoomed, over the whole pane area, and not.
     pub const ZOOM_PANE: u8 = 30;
-    /// Close the tab that queued it, and its window on its last tab.
+    /// Close Tab: close the tab, and its window on its last tab, once the tab's Neovim
+    /// finds nothing unsaved. Also what the `:q` and `:qa` families send.
     pub const CLOSE_TAB: u8 = 31;
 }
 
@@ -379,6 +380,21 @@ mod liveness {
     pub const NOT_RESPONDING: u8 = 1;
     /// The captive nvim process has died (or the core is gone).
     pub const DEAD: u8 = 2;
+}
+
+/// The answer discriminants of [`WolfCoreHandle::request_close_tab`], mapped from
+/// [`wolf_core::CloseTabAnswer`].
+///
+/// The single source of truth shared with the Swift `CloseTabAnswer` in `WolfKeyMap`.
+/// A shut-down core answers [`NO_ANSWER`], the neutral fallback on which the
+/// front-end closes the tab unchecked.
+mod close_tab_answer {
+    /// The request failed or timed out, or the core is gone: close unchecked.
+    pub const NO_ANSWER: u8 = 0;
+    /// The tab has unsaved changes and showed E37 or E162: nothing closes.
+    pub const REFUSED: u8 = 1;
+    /// Nothing is unsaved: the tab closes on its drained `close_tab`.
+    pub const CLOSING: u8 = 2;
 }
 
 /// The `target` discriminants of [`WolfCoreHandle::open_terminal`] and
@@ -683,6 +699,9 @@ mod ffi {
         // Window `win`'s cursor and top line, read from Neovim for the state capture. Blocks
         // briefly; not found for `win <= 0`, an unknown window, an error or a shut-down core.
         fn window_cursor(&self, win: i64) -> FfiWindowCursor;
+        // Close Tab's check in the tab's Neovim, as `mod close_tab_answer`. Blocks up to the RPC
+        // timeout; NO_ANSWER on an error, a timeout or a shut-down core.
+        fn request_close_tab(&self) -> u8;
         // Opens `path` (an absolute filesystem path) in Neovim via
         // `InputEvent::Open`; the core's input pump records the MRU.
         fn open(&self, path: String);
@@ -3482,6 +3501,22 @@ impl WolfCoreHandle {
                 col: c.cursor.col,
                 top_line: c.top_line,
             })
+    }
+
+    /// Asks the tab's Neovim whether Close Tab may close it, through
+    /// [`WolfCore::request_close_tab`], answering with `mod close_tab_answer`.
+    ///
+    /// Blocks up to the core's RPC timeout. `CLOSING` means the tab closes on its
+    /// drained `close_tab`; `NO_ANSWER`, which a shut-down core also gives, means the
+    /// caller closes the tab unchecked.
+    #[must_use]
+    pub fn request_close_tab(&self) -> u8 {
+        let answer = self.core.borrow().as_ref().map(WolfCore::request_close_tab);
+        match answer {
+            None | Some(CloseTabAnswer::NoAnswer) => close_tab_answer::NO_ANSWER,
+            Some(CloseTabAnswer::Refused) => close_tab_answer::REFUSED,
+            Some(CloseTabAnswer::Closing) => close_tab_answer::CLOSING,
+        }
     }
 
     /// Opens `path` (an absolute filesystem path) in Neovim via

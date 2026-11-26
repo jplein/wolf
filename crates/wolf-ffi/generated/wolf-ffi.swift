@@ -466,6 +466,10 @@ extension WolfCoreHandleRef {
         FfiWindowCursor(ptr: __swift_bridge__$WolfCoreHandle$window_cursor(ptr, win))
     }
 
+    public func request_close_tab() -> UInt8 {
+        __swift_bridge__$WolfCoreHandle$request_close_tab(ptr)
+    }
+
     public func open<GenericIntoRustString: IntoRustString>(_ path: GenericIntoRustString) {
         __swift_bridge__$WolfCoreHandle$open(ptr, { let rustString = path.intoRustString(); rustString.isOwned = false; return rustString.ptr }())
     }

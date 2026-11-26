@@ -2170,8 +2170,8 @@ pub(crate) const TABS_FIRST_TAB_CENTRE_FRACTION: f64 = 0.25;
 /// Six legs over ONE launch: open a file in tab 1, `:tcd` its Neovim into a
 /// subdirectory, open a second, empty tab with Ctrl+Shift+T and `:cd` it into that
 /// subdirectory, open the second file into it, click tab 1's entry in the bar, then
-/// middle-click it to close it. Three captures, four Neovim readbacks and three counts
-/// of the app's live `nvim` children.
+/// drop tab 1's edit and middle-click it to close it. Three captures, four Neovim
+/// readbacks and three counts of the app's live `nvim` children.
 ///
 /// ## Exit codes it adds to [`POINTER_PREAMBLE`]'s 11-15
 ///
@@ -2335,6 +2335,12 @@ fi
 # Middle-click on an adw::TabBar tab raises `close-page`, which is a VETO the
 # handler must answer with close_page_finish and Stop. MEASURED under cage; see
 # POINTER_BUTTON_MIDDLE.
+#
+# A tab's close asks its Neovim first, which refuses while leg (a)'s `o` leaves tab 1
+# modified; so the edit is dropped first, in tab 1, where leg (e) proved keys go.
+wtype -- ":set nomodified"
+wtype -k Return
+sleep "$SETTLE"
 hsend motion "$TABS_CLICK_X" "$TABS_CLICK_Y"
 hsend press "$BTN_MIDDLE"
 hsend release "$BTN_MIDDLE"

@@ -62,7 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
   /// Set as `applicationWillTerminate` starts, so a view torn down from then on
   /// commits nothing over the terminate commit (`closeCommit(for:)`).
-  private var isTerminating = false
+  private(set) var isTerminating = false
 
   /// Set once the launch restore, or the fresh run's empty window, is in place. Requests from
   /// the socket and from Finder wait in `openQueue` until then, so a cold launch restores the
@@ -877,8 +877,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
   /// What closing `view` commits, asked by its `teardown` while it still counts as
   /// live. Closing the last live view quits the app, so it commits synchronously,
-  /// before returning, the tree read at the burst's first close: a tabbed window
-  /// closed by its close button closes each tab in turn, and so keeps every tab.
+  /// before returning, the tree read at the burst's first close. Only the tabs that
+  /// close in one turn burst together, those whose `windowShouldClose` answers yes at
+  /// once: a live tab closes on its own `close_tab`, in a turn of its own.
   ///
   /// Outside a quit it first captures every live tab of the closing view's group, so the
   /// burst's read carries the cursors (§4). A drop then writes at once, while the closing

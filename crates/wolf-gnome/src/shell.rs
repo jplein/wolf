@@ -93,8 +93,8 @@
 //! commands into a `Vec`, and drops the borrow before dispatching any of them.
 //! `UiAction::CloseWindow` / `UiAction::QuitApplication` synchronously run
 //! `window::wire_close`'s `close-request` handler, which takes every tab's core out
-//! with a `borrow_mut()`. `UiAction::CloseTab` takes its tab's core out, and on the
-//! window's last tab it runs the same handler. An outstanding `borrow()` there is a
+//! with a `borrow_mut()`. `UiAction::CloseTab` borrows its tab's core for the ask, then
+//! may take it out, and on the window's last tab it runs the same handler. An outstanding `borrow()` there is a
 //! `RefCell` panic, not a warning.
 //!
 //! The restart path adds a SECOND rule: **never hold a snapshot read guard across
@@ -1871,6 +1871,10 @@ impl AppShell {
             core.drain_commands()
         };
         for command in commands {
+            // Neovim notifies close_tab only once its own check passed, so the close asks no more.
+            if command == Command::CloseTab {
+                tab.confirm_close();
+            }
             self.dispatch_command(command);
         }
     }
@@ -2068,10 +2072,10 @@ impl AppShell {
         self.inner.window.close();
     }
 
-    /// Closes the selected tab, whose Neovim queued the `close_tab` (commands drain from
-    /// the selected tab only), through [`TabsHandle::close`]; on the window's last tab,
-    /// `tabs_ui::close_outcome` closes the window instead. Nothing asks again: the quit
-    /// that sent it has already refused unsaved changes.
+    /// Closes the selected tab through [`TabsHandle::close`]; on the window's last tab,
+    /// `tabs_ui::close_outcome` closes the window instead. A drained `close_tab`, which
+    /// commands drain from the selected tab only, arrives confirmed and closes at once;
+    /// a palette or menu Close Tab asks the tab's Neovim first.
     fn close_tab(&self) {
         if let Some(tab) = self.inner.tabs.selected() {
             self.inner.tabs.close(&tab);

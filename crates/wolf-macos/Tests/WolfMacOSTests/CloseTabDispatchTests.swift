@@ -1,4 +1,4 @@
-// Checks that a drained close_tab closes the tab's own window without asking it first.
+// Checks that Close Tab asks its window first and that Close Window closes without asking.
 
 import AppKit
 import WolfKeyMap
@@ -45,13 +45,14 @@ private final class RecordingWindow: NSWindow {
   }
 }
 
-/// `CommandDispatcher.dispatch(.closeTab, …)`, the arm a drained `close_tab` reaches: the quit
-/// that sent it has already refused unsaved changes, so the arm closes the tab's own window
-/// without asking it again. It needs no core and no screen.
+/// `CommandDispatcher.dispatch` for `.closeTab` and `.closeWindow`. Close Tab goes through
+/// `performClose(_:)`, so `windowShouldClose(_:)` asks the tab's Neovim, or lets a drained
+/// `close_tab` through; Close Window calls `close()`, which no `windowShouldClose` refuses.
+/// It needs no core and no screen.
 @MainActor
 final class CloseTabDispatchTests: XCTestCase {
-  /// M1a and M1b.
-  func testCloseTabClosesItsWindowWithoutAsking() {
+  /// D1a and D1b.
+  func testCloseTabAsksItsWindowFirst() {
     let window = RecordingWindow.make()
     XCTAssertEqual(window.calls, [], "premise: a built window must have recorded no call")
 
@@ -59,9 +60,23 @@ final class CloseTabDispatchTests: XCTestCase {
       .closeTab, window: window, coordinator: nil, originatingCwd: "", controller: nil)
 
     XCTAssertEqual(
+      window.calls, [.performClose],
+      ".closeTab must ask its window once through performClose: [close] means it closes"
+        + " without windowShouldClose, so the menu and palette skip the unsaved check; [] means"
+        + " the arm does nothing; more than one call means it asks twice")
+  }
+
+  /// D2a.
+  func testCloseWindowClosesWithoutAsking() {
+    let window = RecordingWindow.make()
+    XCTAssertEqual(window.calls, [], "premise: a built window must have recorded no call")
+
+    CommandDispatcher.dispatch(
+      .closeWindow, window: window, coordinator: nil, originatingCwd: "", controller: nil)
+
+    XCTAssertEqual(
       window.calls, [.close],
-      ".closeTab must close its window once, without asking: [performClose] means it asks"
-        + " windowShouldClose again, after the quit's own check; [] means the arm does nothing;"
-        + " more than one call means it closes twice")
+      ".closeWindow must close its window once, without asking: [performClose] means"
+        + " windowShouldClose would refuse it on a modified tab; [] means the arm does nothing")
   }
 }

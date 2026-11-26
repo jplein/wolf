@@ -226,6 +226,15 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
                prefix, which is still typed as plain Ctrl+W",
     },
     ActionBinding {
+        action: "win.close-tab",
+        accel: None,
+        ctrl_fold: None,
+        command: Some(Command::CloseTab),
+        status: BindingStatus::MenuOnly,
+        note: "menu-only because no Ctrl+Shift+<letter> is free, the app.new-window \
+               precedent, so the primary menu, the palette and :WolfCloseTab are its routes",
+    },
+    ActionBinding {
         action: "win.close-window",
         accel: None,
         ctrl_fold: None,
@@ -493,6 +502,10 @@ pub const MENU_SECTIONS: &[MenuSection] = &[
             MenuItemSpec {
                 label: "Close",
                 action: "win.close-pane",
+            },
+            MenuItemSpec {
+                label: "Close Tab",
+                action: "win.close-tab",
             },
             MenuItemSpec {
                 label: "Close Window",

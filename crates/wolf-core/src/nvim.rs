@@ -555,6 +555,31 @@ impl NvimProcess {
         }
     }
 
+    /// Runs Close Tab's check, the `_G.wolf_close_tab` helper (defined in
+    /// `runtime/nvim/init.lua`), over `nvim_exec_lua` — see
+    /// [`crate::api::WolfCore::request_close_tab`]. Yields `true` once the helper has
+    /// notified `close_tab`, and `false` when it refused with E37 or E162. A
+    /// non-boolean result is an [`NvimError::Rpc`].
+    pub fn close_tab(
+        &self,
+    ) -> impl std::future::Future<Output = Result<bool, NvimError>> + Send + 'static {
+        let nvim = self.nvim.clone();
+        async move {
+            let value = nvim
+                .call(
+                    "nvim_exec_lua",
+                    vec![Value::from("return wolf_close_tab()"), Value::Array(vec![])],
+                )
+                .await
+                .map_err(|e| NvimError::Rpc(e.to_string()))?
+                .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+
+            value
+                .as_bool()
+                .ok_or_else(|| NvimError::Rpc(format!("wolf_close_tab returned {value}")))
+        }
+    }
+
     /// Navigates from the active PREVIEW pane back to its source file in place (the
     /// active pane becomes an edit pane) and returns the source buffer's number
     /// (`0` when the active buffer is not a preview).

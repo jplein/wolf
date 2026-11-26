@@ -35,6 +35,7 @@ enum AppMenu {
     static let fullWidth = 22
     static let previewInOtherPane = 26
     static let editInOtherPane = 27
+    static let closeTab = 31
   }
 
   /// The dynamic submenus `install` hands back to the coordinator: the Window
@@ -189,7 +190,7 @@ enum AppMenu {
   }
 
   /// The File menu (New `⌘n` / New Window `⇧⌘n` / New Tab `⌘t` / Go to File `⌘o`
-  /// / Open File / Open Folder `⇧⌘o` / Close `⌘w` / Close Window `⇧⌘w`).
+  /// / Open File / Open Folder `⇧⌘o` / Close `⌘w` / Close Tab / Close Window `⇧⌘w`).
   ///
   /// The item titles mirror `wolf_core::COMMAND_SPECS` (the canonical registry);
   /// the ellipsis characters are single U+2026, matching those specs.
@@ -223,6 +224,9 @@ enum AppMenu {
     menu.addItem(
       commandItem(
         title: "Close", tag: Tag.closePane, keyEquivalent: "w", target: target))
+    menu.addItem(
+      commandItem(
+        title: "Close Tab", tag: Tag.closeTab, keyEquivalent: "", target: target))
     menu.addItem(
       commandItem(
         title: "Close Window", tag: Tag.closeWindow, keyEquivalent: "w",

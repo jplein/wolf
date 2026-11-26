@@ -155,6 +155,7 @@ use wolf_core::config::CONFIG_FILE_NAME;
 use wolf_core::{preferences_dir, state_dir, AppStateStore, CommandMru, RecentDirs};
 use wolf_gnome::{preview_coalescer::PREVIEW_TRAILING_DELAY, CellMetrics, WINDOW_TITLE_FALLBACK};
 
+mod close_tab;
 mod compose;
 mod config;
 mod drawer_divider;

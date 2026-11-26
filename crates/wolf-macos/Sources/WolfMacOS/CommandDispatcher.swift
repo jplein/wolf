@@ -27,7 +27,7 @@ enum CommandDispatcher {
     case .newWindow:
       coordinator?.makeNewWindow(originatingCwd: originatingCwd)
     case .closeWindow:
-      window?.performClose(nil)
+      window?.close()
     case .quitApplication:
       NSApp.terminate(nil)
     case .hideApplication:
@@ -87,9 +87,9 @@ enum CommandDispatcher {
     case .zoomPane:
       controller?.zoomPane()
     case .closeTab:
-      // close(), not performClose(_:): the quit that sent it has already refused unsaved
-      // changes, so windowShouldClose is not asked again.
-      window?.close()
+      // windowShouldClose decides whether to ask the tab's Neovim; a drained close_tab arrives
+      // confirmed, so it closes at once.
+      window?.performClose(nil)
     }
   }
 }

@@ -120,6 +120,20 @@ pub struct WindowCursor {
     pub top_line: u32,
 }
 
+/// What the tab's Neovim answers [`WolfCore::request_close_tab`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloseTabAnswer {
+    /// The request failed, timed out or got no boolean back: the neutral fallback, on
+    /// which the front-end closes the tab unchecked, since a wedged tab must stay
+    /// closable and its swap files keep its edits recoverable.
+    NoAnswer,
+    /// The tab has unsaved changes: Neovim showed E37 or E162 and nothing closes.
+    Refused,
+    /// Nothing is unsaved: Neovim ended the tab's waits and notified `close_tab`, whose
+    /// drain closes the tab.
+    Closing,
+}
+
 /// The live core: tokio runtime + captive Neovim + shared snapshot.
 pub struct WolfCore {
     runtime: Runtime,
@@ -771,6 +785,33 @@ impl WolfCore {
             Err(e) => {
                 tracing::warn!("open_preview() failed: {e}");
                 0
+            }
+        }
+    }
+
+    /// Asks the tab's Neovim whether Close Tab may close it, running `:qa`'s check
+    /// through the `wolf_close_tab` helper (see
+    /// [`crate::nvim::NvimProcess::close_tab`]).
+    ///
+    /// Blocks through [`block_on_rpc`](Self::block_on_rpc), so a wedged Neovim costs
+    /// [`rpc_timeout`](Self::rpc_timeout) and is marked
+    /// [`Liveness::NotResponding`]. [`CloseTabAnswer::Closing`] means Neovim has
+    /// notified `close_tab`, so the tab closes on that command's drain, not on this
+    /// answer. [`CloseTabAnswer::Refused`] means it showed E37 or E162, and
+    /// [`CloseTabAnswer::NoAnswer`], logged, means the caller closes the tab
+    /// unchecked.
+    #[must_use]
+    pub fn request_close_tab(&self) -> CloseTabAnswer {
+        let asked = {
+            let nvim = self.nvim.borrow();
+            self.block_on_rpc("close_tab", nvim.close_tab())
+        };
+        match asked {
+            Ok(true) => CloseTabAnswer::Closing,
+            Ok(false) => CloseTabAnswer::Refused,
+            Err(e) => {
+                tracing::warn!("request_close_tab failed: {e}");
+                CloseTabAnswer::NoAnswer
             }
         }
     }

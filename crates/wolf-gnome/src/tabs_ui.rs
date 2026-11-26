@@ -20,6 +20,16 @@
 //! [`TabClose::CloseWindow`], which runs the window's own close handler and shuts
 //! every core down.
 //!
+//! ## A close asks the tab's Neovim first
+//!
+//! A user's close of a tab, from its close button, Close Tab or `:WolfCloseTab`, must
+//! not drop unsaved changes, and only the tab's own Neovim knows of them. So
+//! [`close_page_now`] refuses the page and asks it, and Neovim notifies `close_tab`
+//! once nothing is unsaved. That drained `close_tab` is Neovim's own verdict, so it
+//! arrives confirmed and closes without asking again. A dead, stalled or gone core, or
+//! one that gives no answer, closes unchecked: a wedged tab must stay closable, and its
+//! swap files keep its edits recoverable.
+//!
 //! ## The focus trigger
 //!
 //! [`focused_tab`] and [`focus_edges`] decide which tab's Neovim is told it gained
@@ -29,6 +39,8 @@
 //! the gain, so two Neovims never both hold it.
 
 use std::path::Path;
+
+use wolf_core::{CloseTabAnswer, Liveness};
 
 /// What closing one tab's page does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +79,33 @@ pub fn close_outcome(live_pages: usize) -> TabClose {
         TabClose::CloseWindow
     } else {
         TabClose::CloseTab
+    }
+}
+
+/// Whether the `close-page` veto closes a page at once, rather than refusing it and
+/// leaving the close to the tab's Neovim. See the module docs.
+///
+/// `confirmed` is a drained `close_tab` or a programmatic close, and closes without
+/// asking. `liveness` is `None` when the tab has no core. Only an
+/// [`Liveness::Alive`] core is asked, once, through `ask`: [`CloseTabAnswer::Refused`]
+/// and [`CloseTabAnswer::Closing`] keep the page, since a `Closing` tab closes on its
+/// drained `close_tab`, and [`CloseTabAnswer::NoAnswer`] closes it unchecked.
+#[must_use]
+pub fn close_page_now(
+    confirmed: bool,
+    liveness: Option<Liveness>,
+    ask: impl FnOnce() -> CloseTabAnswer,
+) -> bool {
+    if confirmed {
+        return true;
+    }
+    match liveness {
+        Some(Liveness::Alive) => {}
+        Some(Liveness::NotResponding | Liveness::Dead) | None => return true,
+    }
+    match ask() {
+        CloseTabAnswer::Refused | CloseTabAnswer::Closing => false,
+        CloseTabAnswer::NoAnswer => true,
     }
 }
 

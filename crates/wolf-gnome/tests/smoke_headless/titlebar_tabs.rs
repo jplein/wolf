@@ -124,8 +124,8 @@ click_at() {
 /// 2. Ctrl+Shift+T, two Neovims, `:cd ~/`[`HT_DIR`], `fill_buffer` and the bar's settle;
 ///    readback D1, capture S2, probe click P2 and a click [`HT_CLICK_DX`] by [`HT_CLICK_DY`]
 ///    cells from it, P3.
-/// 3. A middle-click on the second tab's header entry, one Neovim, the bar's settle, capture
-///    S3 and readback A from the first tab.
+/// 3. `:set nomodified` in the second tab, then a middle-click on its header entry, one Neovim,
+///    the bar's settle, capture S3 and readback A from the first tab.
 const HT_BODY: &str = r#"
 wait_nvim_count 1 170 "at launch, with one folder tab"
 
@@ -149,6 +149,9 @@ read_cursor "$HT_P2" 173
 click_at "$HT_TARGET_X" "$HT_TARGET_Y"
 read_cursor "$HT_P3" 173
 
+# A tab's close asks its Neovim first, which refuses while fill_buffer leaves the second tab
+# modified; so the edit is dropped first, in the second tab, where read_cursor proved keys go.
+nvim_ex "set nomodified"
 hsend motion "$HT_CLOSE_X" "$HT_CLOSE_Y"
 hsend press "$BTN_MIDDLE"
 hsend release "$BTN_MIDDLE"

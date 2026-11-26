@@ -902,7 +902,7 @@ function _G.wolf_setup_layout(chan)
 			return
 		end
 		if not opts.force and _G.wolf_refuse_unsaved() then
-			return
+			return false
 		end
 		-- Before close_tab, on which the front-end shuts the tab's core down and ends every wait
 		-- with 1. See notes/runtime/nvim/init.lua.md#waits-end-before-the-tab-closes
@@ -910,6 +910,7 @@ function _G.wolf_setup_layout(chan)
 			end_waits(buf, 0)
 		end
 		vim.rpcnotify(chan, "wolf_command", "close_tab")
+		return true
 	end
 
 	-- FOCUS: PURE intent. Do NOT change nvim focus here; just report the request.
@@ -945,6 +946,8 @@ function _G.wolf_setup_layout(chan)
 	_G.wolf_split_pane = split_pane
 	_G.wolf_do_close = do_close
 	_G.wolf_do_quit = do_quit
+	-- Close Tab's check is :qa's; true once close_tab is notified, false when refused.
+	_G.wolf_close_tab = function() return do_quit({ all = true }) end
 	_G.wolf_do_focus = do_focus
 	_G.wolf_emit_drawer = emit_drawer
 
@@ -1162,6 +1165,10 @@ function _G.wolf_setup_commands(chan, commands)
 		local ex_command = pair[2]
 		local function fire()
 			vim.rpcnotify(chan, "wolf_command", id)
+		end
+		if id == "close_tab" then
+			-- Close Tab notifies only once the tab's check passes; looked up late, so setup order is moot.
+			fire = function() _G.wolf_close_tab() end
 		end
 		-- Lua face: require('wolf').<id>()
 		wolf_tbl[id] = fire
