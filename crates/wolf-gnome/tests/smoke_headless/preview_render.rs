@@ -347,8 +347,8 @@ fn chroma_sample(capture: &Capture, rect: SampleRect) -> ChromaSample {
     sample
 }
 
-/// A maximal run of rows in which one colour is a strict majority of the sampled
-/// columns, half-open: `y0 <= y < y1`.
+/// A maximal run of rows that pass one colour test, [`majority_colour_runs`]'s or
+/// [`exact_colour_runs`]'s, half-open: `y0 <= y < y1`.
 #[derive(Clone, Copy, Debug)]
 struct BlockRun {
     /// First row of the run.
@@ -405,6 +405,42 @@ fn majority_colour_runs(
     let mut open: Option<usize> = None;
     for y in rect.y0..rect.y1 {
         if row_is_majority(capture, rect, y, colour) {
+            if open.is_none() {
+                open = Some(y);
+            }
+        } else if let Some(y0) = open.take() {
+            runs.push(BlockRun { y0, y1: y });
+        }
+    }
+    if let Some(y0) = open.take() {
+        runs.push(BlockRun { y0, y1: rect.y1 });
+    }
+    runs.retain(|run| run.rows() >= min_rows);
+    runs
+}
+
+/// Every maximal run of rows inside `rect` carrying at least `min_px` pixels exactly
+/// `colour`, in top-to-bottom order, with runs shorter than `min_rows` discarded.
+///
+/// A per-row COUNT rather than [`majority_colour_runs`]'s majority: an inline code chip is
+/// a small fraction of a band's width, so it is never a majority of any row, while its flat
+/// background still puts tens of exact pixels on every row it covers.
+fn exact_colour_runs(
+    capture: &Capture,
+    rect: SampleRect,
+    colour: Rgb8,
+    min_px: usize,
+    min_rows: usize,
+) -> Vec<BlockRun> {
+    let row_hits = |y: usize| {
+        (rect.x0..rect.x1)
+            .filter(|&x| capture.pixel(x, y) == colour)
+            .count()
+    };
+    let mut runs: Vec<BlockRun> = Vec::new();
+    let mut open: Option<usize> = None;
+    for y in rect.y0..rect.y1 {
+        if row_hits(y) >= min_px {
             if open.is_none() {
                 open = Some(y);
             }
@@ -1015,7 +1051,7 @@ fn codehl_chroma_thresholds_are_separated() {
     );
 }
 
-// --- Row C: an inline code element must not grow its line box ----------------
+// --- Row C: inline code grows no line box, and a heading has a baseline below -----
 
 /// The markdown file the baseline-grid smoke opens and then previews.
 ///
@@ -1023,19 +1059,39 @@ fn codehl_chroma_thresholds_are_separated() {
 /// `RELAUNCH_FIXTURE_NAMES` for the reason [`CODEHL_SOURCE_FILE`] does not.
 const CODEGRID_SOURCE_FILE: &str = "cgrid.md";
 
-/// The whole body of [`CODEGRID_SOURCE_FILE`]: three one-line paragraphs, each
-/// carrying exactly ONE inline code element, then a thematic break.
+/// The whole body of [`CODEGRID_SOURCE_FILE`]: four one-line paragraphs, each carrying
+/// exactly ONE inline code element, with an h3, an h4 and an h6 between them, each
+/// heading carrying one code element of its own, then a thematic break.
 ///
 /// ## Every part of this shape is load-bearing
 ///
-/// **Three paragraphs, not one.** The defect the fix removes is CUMULATIVE: each line
-/// carrying inline code was 26 px rather than 24, so the error grows by 2 px per
-/// preceding code-carrying block. One paragraph would separate the two states by 2 px;
-/// three separate them by 6, which is well outside any antialiasing question.
+/// **Four paragraphs and three headings, not one paragraph.** The defect the code
+/// element's `line-height: 0` removes is CUMULATIVE: each line carrying inline code was
+/// 26 px rather than 24, so the error grows by 2 px per preceding code-carrying block. One
+/// paragraph would separate the two states by 2 px; the four here separate them by 8
+/// before the headings' lines add theirs, which is well outside any antialiasing question.
 ///
-/// **One code element per paragraph, and each paragraph fits ONE line.** A paragraph
-/// that wrapped would add a line box that carries no code, and the arithmetic below
-/// counts code-carrying lines.
+/// **A heading between each pair of paragraphs.** Each one is the subject of the
+/// baseline-below claim, that the paragraph after it starts one baseline below the
+/// heading's box. The levels are h3, h4 and h6: h3 is the one level with 48 px above, h4
+/// and h6 are the 24 px levels at both ends of their font-size range, and h5 differs
+/// from h4 only in its font size, which no assertion here reads.
+///
+/// **Every heading carries a code chip, well right of [`CODEGRID_CHIP_SPLIT_X_PX`].**
+/// The chip is the heading box's landmark. Heading ink is white, but at 14 px a semibold
+/// stem may never cover a whole pixel, so exact-colour heading ink is unreliable; the
+/// chip's flat background is not. The chip adds nothing to the heading's line box,
+/// because the code element declares `line-height: 0`. Each heading's chip follows at
+/// least 20 characters of heading text, and each paragraph's follows one short word,
+/// which is what lets one column split the two kinds.
+///
+/// **The first paragraph opens the document.** Its line box starts at the content's top,
+/// since the first block's top margin is reset, so its chip's top row is the origin every
+/// other chip is measured from, and its readings stand as measured.
+///
+/// **One code element per block, and each block fits ONE line.** A block that wrapped
+/// would add a line box that carries no code, and the arithmetic below counts
+/// code-carrying lines.
 ///
 /// **The trailing thematic break is the RULER.** `base.css` gives `hr` a 24 px box
 /// whose 1 px hairline is its first pixel row, and the theme colours that hairline
@@ -1046,11 +1102,16 @@ const CODEGRID_SOURCE_FILE: &str = "cgrid.md";
 /// underline for the paragraph above and there is no rule at all.
 ///
 /// The words are NATO and the code spans are NATO, so no part of the document is an
-/// `ASSERTED_OCR_TERMS` entry — this smoke asserts none, but a rendered body is page
-/// text and the rule is the file's, not the smoke's.
+/// `ASSERTED_OCR_TERMS` entry, nor is any run of adjacent words with the spaces dropped —
+/// this smoke asserts none, but a rendered body is page text and the rule is the file's,
+/// not the smoke's.
 const CODEGRID_SOURCE_BODY: &str = "alfa `bravo` charlie.\n\n\
+                                    ### mike november oscar `papa`\n\n\
                                     delta `echo` foxtrot.\n\n\
+                                    #### quebec romeo sierra `tango`\n\n\
                                     golf `hotel` india.\n\n\
+                                    ###### uniform victor whiskey xray `yankee`\n\n\
+                                    kilo `lima` zulu.\n\n\
                                     ---";
 
 /// Name suffix of the baseline-grid smoke's config directory sibling.
@@ -1075,24 +1136,32 @@ const CODEGRID_HR_COLOUR: Rgb8 = (0x3a, 0x3a, 0x3a);
 /// How far below the top of the page's content the rule's hairline must sit: the web view's
 /// own top edge plus the root padding `preview_width::root_style` gives the page.
 ///
-/// SIX baseline units. The arithmetic, which is the whole subject of the smoke: with
-/// the inline code element declaring `line-height: 0`, each paragraph is one 24 px line
-/// box, so p1 occupies 0..24, its 24 px bottom margin puts p2 at 48, p3 at 96 ending at
-/// 120, and p3's bottom margin collapses with the rule's own 24 px top margin to put
-/// the rule's box — and therefore its hairline — at exactly 144.
+/// FIFTEEN baseline units, DERIVED. The arithmetic, which is the whole subject of the smoke:
+/// with the inline code element declaring `line-height: 0`, each block is one 24 px line
+/// box, and adjacent margins collapse to the larger of the two:
 ///
-/// Without that declaration each of the three lines is 26 px instead of 24, because the
-/// line box is the UNION of the body face's box and the monospace code box and the two
-/// disagree on (ascent - descent). The rule then lands at 150, which is not a multiple
-/// of 24.
+/// | block | box | why |
+/// | --- | --- | --- |
+/// | p0 | 0..24 | first block, top margin reset |
+/// | h3 | 72..96 | 24 + max(24, 48) |
+/// | p1 | 120..144 | 96 + the h3's 24 below |
+/// | h4 | 168..192 | 144 + max(24, 24) |
+/// | p2 | 216..240 | 192 + 24 |
+/// | h6 | 264..288 | 240 + 24 |
+/// | p3 | 312..336 | 288 + 24 |
+/// | rule | 360 | 336 + max(24, 24) |
 ///
-/// MEASURED, three consecutive runs with the declaration and two with it reverted:
-/// 144 x3 against 150 x2, absolute rows 303 and 309 with the content's top at 159. A fourth
-/// green run with a completely different glyph set also read 144. The feared "no row
-/// matches the rule's colour exactly" outcome — which a fractional device-pixel landing
-/// would produce — did not occur: the match is 354 of 354 sampled columns EXACT on a
-/// single row in every run.
-const CODEGRID_HR_OFFSET_PX: usize = 144;
+/// With h3 to h6 at 0 below, the paragraphs start at 96, 168 and 240 and the rule lands at
+/// 288. Without the code element's `line-height: 0`, each line carrying code is taller than
+/// 24 px, because the line box is the UNION of the body face's box and the monospace code
+/// box and the two disagree on (ascent - descent): 2 px per paragraph, measured, and an
+/// unmeasured amount per heading. The rule then lands at least 8 px low.
+///
+/// Absolute row 519 with the content's top at 159, MEASURED. The feared "no row matches the
+/// rule's colour exactly" outcome, which a fractional device-pixel landing would produce,
+/// does not occur at a whole-baseline offset: MEASURED, the hairline matches 354 of 354
+/// sampled columns EXACT on a single row.
+const CODEGRID_HR_OFFSET_PX: usize = 360;
 
 /// The `background-color` `wolf_core`'s `markdown/themes/default.css` gives
 /// `body.wolf-markdown code` in DARK — the inline code CHIP — as `(r, g, b)`.
@@ -1103,39 +1172,38 @@ const CODEGRID_CHIP_COLOUR: Rgb8 = (0x2b, 0x2b, 0x2b);
 /// How many rows below the top of the page's content the chip band covers: the FIRST
 /// paragraph's line box and nothing else.
 ///
-/// One baseline unit, so the band ends before the second paragraph's line box begins
-/// at 48. Measuring one paragraph's chip rather than all three is deliberate: three
-/// bands summed would let two surviving chips cover for one that vanished.
+/// One baseline unit, so the band ends well before the next chip-bearing block, the h3,
+/// whose box begins at 72 (see [`CODEGRID_HR_OFFSET_PX`]). Measuring one block's chip
+/// rather than all seven is deliberate: bands summed would let surviving chips cover for
+/// one that vanished.
 ///
-/// MEASURED: exact-chip pixels occupy three 20-row bands at absolute rows 163..182,
-/// 211..230 and 259..278, each inside its own 24 px line box. With the content's top at 159
-/// the first of those is offsets 4..23, entirely inside this band, and the second starts at
-/// offset 52, entirely outside it.
+/// MEASURED: the first paragraph's chip is the run 162..182, 20 rows, inside its 24 px line
+/// box. With the content's top at 159 that is offsets 3..23, entirely inside this band. The
+/// other paragraphs' chips are MEASURED at 282..302, 378..398 and 474..494, each at the same
+/// inset in its own line box.
 const CODEGRID_CHIP_BAND_PX: usize = 24;
 
 /// The fewest exactly-[`CODEGRID_CHIP_COLOUR`] pixels the first paragraph's band must
 /// carry.
 ///
-/// MEASURED **748** in the sampled band, at 20–50 exact pixels per row across the 20
+/// MEASURED **743** in the sampled band, at 20–50 exact pixels per row across the 20
 /// rows the chip occupies. The per-row figure varies because GLYPH INK sits on top of
 /// the chip: the rows through the middle of the letterforms carry the FEWEST exact
-/// pixels (20–30) and the chip's first and last rows carry 40, which is the opposite of
-/// what a rounded-corner explanation would predict. For scale, the same capture reads
-/// 2115 across all three paragraphs' chips and 346 inside the narrow
-/// [`preview_theme_preview_columns`] band.
+/// pixels (20–30) and the chip's first and last rows carry 38, which is the opposite of
+/// what a rounded-corner explanation would predict.
 ///
-/// The floor is set well below 748 rather than at it, per this binary's discipline of
+/// The floor is set well below 743 rather than at it, per this binary's discipline of
 /// picking a floor with headroom rather than the measured value: 6.2x, which is what
 /// keeps the assertion from failing on a host whose glyph rasterization differs. The
 /// falsifier — removing `background-color` from the code rule in `wolf-core`'s
-/// `markdown/themes/default.css` — takes the count to **1**, so the discrimination is
+/// `markdown/themes/default.css` — takes the count to **4**, so the discrimination is
 /// not marginal at any floor in this range.
 ///
-/// That measured 1 also settles the question the WIDE band raised, and it settles it
+/// That measured 4 also settles the question the WIDE band raised, and it settles it
 /// affirmatively: a band reaching further left than the rule's could in principle pick
 /// up `#2b2b2b` from the EDITOR half and mask a genuine collapse, which would make this
 /// assertion measure the wrong thing. With the chip's background removed the whole band
-/// reads a single pixel, so it carries no contamination worth a floor at all — the
+/// reads 4 stray pixels, so it carries no contamination worth a floor of 120 — the
 /// argument that a wider band can only add to a floor is MEASURED here rather than
 /// merely reasoned.
 const CODEGRID_MIN_CHIP_PX: usize = 120;
@@ -1176,6 +1244,63 @@ fn codegrid_chip_columns() -> (usize, usize) {
         "the chip band's last column",
     );
     (x0, x1)
+}
+
+/// One baseline unit of `wolf-core`'s `markdown/base.css`, in px: the 24 px body
+/// line-height that every vertical margin and line box in the document is a multiple of.
+///
+/// RE-TYPED, for the reason [`CODEGRID_HR_COLOUR`] gives.
+const CODEGRID_BASELINE_PX: usize = 24;
+
+/// `(heading, pitch px)` for each heading of [`CODEGRID_SOURCE_BODY`], in document order:
+/// the distance from the top row of the chip of the paragraph above the heading to the top
+/// row of the chip of the paragraph below it.
+///
+/// DERIVED, from the table under [`CODEGRID_HR_OFFSET_PX`]: 24 for the paragraph's line,
+/// plus the collapsed margin above the heading, plus 24 for the heading's box, plus the
+/// heading's 24 below. The h3 is 24 + max(24, 48) + 24 + 24 = 120; the h4 and the h6 are
+/// 24 + max(24, 24) + 24 + 24 = 96. Measured chip top to chip top, the chips' common inset
+/// inside their line boxes cancels out.
+const CODEGRID_HEADING_PITCHES_PX: &[(&str, usize)] = &[("h3", 120), ("h4", 96), ("h6", 96)];
+
+/// The column, in px right of the preview pane's left boundary (`area_x + area_w / 2`),
+/// that divides the paragraphs' chips from the headings' chips.
+///
+/// DERIVED, not measured. The rendered document's first glyph sits about 22 px right of the
+/// boundary. Each paragraph's code span follows one short word at 16 px, so its chip ends by
+/// about 120; each heading's follows at least 20 characters of heading text at 14 to 20 px,
+/// so its chip starts past about 210. 170 sits in the gap with some 50 px to either side.
+///
+/// Two bands rather than one are what keeps a heading's chip and the next paragraph's chip
+/// from merging into one run when the heading has no space below, where the two chips are
+/// only 2 or 3 rows apart.
+const CODEGRID_CHIP_SPLIT_X_PX: f64 = 170.0;
+
+/// The fewest exactly-[`CODEGRID_CHIP_COLOUR`] pixels a row of one band needs to count as
+/// a chip row in [`exact_colour_runs`].
+///
+/// MEASURED for the first paragraph's chip: a stray reading of 4 pixels across its whole
+/// band with the chip unpainted, and at least 20 on every row the chip occupies. 6 sits
+/// between the two with room on both sides: 4 pixels across the whole band means no single
+/// row can reach 6.
+const CODEGRID_CHIP_ROW_MIN_PX: usize = 6;
+
+/// The fewest consecutive chip rows [`exact_colour_runs`] keeps as one chip.
+///
+/// MEASURED: the smallest chip, the h6's at 0.875 x 14 = 12.25 px, spans 18 rows (428..446),
+/// and the first paragraph's spans 20. 10 keeps both while dropping a run of a few rows
+/// that antialiased heading ink could produce.
+const CODEGRID_CHIP_MIN_ROWS: usize = 10;
+
+/// The column [`CODEGRID_CHIP_SPLIT_X_PX`] names, as an absolute output index.
+///
+/// Derived at the pinned output size: column 936.
+fn codegrid_chip_split_column() -> usize {
+    let (area_x, _, area_w, _) = preview_theme_pane_area();
+    pixel_index(
+        area_x + area_w / 2.0 + CODEGRID_CHIP_SPLIT_X_PX,
+        "the chip bands' dividing column",
+    )
 }
 
 /// The BASELINE-GRID scenario: [`CODEHL_SCENARIO`] without the langtree readback.
@@ -1253,16 +1378,19 @@ wait "$app_pid" 2>/dev/null
 exit 0
 "#;
 
-/// Three rendered lines carrying inline code sit on the 24 px baseline grid, and the
-/// code chip is still painted.
+/// Seven rendered lines carrying inline code sit on the 24 px baseline grid, the paragraph
+/// after each of an h3, an h4 and an h6 starts one baseline below the heading's box, and
+/// the code chip is still painted.
 ///
 /// ## What it proves that nothing else can
 ///
-/// `markdown_render.rs` pins the DECLARED value — that `body.wolf-markdown code`
-/// declares `line-height: 0` — and that is the floor. It cannot say what the engine
-/// did with it. This smoke measures a LAID-OUT box: the distance from the document's
-/// own top edge to a rule three code-carrying paragraphs below it, in pixels, out of a
-/// real WebKitGTK render. Nothing else in either suite measures a laid-out box at all.
+/// `markdown_render.rs` pins the DECLARED values — that `body.wolf-markdown code`
+/// declares `line-height: 0`, and each heading level's margins — and that is the floor.
+/// It cannot say what the engine did with them. This smoke measures LAID-OUT boxes out of
+/// a real WebKitGTK render: the distance from the document's own top edge to a rule seven
+/// code-carrying blocks below it, and the distances between the self-located chips of the
+/// paragraphs and headings in between. Nothing else in either suite measures a laid-out
+/// box at all.
 ///
 /// ## Why the rule is the ruler
 ///
@@ -1274,38 +1402,58 @@ exit 0
 /// this document paints. MEASURED: 354 of 354 sampled columns match it EXACTLY, on a
 /// single row, in every run.
 ///
-/// ## The two assertions have DIFFERENT falsifiers, and that is the point
+/// ## Why the chips locate the line boxes
 ///
-/// Assertion 5 is geometry and assertion 6 is paint. Removing the declaration moves the
-/// rule from 144 to 150 and leaves the chip untouched; removing the chip's
-/// `background-color` empties the chip band and leaves the rule at 144. Neither
-/// falsifier can produce the other's red, so a run that reddens both is saying
-/// something a single assertion could not.
+/// Every paragraph's chip sits at the same inset inside its line box, since the four share
+/// a face and a size, so the distance between two paragraphs' chip tops is the distance
+/// between their line boxes, and the first paragraph's line box starts at the content's
+/// top. A heading's chip has an inset of its own, so only its MIDDLE row is used, and only
+/// to say which 24 px line box it is in. That the middle row of a heading's chip lies
+/// inside the heading's line box is MEASURED: the middles are rows 244, 340 and 437, at
+/// offsets 85, 181 and 278, inside the boxes at offsets 72..96, 168..192 and 264..288. It
+/// holds because of the faces' metrics: the code element's content area, at 0.875 of the
+/// heading's size, sits around the heading's baseline, so its middle falls within a few rows
+/// of the line box's middle.
 ///
-/// ## Assertion 6 is what stops a documented claim from rotting silently
+/// ## The assertions have DIFFERENT falsifiers, and their ORDER is what keeps them apart
+///
+/// Assertions 7 and 8 are geometry and assertion 5 is paint. Losing a heading's
+/// `margin-bottom` moves the heading's box into the next paragraph's baseline, which 7a
+/// sees before the pitch it also shortens; losing the code element's `line-height: 0` grows
+/// every code-carrying line alike, so 7a holds and 7b's pitch goes off the grid; growing a
+/// margin moves a pitch or the rule by a whole baseline; removing the chip's
+/// `background-color` empties the chip band and changes no geometry. Each falsifier's
+/// first red is a different assertion, so the first red names its cause.
+///
+/// ## Assertion 5 is what stops a documented claim from rotting silently
 ///
 /// "The zero does not collapse the chip" is the fact the whole one-line CSS change
 /// rests on — an inline box's CONTENT area, which is what its background paints over,
 /// comes from its font's metrics rather than from `line-height`, which governs only the
 /// line box. That is engine behaviour, so it was eyeballed on one capture at one
 /// WebKitGTK version, and specs/markdown-stylesheet.md#inline-code-leading asserts it as
-/// measured fact. An
-/// observation asserted in a document and pinned by nothing is an observation that
-/// stops being true without anybody noticing.
+/// measured fact. An observation asserted in a document and pinned by nothing is an
+/// observation that stops being true without anybody noticing. Assertions 6 and 7 rest on
+/// it too: they locate every block by its chip.
 ///
 /// ## Assertions, classified
 ///
 /// A precondition gets NO revert. Readings are from actual runs at GTK 4.22.4,
-/// libadwaita 1.9.0, WebKitGTK 2.52.4 and `cage` 0.3.0 on a 1280x720 output.
+/// libadwaita 1.9.3, WebKitGTK 2.54.1 and `cage` 0.3.1 on a 1280x720 output, or are
+/// marked derived. Every row range is half-open, as [`BlockRun`] prints it: 162..182 is rows
+/// 162 to 181. The IDs name the falsifying edits, so a run's report can cite them.
 ///
 /// | # | assertion | kind | falsifying edit | measured |
 /// | --- | --- | --- | --- | --- |
 /// | 1 | `status.success()` | precondition — the cage scenario ran to completion | none; do not invent one | n/a |
 /// | 2 | the PNG is present and decodes at the pinned output size | precondition | none; do not invent one | n/a |
 /// | 3 | `tabpagebuflist()`, sorted, is the preview scratch plus the source | precondition — a preview pane exists, and exactly two panes do | none; do not invent one | n/a |
-/// | 4 | `web_top` is locatable, and a row matching [`CODEGRID_HR_COLOUR`] exists below it | precondition — both ends of the measured distance were found | none; do not invent one | green: content top 159, rule at absolute 303. `web_top`, the view's own top, is 139 by derivation, 159 less `EDITOR_PADDING_PX`, not re-measured |
-/// | 5 | `hr_row - (web_top + EDITOR_PADDING_PX)` is exactly [`CODEGRID_HR_OFFSET_PX`] | **discriminator** — three lines carrying inline code each occupy exactly one baseline unit | delete `line-height: 0;` from `body.wolf-markdown code` in `wolf-core`'s `markdown/base.css`. NOT isolated: `markdown_render.rs`'s declared-value test reddens too, and the PAIRING is the diagnosis — a red smoke over a RED declared-value test says the declaration went missing, while a red smoke over a GREEN one says the engine stopped honouring it, which is a very different investigation. | green: 144, three consecutive runs. Red: 150, two consecutive runs. 150 / 24 = 6.25. |
-/// | 6 | the first paragraph's band carries at least [`CODEGRID_MIN_CHIP_PX`] exactly-[`CODEGRID_CHIP_COLOUR`] pixels | **discriminator** — `line-height: 0` removed the line box's union term and NOT the chip's background | remove `background-color` from `body.wolf-markdown code` in `wolf-core`'s `markdown/themes/default.css`. ISOLATED, and that is the reason it was added: removing a background changes no geometry, so assertion 5's 144 and the declared-value test both stay green and this assertion alone reddens. | green: 748 in the band, at 20–50 exact pixels per row over the chip's 20 rows. Red: **1**, which is also what proves the wide band carries no contamination from the editor half. |
+/// | 4 | `web_top` is locatable, and a row matching [`CODEGRID_HR_COLOUR`] exists below it | precondition — both ends of the measured distance were found | none; do not invent one | content top 159, measured. Rule at absolute 519, measured. `web_top`, the view's own top, is 139 by derivation, 159 less `EDITOR_PADDING_PX`, not re-measured |
+/// | 5 | the first paragraph's band carries at least [`CODEGRID_MIN_CHIP_PX`] exactly-[`CODEGRID_CHIP_COLOUR`] pixels | **discriminator** — `line-height: 0` removed the line box's union term and NOT the chip's background | G1f: remove `background-color` from the dark `body.wolf-markdown code` rule in `wolf-core`'s `markdown/themes/default.css`. ISOLATED, and that is the reason it exists: removing a background changes no geometry, so assertion 8 and the declared-value tests stay green. It comes before 6, which would otherwise redden first on a chipless capture. | green: 743 in the band, at 20–50 exact pixels per row over the chip's 20 rows. Red (G1f): **4**, which is also what shows the wide band carries no contamination from the editor half. |
+/// | 6 | [`exact_colour_runs`] finds exactly 4 chips left of [`CODEGRID_CHIP_SPLIT_X_PX`] and 3 right of it, between the content's top and the rule | precondition — every block's chip was located, and the bands split paragraphs from headings | none; do not invent one | measured: paragraph chips at absolute 162..182, 282..302, 378..398 and 474..494; heading chips at 232..256, 329..352 and 428..446 |
+/// | 7a | the middle row of each heading's chip lies in the baseline that ends one baseline above the next paragraph's line box | **discriminator** — each heading is followed by one baseline | G1a, G1b, G1c: `margin-bottom: 24px;` → `margin-bottom: 0;` in `body.wolf-markdown h3`, `h4` or `h6` of `markdown/base.css`. Each reddens its own heading's 7a first, and every heading before it passes: the next paragraph moves up 24 onto that heading's box, while each earlier box keeps its baseline below. NOT isolated: `headings_declare_their_spec_margins` in `markdown_render.rs` reddens too | measured: middles at offsets 85, 181 and 278, inside the windows at 72..96, 168..192 and 264..288 |
+/// | 7b | the chip-top distance across each heading is its [`CODEGRID_HEADING_PITCHES_PX`] entry | **discriminator** — every code-carrying line is one baseline, and every collapsed margin is its declared size | G1d: delete `line-height: 0;` from `body.wolf-markdown code` in `markdown/base.css`; the h3's pitch goes off the grid while its 7a holds, since every paragraph's chip moves with its line box. G1g: `margin-top: 24px;` → `margin-top: 48px;` in `body.wolf-markdown h4`; the h4's pitch reads 120, while its 7a holds, since the heading and the paragraph after it both move 24. Neither is isolated from `markdown_render.rs`, whose declared-value tests redden too, and the PAIRING is the diagnosis — a red smoke over a GREEN declared-value test says the engine stopped honouring the declaration | measured: 120, 96, 96. G1d reads 122 for the h3, and G1g reads 120 for the h4 |
+/// | 8 | `hr_row - (web_top + EDITOR_PADDING_PX)` is exactly [`CODEGRID_HR_OFFSET_PX`] | **discriminator** — the whole document stacks to fifteen baselines | G1e: `margin: 24px 0 0;` → `margin: 48px 0 0;` in `body.wolf-markdown hr`; it reads 384, and every pitch is unaffected | measured: 360. G1e reads 384 |
 #[test]
 fn preview_inline_code_keeps_the_baseline_grid_under_cage() {
     const SMOKE: &str = "preview_inline_code_keeps_the_baseline_grid_under_cage";
@@ -1417,7 +1565,7 @@ fn preview_inline_code_keeps_the_baseline_grid_under_cage() {
         panic!(
             "{SMOKE}: no row between {} and {} has CODEGRID_HR_COLOUR = {CODEGRID_HR_COLOUR:?} as a \
              strict majority of columns {preview_x0}..{preview_x1}, so the rule's hairline could \
-             not be located and assertion 5 has nothing to measure to. The measured match is 354 of \
+             not be located and assertion 8 has nothing to measure to. The measured match is 354 of \
              354 columns EXACT, so a near miss is not the expected failure here. Causes, in order: \
              the fixture's trailing `---` did not render as a thematic break (a missing blank line \
              above it makes CommonMark read it as a setext underline instead); the theme stopped \
@@ -1432,40 +1580,13 @@ fn preview_inline_code_keeps_the_baseline_grid_under_cage() {
         )
     });
 
-    // --- Assertion 5 (discriminator): three code lines, three baseline units --
     let content_top = web_top
         + pixel_index(
             wolf_gnome::editor_inset::EDITOR_PADDING_PX,
             "the page's root padding",
         );
-    let offset = hr_row.saturating_sub(content_top);
-    assert_eq!(
-        offset,
-        CODEGRID_HR_OFFSET_PX,
-        "{SMOKE}: the rule's hairline sits {offset} px below the content's top (absolute row \
-         {hr_row}, content top {content_top}: the web view's top {web_top} plus the page's root \
-         padding), not {CODEGRID_HR_OFFSET_PX}. An offset larger by a constant with every line \
-         box intact means the root style's padding-top is not EDITOR_PADDING_PX. The fixture is three \
-         one-line paragraphs each carrying one inline code element, then the rule: with each line \
-         box at one 24 px unit the rule's box lands at 6 x 24 = {CODEGRID_HR_OFFSET_PX}.\n\
-         A reading of 150 is the NAMED failure and has one cause: `body.wolf-markdown code` in \
-         `wolf-core`'s `markdown/base.css` lost its `line-height: 0`. The body declares its \
-         line-height as a LENGTH, so it inherits onto the inline code box and is distributed as \
-         half-leading around the MONOSPACE face's own metrics; the line box is the union over the \
-         faces present, and the two faces disagree on (ascent - descent), so each of the three \
-         lines becomes 26 px and the error ACCUMULATES — 6 px over three paragraphs, which is why \
-         the fixture has three and not one.\n\
-         Read this beside `markdown_render.rs`'s \
-         `inline_code_declares_zero_leading_so_it_cannot_grow_a_line_box`. RED there too means the \
-         declaration went missing, which is the ordinary case. GREEN there with this red means the \
-         declaration is present and the ENGINE stopped honouring it — a WebKitGTK change — and \
-         that is a completely different investigation. Any other offset that is not a multiple of \
-         24 is a third state: re-derive the arithmetic before touching this constant, and do not \
-         adjust it to make a run pass. Capture kept at {}.",
-        out_png.display()
-    );
 
-    // Assertion 6 (discriminator): the chip's background changes no geometry, so only this notices it.
+    // Assertion 5 (discriminator): the chip's background changes no geometry, so only this notices it.
     let chip_columns = codegrid_chip_columns();
     let chip = SampleRect {
         x0: chip_columns.0,
@@ -1485,25 +1606,201 @@ fn preview_inline_code_keeps_the_baseline_grid_under_cage() {
         capture.height
     );
     let chip_hits = capture.count_exactly(chip, CODEGRID_CHIP_COLOUR);
+    let rule_row = SampleRect {
+        y0: hr_row,
+        y1: hr_row + 1,
+        ..rule_scan
+    };
+    let rule_hits = capture.count_exactly(rule_row, CODEGRID_HR_COLOUR);
+    let chip_rows: Vec<usize> = (chip.y0..chip.y1)
+        .map(|y| {
+            let row = SampleRect {
+                y0: y,
+                y1: y + 1,
+                ..chip
+            };
+            capture.count_exactly(row, CODEGRID_CHIP_COLOUR)
+        })
+        .collect();
+    eprintln!(
+        "{SMOKE} readings: content top {content_top}; rule row {hr_row}, exact on {rule_hits} of \
+         {} columns; first paragraph's band {chip_hits} exact chip pixels, per row from row \
+         {content_top}: {chip_rows:?}",
+        rule_scan.x1 - rule_scan.x0
+    );
     assert!(
         chip_hits >= CODEGRID_MIN_CHIP_PX,
         "{SMOKE}: the FIRST paragraph's line box (band {chip:?}, {} pixels) carries {chip_hits} \
          pixels that are exactly CODEGRID_CHIP_COLOUR = {CODEGRID_CHIP_COLOUR:?}, below the \
-         {CODEGRID_MIN_CHIP_PX} floor. The measured value is 748, at 20–50 per row across the 20 \
+         {CODEGRID_MIN_CHIP_PX} floor. The measured value is 743, at 20–50 per row across the 20 \
          rows the chip occupies.\n\
-         A count of ONE — measured, not rounded — is the NAMED failure: `body.wolf-markdown code` \
-         in `wolf-core`'s `markdown/themes/default.css` lost its `background-color`, so the inline \
-         code chip is no longer painted and the whole band reads a single stray pixel. Assertion 5 \
-         above is green in that case — removing a background changes no geometry — and this \
-         assertion is the only one in either suite that can see it.\n\
-         A SMALL non-zero count is a different reading and means the chip is painted but smaller \
-         than it was: the code element's `padding` or its `font-size` shrank, or `line-height: 0` \
-         is being applied to the CONTENT area rather than to the line box, which is the engine \
-         behaviour this assertion exists to pin. An inline box's content area — what its \
+         A count in SINGLE DIGITS — 4 measured with the chip's background removed — means no chip \
+         is painted at all. The NAMED cause: `body.wolf-markdown code` in `wolf-core`'s \
+         `markdown/themes/default.css` lost its `background-color`. The rule offset of assertion \
+         8 is unaffected in that case — removing a background changes no geometry — and this \
+         assertion is the only one in either suite that can see it. The other cause is the engine \
+         sizing the inline box's CONTENT area from `line-height: 0`, which is the engine \
+         behaviour this assertion exists to pin: an inline box's content area — what its \
          background paints over — comes from the font's metrics, not from `line-height`; if that \
-         ever stops holding, the fix is a stylesheet change and NOT a lower floor. Capture kept at \
-         {}.",
+         ever stops holding, the fix is a stylesheet change and NOT a lower floor.\n\
+         A count well above single digits but under the floor means the chip is painted but \
+         smaller than it was: the code element's `padding` or its `font-size` shrank. Capture \
+         kept at {}.",
         chip.pixels(),
+        out_png.display()
+    );
+
+    // --- Assertion 6 (precondition): every block's chip, located ----------------
+    let split_x = codegrid_chip_split_column();
+    let paragraph_band = SampleRect {
+        x0: chip_columns.0,
+        x1: split_x,
+        y0: content_top,
+        y1: hr_row,
+    };
+    let heading_band = SampleRect {
+        x0: split_x,
+        x1: chip_columns.1,
+        y0: content_top,
+        y1: hr_row,
+    };
+    assert!(
+        paragraph_band.x0 < paragraph_band.x1
+            && heading_band.x0 < heading_band.x1
+            && content_top < hr_row,
+        "{SMOKE}: the chip bands {paragraph_band:?} and {heading_band:?} are degenerate. Either \
+         CODEGRID_CHIP_SPLIT_X_PX has left the chip columns {chip_columns:?}, or the rule's \
+         hairline (row {hr_row}) was found above the content's top ({content_top}), which means \
+         the located row is not the fixture's rule."
+    );
+    let paragraph_runs = exact_colour_runs(
+        &capture,
+        paragraph_band,
+        CODEGRID_CHIP_COLOUR,
+        CODEGRID_CHIP_ROW_MIN_PX,
+        CODEGRID_CHIP_MIN_ROWS,
+    );
+    let heading_runs = exact_colour_runs(
+        &capture,
+        heading_band,
+        CODEGRID_CHIP_COLOUR,
+        CODEGRID_CHIP_ROW_MIN_PX,
+        CODEGRID_CHIP_MIN_ROWS,
+    );
+    eprintln!(
+        "{SMOKE} readings: paragraph chips {paragraph_runs:?}; heading chips {heading_runs:?}"
+    );
+    assert!(
+        paragraph_runs.len() == CODEGRID_HEADING_PITCHES_PX.len() + 1
+            && heading_runs.len() == CODEGRID_HEADING_PITCHES_PX.len(),
+        "{SMOKE}: found {} chip runs left of column {split_x} (paragraph band {paragraph_band:?}): \
+         {paragraph_runs:?}, and {} right of it (heading band {heading_band:?}): {heading_runs:?}. \
+         The fixture has {} paragraphs, each with its chip left of the split, and {} headings, \
+         each with its chip right of it, so the bands must hold exactly those counts for the \
+         assertions below to pair each heading with the paragraphs around it.\n\
+         Too FEW in one band, with too many in the other, means a chip straddles or crossed \
+         CODEGRID_CHIP_SPLIT_X_PX: the fixture's horizontal layout differs from that constant's \
+         derivation. Too few in both means chips merged vertically or fell under \
+         CODEGRID_CHIP_ROW_MIN_PX or CODEGRID_CHIP_MIN_ROWS. A block that wrapped to two lines \
+         reads as an extra run. None of these is a margin failure, and none is fixed by \
+         editing a margin. Capture kept at {}.",
+        paragraph_runs.len(),
+        heading_runs.len(),
+        CODEGRID_HEADING_PITCHES_PX.len() + 1,
+        CODEGRID_HEADING_PITCHES_PX.len(),
+        out_png.display()
+    );
+
+    // --- Assertion 7 (discriminator): one baseline below each heading ----------
+    let origin = paragraph_runs[0].y0;
+    for (i, (&(level, pitch), heading)) in CODEGRID_HEADING_PITCHES_PX
+        .iter()
+        .zip(&heading_runs)
+        .enumerate()
+    {
+        let above = paragraph_runs[i];
+        let below = paragraph_runs[i + 1];
+        // The paragraph's line-box top: every paragraph's chip sits at the first one's inset.
+        let next_top = content_top + (below.y0 - origin);
+        let middle = (heading.y0 + heading.y1) / 2;
+
+        // 7a: the heading's line box is the baseline ending one baseline above that paragraph.
+        assert!(
+            middle + 2 * CODEGRID_BASELINE_PX >= next_top
+                && middle + CODEGRID_BASELINE_PX < next_top,
+            "{SMOKE}: the {level}'s chip (rows {heading:?}) has its middle at row {middle}, outside \
+             the baseline that ends one baseline above the next paragraph's line box, rows {}..{} \
+             (that paragraph's line box starts at row {next_top}: content top {content_top} plus \
+             its chip's distance {} below the first paragraph's chip at row {origin}).\n\
+             Middle at or below row {} is the NAMED failure: the {level} has no space below, so \
+             its box sits directly on the paragraph after it. Its `margin-bottom` in \
+             `wolf-core`'s `markdown/base.css` is 0 rather than one baseline; \
+             `headings_declare_their_spec_margins` in `markdown_render.rs` says whether the \
+             declaration or the engine moved, and specs/markdown-stylesheet.md#baseline-grid \
+             gives every heading 24px below.\n\
+             Middle above row {} means more than one baseline sits between the {level} and the \
+             paragraph after it: the heading's margin-bottom grew, or the paragraph gained a top \
+             margin that outcollapses it. Capture kept at {}.",
+            next_top - 2 * CODEGRID_BASELINE_PX,
+            next_top - CODEGRID_BASELINE_PX,
+            below.y0 - origin,
+            next_top - CODEGRID_BASELINE_PX,
+            next_top - 2 * CODEGRID_BASELINE_PX,
+            out_png.display()
+        );
+
+        // 7b: chip top to chip top across the heading, a whole number of declared baselines.
+        let got = below.y0 - above.y0;
+        assert_eq!(
+            got,
+            pitch,
+            "{SMOKE}: the paragraphs either side of the {level} have their chips' top rows {got} \
+             px apart (rows {} and {}), not {pitch}: 24 for the paragraph's line, the collapsed \
+             margin above the {level}, 24 for its box and its 24 below, as \
+             CODEGRID_HEADING_PITCHES_PX derives. Its 7a above passed, so the {level}'s box is one \
+             baseline above the paragraph after it.\n\
+             A reading of {} is a top margin that collapsed SMALLER than declared, and {} one \
+             that GREW, such as the {level}'s `margin-top` in `wolf-core`'s `markdown/base.css` \
+             at 48 rather than 24; `headings_declare_their_spec_margins` names which level's \
+             declaration moved.\n\
+             A reading that is not a multiple of 24 is a LINE BOX that grew: \
+             `body.wolf-markdown code` in `markdown/base.css` lost its `line-height: 0`, so each \
+             line carrying code is the union of the body face's box and the monospace code box, \
+             which disagree on (ascent - descent). Read this beside `markdown_render.rs`'s \
+             `inline_code_declares_zero_leading_so_it_cannot_grow_a_line_box`: RED there too \
+             means the declaration went missing, which is the ordinary case; GREEN there means \
+             the declaration is present and the ENGINE stopped honouring it, a WebKitGTK change \
+             and a completely different investigation. Do not adjust the pitch to make a run \
+             pass. Capture kept at {}.",
+            above.y0,
+            below.y0,
+            pitch - CODEGRID_BASELINE_PX,
+            pitch + CODEGRID_BASELINE_PX,
+            out_png.display()
+        );
+    }
+
+    // --- Assertion 8 (discriminator): the whole document, fifteen baselines ----
+    let offset = hr_row - content_top;
+    assert_eq!(
+        offset,
+        CODEGRID_HR_OFFSET_PX,
+        "{SMOKE}: the rule's hairline sits {offset} px below the content's top (absolute row \
+         {hr_row}, content top {content_top}: the web view's top {web_top} plus the page's root \
+         padding), not {CODEGRID_HR_OFFSET_PX}. Every pitch across a heading passed above, so \
+         the paragraphs and headings between the first chip and the last stack as derived.\n\
+         The fixture is four one-line paragraphs and three one-line headings, every one carrying \
+         one inline code element, then the rule: p3's line box ends 336 px down, and its 24 px \
+         bottom margin collapses with the rule's 24 px top margin to put the rule's box at 336 + \
+         24 = {CODEGRID_HR_OFFSET_PX}. A reading of 384 is the rule's own top margin at 48 \
+         rather than 24 (`body.wolf-markdown hr` in `wolf-core`'s `markdown/base.css`), or the \
+         last paragraph's bottom margin grown to 48. A reading larger by a constant with every \
+         pitch intact can also mean the root style's padding-top is not EDITOR_PADDING_PX, \
+         which moves the first paragraph's chip and the rule together: that chip's top row, \
+         {origin} here, is MEASURED 3 px below the content's top when the padding holds.\n\
+         Any other offset that is not a multiple of 24 is a third state: re-derive the \
+         arithmetic in CODEGRID_HR_OFFSET_PX before touching this constant, and do not adjust it \
+         to make a run pass. Capture kept at {}.",
         out_png.display()
     );
 }

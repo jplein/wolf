@@ -17,14 +17,14 @@ The unit is 24px (16px body text times 1.5), declared once as the `--wolf-baseli
 | body, p | 16px      | 24px (1B)   | p: 0       | p: 24px (1B)  |
 | h1      | 32px      | 48px (2B)   | 48px (2B)  | 24px (1B)     |
 | h2      | 24px      | 48px (2B)   | 48px (2B)  | 24px (1B)     |
-| h3      | 20px      | 24px (1B)   | 48px (2B)  | 0             |
-| h4      | 18px      | 24px (1B)   | 24px (1B)  | 0             |
-| h5      | 16px      | 24px (1B)   | 24px (1B)  | 0             |
-| h6      | 14px      | 24px (1B)   | 24px (1B)  | 0             |
+| h3      | 20px      | 24px (1B)   | 48px (2B)  | 24px (1B)     |
+| h4      | 18px      | 24px (1B)   | 24px (1B)  | 24px (1B)     |
+| h5      | 16px      | 24px (1B)   | 24px (1B)  | 24px (1B)     |
+| h6      | 14px      | 24px (1B)   | 24px (1B)  | 24px (1B)     |
 
 h1 and h2 keep their 2em and 1.5em sizes. The 20/18/16/14 ramp for h3 to h6 bottoms out legibly, with h6 distinguished by weight 600 rather than by size. h2 takes 48px leading because the only other grid-legal value at a 24px font is 24px, a ratio of 1.0, where wrapped lines nearly touch.
 
-Every heading has strictly more space above than below. h3 to h6, with no bottom margin, hug the content they introduce, and collapsing does the section spacing: a paragraph's 24px bottom margin against an h2's 48px top margin collapses to 48, which is 2B.
+h1 to h3 have more space above than below, and h4 to h6 have equal space above and below. Every heading is followed by one baseline, and margin collapsing does the section spacing: a paragraph's 24px bottom margin against an h2's 48px top margin collapses to 48, which is 2B.
 
 ## Border compensation
 

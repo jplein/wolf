@@ -291,9 +291,10 @@ use super::*;
 ///   self-located code blocks, plus the Neovim readback naming the injected langtree.
 ///   No rendered word is a colour, so no fixture filename can reach either half.
 /// * `preview_inline_code_keeps_the_baseline_grid_under_cage` is another, the
-///   same way: one capture, no OCR, and its observables are a DISTANCE in pixel rows
-///   between two self-located landmarks and a count of exact chip pixels. A filename
-///   can put text on the page; it cannot move a rule.
+///   same way: one capture, no OCR, and its observables are DISTANCES in pixel rows
+///   between self-located landmarks — the rule, and the paragraphs' and headings' chips —
+///   and a count of exact chip pixels. A filename can put text on the page; it cannot
+///   move a rule.
 /// * `file_picker_covers_the_live_preview_under_cage` is another: two captures,
 ///   OCRed neither. Its observables are pixel counts inside one self-located
 ///   rectangle, read once with the picker closed and once with it open, and the

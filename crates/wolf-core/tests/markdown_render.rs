@@ -494,6 +494,20 @@ const HEADING_SCALE: &[(&str, i32, i32)] = &[
     ("h6", 14, 24),
 ];
 
+/// `(selector, margin-top px, margin-bottom px)` for the six heading levels:
+/// the table under `specs/markdown-stylesheet.md#baseline-grid`, re-typed here
+/// rather than read from the crate, as [`BASELINE`] is, so a changed margin in
+/// `base.css` fails [`headings_declare_their_spec_margins`] instead of moving
+/// the expectation with it.
+const HEADING_MARGINS: &[(&str, i32, i32)] = &[
+    ("h1", 48, 24),
+    ("h2", 48, 24),
+    ("h3", 48, 24),
+    ("h4", 24, 24),
+    ("h5", 24, 24),
+    ("h6", 24, 24),
+];
+
 /// Every selector in `base.css` that carries a vertical dimension, swept by
 /// [`every_vertical_dimension_is_on_the_baseline_grid`].
 ///
@@ -895,6 +909,44 @@ fn headings_reserve_anchor_scroll_clearance() {
              enforces that much, but only this test pins the amount of \
              clearance: {decls:?}"
         );
+    }
+}
+
+#[test]
+fn headings_declare_their_spec_margins() {
+    // The shared `h1, … h6` rule declares no margin, so a lost per-level rule reads as `None` here.
+    let css = rendered_stylesheet();
+
+    for &(selector, top, bottom) in HEADING_MARGINS {
+        let decls = rule_decls(&css, selector);
+
+        for (edge, is_top, expected) in
+            [("margin-top", true, top), ("margin-bottom", false, bottom)]
+        {
+            let declared = declared_margin_edge(&decls, is_top).unwrap_or_else(|| {
+                panic!(
+                    "`{selector}` declares no {edge}, neither as a longhand nor \
+                     through a `margin` shorthand. The shared `h1, h2, … h6` rule \
+                     carries no margin, so this means the per-level \
+                     `body.wolf-markdown {selector}` rule lost its {edge} or was \
+                     lost itself, and the heading falls through to the UA \
+                     default margin: {decls:?}"
+                )
+            });
+            assert_eq!(
+                px(&declared),
+                Some(expected),
+                "`{selector}` {edge} must be {expected}px per the table under \
+                 specs/markdown-stylesheet.md#baseline-grid, found `{declared}`. \
+                 The grid sweep cannot see this value: 0, 24 and 48 are all \
+                 whole multiples of the {BASELINE}px baseline, so only this \
+                 assertion pins the amount. Every heading is followed by one \
+                 baseline, so a margin-bottom of 0 means a heading hugs the block \
+                 after it again. h4 to h6 have equal space above and below by \
+                 design, so their 24px margin-top is not a margin-bottom to \
+                 shrink, nor a margin-top to grow to 48: {decls:?}"
+            );
+        }
     }
 }
 
@@ -2161,6 +2213,72 @@ fn last_child_margin_reset_reaches_the_closing_block() {
          spelled with syntax it does not model): {unsupported:?}",
         anchor_note(&children, idx, false)
     );
+}
+
+#[test]
+fn last_child_margin_reset_reaches_a_closing_heading() {
+    // Each source ends in a newline, so a trailing anchor follows the heading and only the general
+    // `:has()` rule can zero the heading's own 24px margin-bottom.
+    for (tag, source) in [
+        ("h3", "Body.\n\n### Closing\n"),
+        ("h4", "Body.\n\n#### Closing\n"),
+        ("h5", "Body.\n\n##### Closing\n"),
+        ("h6", "Body.\n\n###### Closing\n"),
+    ] {
+        let html = render_html(source, PreviewTheme::Default, WidthMode::Full);
+        let children = body_children(&html);
+
+        let idx = children
+            .iter()
+            .rposition(|c| !c.is_anchor())
+            .unwrap_or_else(|| panic!("the body must contain a content block: {html}"));
+        assert_eq!(
+            children[idx].tag,
+            tag,
+            "fixture sanity: the last content block of {source:?} must be the \
+             <{tag}>, found [{}]",
+            describe(&children)
+        );
+        assert!(
+            idx + 1 < children.len(),
+            "fixture sanity: {source:?} ends in a newline, so a `wolf-src` anchor \
+             must follow the closing <{tag}>, and none does: [{}]. Without it the \
+             naive `body.wolf-markdown > *:last-child` fallback reaches the \
+             heading and this test no longer reaches the general rule",
+            describe(&children)
+        );
+
+        let css = style_block(&html).to_string();
+        let (winner, unsupported) = winning_margin(&css, &children, idx, false);
+
+        let (selector, value) = winner.unwrap_or_else(|| {
+            panic!(
+                "NO rule sets a `margin-bottom` on the document's closing <{tag}> \
+                 — {}. The per-level `body.wolf-markdown {tag}` rule declares one, \
+                 so it was lost too. Unevaluated selectors: {unsupported:?}",
+                anchor_note(&children, idx, false)
+            )
+        });
+        assert_eq!(
+            px(&value),
+            Some(0),
+            "the closing <{tag}>'s winning `margin-bottom` is `{value}` (from \
+             `{selector}`), but it MUST resolve to 0 — {}.\n\n\
+             A heading is followed by one baseline of margin, and a heading that \
+             is the document's last block must still end flush at the pane's \
+             bottom edge. If the winner is `body.wolf-markdown {tag}` at 24px, \
+             the general last-block reset\n\n    \
+             body.wolf-markdown > *:not(.wolf-src):not(:has(~ *:not(.wolf-src)))\n\n\
+             no longer reaches the block, or a more specific or later rule \
+             outranks it: the trailing anchor makes the naive `:last-child` \
+             fallback inert here. A 24px residue is on the grid, so the sweep \
+             cannot see it. Do NOT change the `.wolf-src` rule or marker \
+             emission.\n\n\
+             Unevaluated selectors (extend this test's matcher if the fix is \
+             spelled with syntax it does not model): {unsupported:?}",
+            anchor_note(&children, idx, false)
+        );
+    }
 }
 
 #[test]
