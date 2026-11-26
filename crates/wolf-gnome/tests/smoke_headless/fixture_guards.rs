@@ -341,6 +341,10 @@ use super::*;
 ///   twin capture four PNGs each and OCR none: their observables are exact-colour shares
 ///   and ink counts in bands derived from the geometry constants. Their readback is
 ///   registered in [`RELAUNCH_FIXTURE_NAMES`] for the generic loop's sake.
+/// * `an_empty_tabs_view_takes_its_neovims_normal_background_under_cage`, in the same module,
+///   captures three PNGs and OCRs only [`EMPTY_STATE_OCR`], covered through its owner's row, as a
+///   precondition that the empty view is up. Its observables are exact-colour shares, and its
+///   readback is the titlebar smokes' [`TB_READ_NAME`], registered under the dark smoke.
 /// * `header_start_holds_nav_and_toggles_alone_under_cage` captures one PNG and OCRs it
 ///   nowhere: its observables are ink columns in the header band, read against the bar's own
 ///   background, and a Neovim readback of the buffer's name. Its fixture and readback are
@@ -1842,8 +1846,8 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         "TOAST_PROBE_NAME",
         "terminal_drawer_hides_a_message_toast_under_cage",
     ),
-    // Registered for the generic loop; the titlebar smokes read no OCR term. The readback lives
-    // under XDG_RUNTIME_DIR, but its path is echoed in the cmdline.
+    // Registered for the generic loop; every titlebar.rs smoke writes it. It lives under
+    // XDG_RUNTIME_DIR, but its path is echoed in the cmdline.
     (
         TB_READ_NAME,
         "TB_READ_NAME",

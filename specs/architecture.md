@@ -256,7 +256,7 @@ On macOS the wake is routed rather than global, because one process-global callb
 
 ## Theming
 
-Theming runs in both directions, and both directions go through Neovim's highlight groups rather than through a parallel styling channel. The macOS front-end realizes both. `wolf-gnome` realizes the Neovim-to-chrome direction: `WolfCursor` reaches its cursor paint, and the titlebar rule reaches its header bar and tab bar. It reads no OS colour into Neovim's highlight groups, so the front-end-to-Neovim push has no counterpart there; the limitation is recorded in [`wolf-gnome-decisions.md`](../notes/wolf-gnome-decisions.md). The OS-appearance direction below is a separate channel and is realized on both.
+Theming runs in both directions, and both directions go through Neovim's highlight groups rather than through a parallel styling channel. The macOS front-end realizes both. `wolf-gnome` realizes the Neovim-to-chrome direction: `WolfCursor` reaches its cursor paint, the titlebar rule reaches its header bar and tab bar, and an empty tab's "no folder open" view takes its own Neovim's `Normal` background by that rule without `WolfTitlebar`. It reads no OS colour into Neovim's highlight groups, so the front-end-to-Neovim push has no counterpart there; the limitation is recorded in [`wolf-gnome-decisions.md`](../notes/wolf-gnome-decisions.md). The OS-appearance direction below is a separate channel and is realized on both.
 
 **Front-end to Neovim.** The macOS front-end reads the live OS theme — `NSColor` and appearance — converts to RGB, and pushes it into Neovim's highlight groups with `nvim_set_hl`. It re-applies on theme or accent change. The renderer stays dumb: Neovim re-emits `hl_attr_define` and the grid repaints.
 

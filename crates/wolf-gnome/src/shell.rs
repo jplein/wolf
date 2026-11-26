@@ -479,7 +479,9 @@ pub fn build_menu_model() -> gio::Menu {
 /// It is meant to be added with `gtk::Overlay::add_overlay` (the picker's
 /// precedent) so the editor `DrawingArea` keeps its full allocation and no
 /// spurious 1x1 grid resize happens while the empty state is up. The `background`
-/// style class is what makes it opaque over the editor grid.
+/// style class makes it opaque over the editor grid and gives libadwaita's colour
+/// until the tab's first frame. After that, the tab's
+/// [`crate::titlebar_background::EmptyStateStyle`] overrides the background colour alone.
 ///
 /// The button activates [`OPEN_FOLDER_ACTION`] on ITSELF rather than through a
 /// captured window reference: a widget's action activation walks up the same

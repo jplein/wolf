@@ -37,7 +37,7 @@
 //! - [`mod@refresh_coalescer`]: the sidebar's trailing refresh over a burst of batches.
 //! - [`window_title`]: the working directory rendered as a window title ([`title`]).
 //! - [`mod@titlebar_background`]: the header bar's and tab bar's background from `WolfTitlebar`
-//!   and `Normal`.
+//!   and `Normal`, and an empty tab's view's, from `Normal`.
 //! - [`mod@pane_layout`]: the codec between the live pane layout and the persisted tree.
 //! - [`mod@open_folder`]: Open Folder's step for a directory, and the plan of the tab it opens.
 //! - [`mod@open_request`]: where a path opened from outside Wolf goes: its tab, and the pane
@@ -98,7 +98,8 @@
 //! ONE-DIRECTIONAL: the configured `appearance` is resolved against the desktop's
 //! light/dark preference and pushed into Neovim as `background=dark|light`, with
 //! the GTK chrome's colour scheme set to match ([`mod@appearance`]), and Neovim's
-//! colours reach the header bar and the tab bar ([`mod@titlebar_background`]) — but
+//! colours reach the header bar, the tab bar and an empty tab's view
+//! ([`mod@titlebar_background`]) — but
 //! no OS COLOUR is read into Neovim's highlight groups. What remains
 //! deferred is a native command line as Adw widgets: the one-row strip,
 //! the message toast and the `ext_popupmenu` completion popup are all painted from

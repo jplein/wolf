@@ -13,7 +13,7 @@
 //! Per tab: the core, its wake channel and drain, its liveness and restart
 //! budget, its drawer session (which lives in the core), the pane view (its
 //! `DrawingArea`s, its cmdline strip, its toast and its completion popup, and the
-//! drawer's divider share), the tab's own empty-state page, and its
+//! drawer's divider share), the tab's own empty-state page and its stylesheet, and its
 //! [`crate::persistence::StateHandle`], which records the tab's sidebar page and search
 //! fields.
 //!
@@ -79,6 +79,7 @@ use crate::shell;
 use crate::sidebar::SidebarPage;
 use crate::stacking::TabRecency;
 use crate::tabs_ui::{self, TabClose, TabId};
+use crate::titlebar_background::{empty_state_background, EmptyStateStyle};
 use crate::CellMetrics;
 
 /// Initial grid size handed to each tab's [`WolfCore`]; the authoritative size is
@@ -204,6 +205,8 @@ struct TabInner {
     state: StateHandle,
     /// This tab's empty-state page, an overlay child above its panes.
     empty_state: gtk::Widget,
+    /// The empty-state page's own provider, which gives it this tab's `Normal` background.
+    empty_style: EmptyStateStyle,
     /// [`TabParts::new_tab_sidebar`], kept in memory only.
     new_tab_sidebar: Option<bool>,
 }
@@ -414,11 +417,34 @@ impl TabHandle {
         self.inner.state.cached_tab()
     }
 
-    /// Refreshes this tab from its own core: its panes, then its title and tooltip
+    /// Refreshes this tab from its own core: its panes, its empty state's background
+    /// (`TabHandle::refresh_empty_state`), and then its title and tooltip
     /// ([`TabHandle::refresh_label`]). `home` is the shell's captured home directory.
+    ///
+    /// It runs on every painting wake of the tab, whether or not it is selected
+    /// (`AppShell::on_tab_wake`), and after a respawn.
     pub fn refresh(&self, home: &str) {
         self.inner.panes.on_render_wake();
+        self.refresh_empty_state();
         self.refresh_label(home);
+    }
+
+    /// Applies this tab's own `Normal` background to its empty state, through
+    /// [`empty_state_background`].
+    ///
+    /// `Normal` is `resolve(0)`'s background, the one `PaneView::draw_pane` fills the grid
+    /// from, so the view matches the grid. The snapshot guard and the core borrow are dropped
+    /// before the provider is touched. With no core the view keeps its last colour.
+    fn refresh_empty_state(&self) {
+        let wanted = {
+            let core_ref = self.inner.core.borrow();
+            let Some(core) = core_ref.as_ref() else {
+                return;
+            };
+            let snap = core.read_snapshot();
+            empty_state_background(snap.highlights.resolve(0).bg)
+        };
+        self.inner.empty_style.apply(wanted);
     }
 
     /// Sets this tab's title and tooltip from its own Neovim's working directory
@@ -447,12 +473,14 @@ impl TabHandle {
     }
 
     /// Shuts this tab's Neovim down: closes the wake channel, which ends the drain,
-    /// then takes the core out and runs [`WolfCore::shutdown`]. Idempotent.
+    /// uninstalls the empty state's provider ([`EmptyStateStyle::uninstall`]), then takes
+    /// the core out and runs [`WolfCore::shutdown`]. Idempotent.
     ///
     /// The core is taken in a statement of its own, so the cell's borrow is released
     /// before `shutdown()` consumes the core and blocks on its teardown.
     pub fn shutdown(&self) {
         self.inner.wake.close();
+        self.inner.empty_style.uninstall();
         let taken = self.inner.core.borrow_mut().take();
         if let Some(core) = taken {
             if let Err(err) = core.shutdown() {
@@ -578,6 +606,7 @@ impl TabsInner {
         let overlay = gtk::Overlay::new();
         overlay.set_child(Some(&panes.widget()));
         let empty_state = shell::build_empty_state();
+        let empty_style = EmptyStateStyle::install(wolf_tab_id, &empty_state);
         overlay.add_overlay(&empty_state);
         overlay.add_overlay(&panes.toast_widget());
         overlay.add_overlay(&panes.pum_widget());
@@ -611,6 +640,7 @@ impl TabsInner {
                 panes,
                 state,
                 empty_state,
+                empty_style,
                 new_tab_sidebar: parts.new_tab_sidebar,
             }),
         };

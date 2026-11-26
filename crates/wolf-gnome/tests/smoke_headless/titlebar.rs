@@ -2,11 +2,13 @@
 //! editor's `Normal` background, focused and in backdrop, follow a live `:set background`, and
 //! take `WolfTitlebar`'s background once it is set. The title and the tabs' text keep
 //! libadwaita's foreground for the configured appearance, while the desktop reports the other.
+//! An empty tab's "no folder open" view takes its own Neovim's `Normal` background, follows a
+//! live `:set background`, and keeps `Normal` once `WolfTitlebar` is set.
 //!
 //! Its smokes pin `gtk-titlebar-style: native`, because their bands read the tab bar's own
 //! row. `titlebar_tabs.rs` checks the colour of the tabs inside the header bar.
 
-use super::editor::SAVE_AS_GDK_DEBUG;
+use super::editor::{EMPTY_STATE_OCR, SAVE_AS_GDK_DEBUG};
 use super::lighthouse::{rgb8, stage_init_lua, Background, Lighthouse};
 use super::recovery::with_nvim_pid_helper;
 use super::*;
@@ -19,6 +21,9 @@ const TB_PNG_FOCUSED_NAME: &str = "wolf_gnome_tb_focused.png";
 const TB_PNG_LIVE_NAME: &str = "wolf_gnome_tb_live.png";
 const TB_PNG_WOLF_NAME: &str = "wolf_gnome_tb_wolf.png";
 const TB_PNG_BACKDROP_NAME: &str = "wolf_gnome_tb_backdrop.png";
+const TB_PNG_EMPTY_FOCUSED_NAME: &str = "wolf_gnome_tb_empty_focused.png";
+const TB_PNG_EMPTY_LIVE_NAME: &str = "wolf_gnome_tb_empty_live.png";
+const TB_PNG_EMPTY_WOLF_NAME: &str = "wolf_gnome_tb_empty_wolf.png";
 
 /// The config directory suffix, whose `appearance` is the smoke's background.
 const TB_CONFIG_SUFFIX: &str = "-tb";
@@ -69,6 +74,18 @@ const TB_TAB_ROW_INSET_PX: f64 = 1.0;
 /// bar has no height, so these rows then show the sidebar's colour there and fail, which keeps
 /// the band from passing on the pane area's background alone.
 const TB_TAB_X_INSET_PX: f64 = 8.0;
+
+/// Half the width of the empty view's centred column, which the view's two bands stay outside.
+///
+/// The column is `adw::StatusPage`'s icon, `title-1` "No folder open", description and pill
+/// button. Its widest line, the title, is about 260 px at libadwaita 1.9.3's `title-1` size, and
+/// the page clamps its content to `AdwClamp`'s default 600 px, so the column's ink lies within
+/// 300 px of the centre whatever wraps; the last 20 px clears antialiasing and rounding.
+const TB_EMPTY_CONTENT_HALF_WIDTH_PX: f64 = 320.0;
+
+/// How far below the pane area's top the empty view's rows start, clear of the tab bar's bottom
+/// edge, whose shade libadwaita draws inside the bar, and of a pixel of rounding in its height.
+const TB_EMPTY_ROW_INSET_PX: f64 = 6.0;
 
 /// The share of a band that must be exactly the expected colour.
 ///
@@ -213,6 +230,88 @@ grim "$PNG_BACKDROP"
 exit 0
 "#;
 
+/// The EMPTY scenario: one launch, three captures of an empty tab's view.
+///
+/// The app opens a second tab with Ctrl+Shift+T and waits for its Neovim to make two live
+/// `nvim` children. The tab is left empty, so its view stays up: the scenario reads back the
+/// new Neovim's `g:colors_name` and `&background` and captures FOCUSED. It sets the other
+/// background and captures LIVE, then sets `WolfTitlebar` and captures WOLF, with
+/// `:doautocmd ColorScheme` for [`TB_SCENARIO`]'s reason. Typed keys reach the empty tab's
+/// Neovim under its view, as `TB_SCENARIO`'s `:cd` does.
+///
+/// ## Exit codes
+///
+/// | code | meaning |
+/// | --- | --- |
+/// | `11` | the app died before it was ready for input |
+/// | `12` | the readback never appeared |
+/// | `13` | Ctrl+Shift+T did not leave two live Neovims |
+/// | `40` | the launch never became ready (the shared convention) |
+const TB_EMPTY_SCENARIO: &str = r#"
+set -eu
+
+# SETTLE is the settle between steps; see SCENARIO.
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+FILE_TRIES=100
+
+# The adw::TabBar animates its height in over about a second; the native-tabs smoke's value.
+TABS_BAR_SETTLE=2.0
+
+cleanup() {
+    set +e
+    if [ -n "${app_pid:-}" ]; then
+        kill "$app_pid" 2>/dev/null
+        wait "$app_pid" 2>/dev/null
+    fi
+}
+trap cleanup EXIT INT TERM HUP
+
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome empty-view smoke: readback file $f never appeared (or stayed empty)." >&2
+    return 1
+}
+
+"$WOLF_BIN" &
+app_pid=$!
+wait_ready "$app_pid" 11 "wolf-gnome empty-view smoke"
+
+# FOCUSED -- an empty second tab, the configured background. No :cd, so the tab stays empty.
+wtype -M ctrl -M shift -k t -m shift -m ctrl
+wait_nvim_count 2 13 "after Ctrl+Shift+T opened a second tab"
+sleep "$TABS_BAR_SETTLE"
+wtype -- ":call writefile([get(g:, 'colors_name', ''), &background], '$READ')"
+wtype -k Return
+wait_file "$READ" || exit 12
+sleep "$SETTLE"
+grim "$PNG_FOCUSED"
+
+# LIVE -- the other background.
+wtype -- ":set background=$OTHER_BACKGROUND"
+wtype -k Return
+sleep "$SETTLE"
+grim "$PNG_LIVE"
+
+# WOLF -- WolfTitlebar set.
+wtype -- ":hi WolfTitlebar guibg=$WOLF_TITLEBAR"
+wtype -k Return
+wtype -- ":doautocmd ColorScheme"
+wtype -k Return
+sleep "$SETTLE"
+grim "$PNG_WOLF"
+
+exit 0
+"#;
+
 /// The rectangles each capture is read in, all derived from named constants.
 struct TbBands {
     /// The header bar's background: two spans, one each side of the title.
@@ -331,6 +430,37 @@ fn tb_bands() -> TbBands {
         title,
         tab_ink,
     }
+}
+
+/// The empty view's two bands, one each side of its centred column, with no pixel literal.
+///
+/// An empty tab hides the sidebar and collapses the paned, so the view spans the output's width
+/// and its column is centred on the output. The pane area starts below the tab bar's own row,
+/// as in [`tb_bands`]. The columns are [`BAND_X_INSET_PX`] inside the output's sides and stop
+/// [`TB_EMPTY_CONTENT_HALF_WIDTH_PX`] from its centre; the rows stop
+/// [`BAND_BOTTOM_CLEARANCE_PX`] above its bottom, clear of the command-line strip and the toast.
+fn tb_empty_view_bands() -> [SampleRect; 2] {
+    let width = exact_f64(CAGE_OUTPUT_W_EXPECTED, "CAGE_OUTPUT_W_EXPECTED");
+    let height = exact_f64(CAGE_OUTPUT_H_EXPECTED, "CAGE_OUTPUT_H_EXPECTED");
+    let centre = width / 2.0;
+    let top = OVERLAY_ORIGIN_Y_EXPECTED + TAB_BAR_HEIGHT_EXPECTED + TB_EMPTY_ROW_INSET_PX;
+    let bottom = height - BAND_BOTTOM_CLEARANCE_PX;
+    [
+        tb_rect(
+            BAND_X_INSET_PX,
+            centre - TB_EMPTY_CONTENT_HALF_WIDTH_PX,
+            top,
+            bottom,
+            "the empty view's band before its column",
+        ),
+        tb_rect(
+            centre + TB_EMPTY_CONTENT_HALF_WIDTH_PX,
+            width - BAND_X_INSET_PX,
+            top,
+            bottom,
+            "the empty view's band after its column",
+        ),
+    ]
 }
 
 /// What one background band reads: the share exactly `expected`, and the most common colour
@@ -774,5 +904,205 @@ fn header_bar_and_tab_bar_take_the_editor_background_light_under_cage() {
     titlebar_smoke(
         "header_bar_and_tab_bar_take_the_editor_background_light_under_cage",
         Background::Light,
+    );
+}
+
+/// **An empty tab's "no folder open" view takes its own Neovim's `Normal` background under
+/// cage, follows a live `:set background`, and is not reached by `WolfTitlebar`.**
+///
+/// The checkout binary runs over the staged Lighthouse, as the titlebar smokes do, with
+/// `appearance: dark` and `gtk-titlebar-style: native`, which puts the pane area below the tab
+/// bar's row. The desktop is left as `cage` reports it. Ctrl+Shift+T opens an empty tab, whose
+/// view is up for all three captures; [`TB_EMPTY_SCENARIO`] has the steps. The view is read in
+/// [`tb_empty_view_bands`], away from its button and text, and every run prints a table of
+/// expected and measured colours.
+///
+/// Premise: `adw::StatusPage` paints no background of its own, so the bands read the view's
+/// container. A green FOCUSED measures it.
+///
+/// ## Assertions
+///
+/// | # | capture | assertion | kind | falsifier |
+/// | --- | --- | --- | --- | --- |
+/// | 1 | all | the backgrounds and the WolfTitlebar fixture are distinct | precondition | none |
+/// | 2 | all | the scenario exits 0 | precondition | none |
+/// | 3 | FOCUSED | readback `lighthouse`, `dark` | precondition | none |
+/// | 4 | FOCUSED | OCR holds [`EMPTY_STATE_OCR`], so the view is up | precondition | none |
+/// | 5 | FOCUSED | the view bands are the dark background | discriminator | ES7: `TabHandle::refresh` skips `refresh_empty_state` |
+/// | 6 | LIVE | the view bands are the light background | discriminator | ES8: `EmptyStateStyle::apply` stops after the first colour |
+/// | 7 | WOLF | the header band is `WolfTitlebar`'s | precondition | none |
+/// | 8 | WOLF | the view bands are still the light background | discriminator | ES9: the view's colour comes from `titlebar_background` |
+///
+/// Assertion 7 proves `WolfTitlebar` reached the window, so assertion 8 is evidence that it
+/// does not reach the view rather than that it reached nothing.
+#[test]
+fn an_empty_tabs_view_takes_its_neovims_normal_background_under_cage() {
+    let smoke = "an_empty_tabs_view_takes_its_neovims_normal_background_under_cage";
+    let background = Background::Dark;
+    let runtime_dir = require_smoke_env();
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+    let lighthouse = Lighthouse::from_env(smoke);
+    let other = background.other();
+    let name = background.name();
+    let other_name = other.name();
+
+    let bg = lighthouse.rgb8(background, "background");
+    let other_bg = lighthouse.rgb8(other, "background");
+    let wolf = rgb8(TB_WOLF_TITLEBAR);
+    assert!(
+        bg != other_bg && wolf != bg && wolf != other_bg,
+        "{smoke}: Lighthouse's dark and light backgrounds and the WolfTitlebar fixture are not \
+         three distinct colours ({} {}, {} {}, WolfTitlebar {}), so a view left at one could pass \
+         for another. Pick another TB_WOLF_TITLEBAR, or re-check the Lighthouse pin.",
+        name,
+        hex(bg),
+        other_name,
+        hex(other_bg),
+        hex(wolf),
+    );
+
+    let init_lua = stage_init_lua(smoke, &runtime_dir, TB_STAGE_NAME, &lighthouse);
+    let cwd = make_temp_cwd();
+    let config = smoke_config_dir_at(
+        &cwd,
+        TB_CONFIG_SUFFIX,
+        SMOKE_FONT_PT,
+        name,
+        // The bands start below the tab bar's own row.
+        Some(GTK_TITLEBAR_NATIVE),
+    );
+
+    let read = runtime_dir.join(TB_READ_NAME);
+    let png_focused = runtime_dir.join(TB_PNG_EMPTY_FOCUSED_NAME);
+    let png_live = runtime_dir.join(TB_PNG_EMPTY_LIVE_NAME);
+    let png_wolf = runtime_dir.join(TB_PNG_EMPTY_WOLF_NAME);
+    for path in [&read, &png_focused, &png_live, &png_wolf] {
+        clear_evidence(path, smoke);
+    }
+
+    let status = cage_command(&with_nvim_pid_helper(TB_EMPTY_SCENARIO), &cwd, &runtime_dir)
+        .env("WOLF_BIN", bin)
+        .env("WOLF_INIT_LUA", &init_lua)
+        .env("WOLF_CONFIG_DIR", &config)
+        .env("READ", &read)
+        .env("PNG_FOCUSED", &png_focused)
+        .env("PNG_LIVE", &png_live)
+        .env("PNG_WOLF", &png_wolf)
+        .env("OTHER_BACKGROUND", other_name)
+        .env("WOLF_TITLEBAR", hex(wolf))
+        .status()
+        .expect("failed to spawn `cage` for the headless empty-view scenario");
+
+    // --- The scenario ran to completion ----------------------------------------
+    assert!(
+        status.success(),
+        "{smoke}: the cage scenario exited unsuccessfully ({status}). Exit 11: the app died \
+         before it was ready for input. Exit 12: the readback never appeared, so keys were not \
+         reaching the empty tab's Neovim. Exit 13: Ctrl+Shift+T started no second Neovim, so no \
+         empty tab was open. Exit 40: the launch never became ready."
+    );
+
+    let view = tb_empty_view_bands();
+    let header = tb_bands().header;
+    // The header band is read in every capture for the table, and asserted in WOLF alone.
+    let shots = [
+        ("FOCUSED", &png_focused, bg, bg, false),
+        ("LIVE", &png_live, other_bg, other_bg, false),
+        ("WOLF", &png_wolf, other_bg, wolf, true),
+    ];
+    let mut table = format!(
+        "{smoke}: appearance {name}, desktop as cage reports it, against {}:\n\
+         capture   band      expected  exact   dominant  share\n",
+        lighthouse.path().display()
+    );
+    let readings = shots.map(|(shot, png, expected, bar, header_asserted)| {
+        assert_png_present(smoke, png);
+        let capture = decode_capture(png, smoke, &format!("the {shot} capture"));
+        let reading = tb_read(&capture, &view, expected, "the empty view band");
+        let header_reading = tb_read(&capture, &header, bar, "the header bar band");
+        for (band, reading, asserted) in [
+            ("view", &reading, true),
+            ("header", &header_reading, header_asserted),
+        ] {
+            let mark = if asserted { "" } else { "   (unasserted)" };
+            table.push_str(&format!(
+                "{shot:<9} {band:<9} {}   {:.3}   {}   {:.3}{mark}\n",
+                hex(reading.expected),
+                reading.exact,
+                hex(reading.dominant),
+                reading.dominant_share
+            ));
+        }
+        (shot, reading, header_reading)
+    });
+    eprintln!("{table}");
+    let [focused, live, wolf_shot] = readings;
+
+    // --- FOCUSED: the view is up, in the dark Normal ----------------------------
+    tb_assert_readback(smoke, &read, background);
+    let page = ocr_to_lowercase(&png_focused);
+    assert!(
+        page.contains(EMPTY_STATE_OCR),
+        "{smoke}: precondition: the FOCUSED capture lacks {EMPTY_STATE_OCR:?}, the word the \
+         empty view's title, description and button share, so the view is not up: the new tab \
+         was not empty, or its view is hidden, and the bands below would read the grid and prove \
+         nothing about the view. PNG kept at {}. OCR output was:\n{page}\n{table}",
+        png_focused.display()
+    );
+    let (shot, reading, _) = &focused;
+    tb_assert_band(
+        smoke,
+        shot,
+        "empty view",
+        reading,
+        &format!(
+            "A dominant colour from no Lighthouse palette is libadwaita's window background: the \
+             tab's empty-view stylesheet has no rule, its provider is not on the display, or the \
+             view's container lacks the tab's class. The light background's {} means the colour \
+             came from the wrong palette.\n{table}",
+            hex(other_bg)
+        ),
+    );
+
+    // --- LIVE: `:set background` moves the view ---------------------------------
+    let (shot, reading, _) = &live;
+    tb_assert_band(
+        smoke,
+        shot,
+        "empty view",
+        reading,
+        &format!(
+            "{} is the {name} background the view had before `:set background={other_name}`: \
+             the stylesheet was not rewritten when Normal changed. A colour from no Lighthouse \
+             palette is libadwaita's window background, so the provider lost its rule.\n{table}",
+            hex(bg)
+        ),
+    );
+
+    // --- WOLF: WolfTitlebar reaches the header bar and not the view ------------
+    let (shot, reading, header_reading) = &wolf_shot;
+    tb_assert_band(
+        smoke,
+        shot,
+        "header",
+        header_reading,
+        &format!(
+            "Precondition: the header bar did not take WolfTitlebar's {}, so the typed `:hi` and \
+             `:doautocmd ColorScheme` did not reach the theme tracker, and the view below is no \
+             evidence that WolfTitlebar stays off it.\n{table}",
+            hex(wolf)
+        ),
+    );
+    tb_assert_band(
+        smoke,
+        shot,
+        "empty view",
+        reading,
+        &format!(
+            "{} is WolfTitlebar's: the view's colour comes from the titlebar's rule, which \
+             WolfTitlebar must not reach. Another colour from no Lighthouse palette is \
+             libadwaita's window background.\n{table}",
+            hex(wolf)
+        ),
     );
 }
