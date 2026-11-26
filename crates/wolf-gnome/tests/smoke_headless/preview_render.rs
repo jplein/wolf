@@ -1761,8 +1761,8 @@ fn preview_inline_code_keeps_the_baseline_grid_under_cage() {
              baseline above the paragraph after it.\n\
              A reading of {} is a top margin that collapsed SMALLER than declared, and {} one \
              that GREW, such as the {level}'s `margin-top` in `wolf-core`'s `markdown/base.css` \
-             at 48 rather than 24; `headings_declare_their_spec_margins` names which level's \
-             declaration moved.\n\
+             one baseline above its declared value; `headings_declare_their_spec_margins` names \
+             which level's declaration moved.\n\
              A reading that is not a multiple of 24 is a LINE BOX that grew: \
              `body.wolf-markdown code` in `markdown/base.css` lost its `line-height: 0`, so each \
              line carrying code is the union of the body face's box and the monospace code box, \

@@ -942,9 +942,9 @@ fn headings_declare_their_spec_margins() {
                  whole multiples of the {BASELINE}px baseline, so only this \
                  assertion pins the amount. Every heading is followed by one \
                  baseline, so a margin-bottom of 0 means a heading hugs the block \
-                 after it again. h4 to h6 have equal space above and below by \
-                 design, so their 24px margin-top is not a margin-bottom to \
-                 shrink, nor a margin-top to grow to 48: {decls:?}"
+                 after it. h4 to h6 have equal space above and below by design, \
+                 so their 24px margin-top is not a margin-bottom to shrink, nor \
+                 a margin-top to grow to 48: {decls:?}"
             );
         }
     }
