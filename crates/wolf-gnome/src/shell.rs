@@ -434,10 +434,10 @@ struct ShellInner {
     coordinator: Weak<CoordinatorInner>,
     /// This window's identity, passed to every coordinator call.
     window_id: WindowId,
-    /// The user's home directory, stringified ONCE at [`build`] time — the
-    /// injected `home` for [`title::window_title`]. Captured rather than read per
-    /// frame because [`title`] deliberately never touches the environment, and
-    /// `$HOME` does not change under a running process.
+    /// The user's home directory, stringified ONCE at [`build`] time — the injected
+    /// `home` for [`title::window_title`] and [`crate::tabs_ui::tab_label`]. Captured
+    /// rather than read per frame because [`title`] deliberately never touches the
+    /// environment, and `$HOME` does not change under a running process.
     home: String,
     /// The last title actually pushed to the window, so
     /// [`AppShell::refresh_title`] calls `set_title` only on a real change.
@@ -1481,7 +1481,7 @@ impl AppShell {
             if paint {
                 {
                     let _guard = frame_metrics::scope(Bucket::WakeTabs);
-                    tab.refresh();
+                    tab.refresh(&self.inner.home);
                     self.inner
                         .tabs
                         .sync_terminal_focus(self.inner.window.is_active());
@@ -1670,7 +1670,7 @@ impl AppShell {
                     self.inner.crash_overlay.flash_banner();
                 }
                 // Belt and braces, as `app.rs` does: a no-op if the fresh nvim has not reported `win_pos` yet.
-                tab.refresh();
+                tab.refresh(&self.inner.home);
             }
         }
     }
@@ -2338,6 +2338,7 @@ impl AppShell {
                     .filter(|tab| live.is_some() && tab.is_empty())
                 {
                     tab.set_empty(false);
+                    tab.refresh_label(&self.inner.home);
                     self.apply_selected_tab();
                 }
             }
@@ -2347,6 +2348,8 @@ impl AppShell {
                 *self.inner.rooted_cwd.borrow_mut() = Some(target.to_path_buf());
                 if let Some(tab) = selected.as_ref() {
                     tab.set_empty(false);
+                    // This wake's `refresh` titled the tab while it was still empty.
+                    tab.refresh_label(&self.inner.home);
                 }
                 self.apply_selected_tab();
                 self.inner.tree.reroot(&workspace::root_label(target));

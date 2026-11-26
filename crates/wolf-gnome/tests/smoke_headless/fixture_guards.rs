@@ -89,6 +89,10 @@ use super::sidebar::{
 use super::sidebar_toggles::{
     TG_HEADING, TG_OCR_KEEP, TG_OCR_TREE_ROW, TG_OPEN_FILE, TG_TREE_FILE,
 };
+use super::tab_bar::{
+    TB_DIR_A, TB_DIR_B, TB_DIR_C, TB_OCR_A, TB_OCR_B, TB_OCR_C, TB_READ_A_NAME, TB_READ_B_NAME,
+    TB_READ_C_NAME,
+};
 use super::terminal::{
     drawer_fixture_body, near_fixture_body, BDDRAWER_AFTER_NAME, BDDRAWER_BEFORE_NAME,
     BDDRAWER_EARLIER_FILE, BDDRAWER_LATER_FILE, BDDRAWER_PID_BACK_NAME, BDDRAWER_PID_NAME,
@@ -190,6 +194,10 @@ use super::*;
 /// stay out of [`RELAUNCH_FIXTURE_NAMES`]. `tree_reveal.rs`'s own guard checks that each term
 /// names its one row and no other.
 ///
+/// [`TB_OCR_A`], [`TB_OCR_B`] and [`TB_OCR_C`] are the seventh: the tab bar smoke reads each
+/// tab's title, which is its directory, so [`TB_DIR_A`], [`TB_DIR_B`] and [`TB_DIR_C`] carry
+/// their terms and stay out of [`RELAUNCH_FIXTURE_NAMES`], with an exemption block of their own.
+///
 /// Every smoke that OCRs a capture registers each term it asserts on here, and a
 /// smoke that OCRs nothing registers none; the second project-search smoke is covered
 /// through the first's rows, since it asserts on the same terms. The smokes that
@@ -209,8 +217,8 @@ use super::*;
 ///   [`restore_fixture_names_cannot_satisfy_their_own_assertions`].
 /// * `three_tabs_survive_a_relaunch_under_cage` captures no PNG and could not use
 ///   one: a background tab's pane view is never drawn at all, and a tab TITLE is the
-///   current file's name, which the per-pane statusbar strip and nvim's `:e` echo
-///   also draw, so no term could discriminate one. Its observables are two frozen
+///   tab's working directory, which all three of its tabs share, so no term could
+///   discriminate one. Its observables are two frozen
 ///   state databases and a map of the restored Neovims to the swap files they
 ///   hold open. Its fixtures are registered in [`RELAUNCH_FIXTURE_NAMES`] all the
 ///   same, for the generic loop's sake.
@@ -867,6 +875,21 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
         TRIGGER_TERM,
         "TRIGGER_TERM",
         "restored_editor_reveal_draws_the_rows_above_the_current_file_under_cage",
+    ),
+    (
+        TB_OCR_A,
+        "TB_OCR_A",
+        "each_tab_is_titled_by_its_own_directory_under_cage",
+    ),
+    (
+        TB_OCR_B,
+        "TB_OCR_B",
+        "each_tab_is_titled_by_its_own_directory_under_cage",
+    ),
+    (
+        TB_OCR_C,
+        "TB_OCR_C",
+        "each_tab_is_titled_by_its_own_directory_under_cage",
     ),
 ];
 
@@ -2162,7 +2185,7 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// Both directions matter: a must-CONTAIN term in a fixture name makes its smoke
 /// pass vacuously, and a must-NOT-CONTAIN term makes it fail spuriously.
 ///
-/// ## The seven deliberate, documented exemptions
+/// ## The nine deliberate, documented exemptions
 ///
 /// The title smoke's two DIRECTORY names are not files and are not in
 /// [`RELAUNCH_FIXTURE_NAMES`], because they are the assertion's subject rather
@@ -2266,6 +2289,14 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// name and [`TG_HEADING`]. The tree-row term in any of those makes Search or Hidden read as
 /// Files; the keep term anywhere but the heading makes Files or Search read as Hidden. The
 /// block after the project-search one asserts all of that.
+///
+/// The tab bar smoke is the ninth. Its three directories, [`TB_DIR_A`], [`TB_DIR_B`] and
+/// [`TB_DIR_C`], are the titles it reads, so each carries its own term and all three are absent
+/// from [`RELAUNCH_FIXTURE_NAMES`]. The crossing is what makes the smoke prove that each tab is
+/// titled by its own directory: every capture draws two of the three, in the bar and in the
+/// header, so a directory carrying another's term would satisfy a must-contain with the retitle
+/// never drawn. The block after the toggle-group one asserts that, and that no term is in
+/// `project`, the temp cwd's prefixes, a filler or a readback name the cmdline strip draws.
 ///
 /// ## The fixtures whose CONTENT is checked too
 ///
@@ -3244,6 +3275,57 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         );
     }
 
+    // The tab bar smoke's exemption: its three directories are the titles it reads, so they are out
+    // of RELAUNCH_FIXTURE_NAMES. Each must carry its own term and none another's.
+    let tab_bar_dirs = [
+        (TB_DIR_A, "TB_DIR_A", TB_OCR_A, "TB_OCR_A"),
+        (TB_DIR_B, "TB_DIR_B", TB_OCR_B, "TB_OCR_B"),
+        (TB_DIR_C, "TB_DIR_C", TB_OCR_C, "TB_OCR_C"),
+    ];
+    for (dir, dir_const, own, own_const) in tab_bar_dirs {
+        assert!(
+            dir.to_lowercase().contains(own),
+            "{dir_const} = {dir:?} no longer contains {own_const} = {own:?}. The tab bar draws \
+             that directory as `~/{dir}`, and the term is what the tab bar smoke reads off it, \
+             so the smoke would assert on a word nothing draws and fail with no visible cause."
+        );
+        for (other, other_const, term, term_const) in tab_bar_dirs {
+            if other == dir {
+                continue;
+            }
+            assert!(
+                !dir.to_lowercase().contains(term),
+                "{dir_const} = {dir:?} contains {term_const} = {term:?}, {other_const}'s term. \
+                 Every capture of the tab bar smoke draws `~/{dir}` in a bar entry or the \
+                 header, so that term would be on the page whichever directory the other tab is \
+                 titled by: Y and Z's must-contain would hold with the retitle never drawn, or \
+                 Z's must-not-contain would fail on a correct run. Rename the DIRECTORY; do NOT \
+                 change the OCR consts and do NOT touch the assertions."
+            );
+        }
+    }
+    let mut tab_bar_page: Vec<(&str, &str)> = vec![
+        (TEMP_CWD_BASENAME, "TEMP_CWD_BASENAME"),
+        (TEMP_CWD_PREFIX, "TEMP_CWD_PREFIX"),
+        (RUNTIME_DIR_PREFIX, "RUNTIME_DIR_PREFIX"),
+        (TB_READ_A_NAME, "TB_READ_A_NAME"),
+        (TB_READ_B_NAME, "TB_READ_B_NAME"),
+        (TB_READ_C_NAME, "TB_READ_C_NAME"),
+    ];
+    tab_bar_page.extend(SIDEBAR_FILLER_FILES.iter().map(|name| (*name, "a filler")));
+    for (text, text_const) in tab_bar_page {
+        for (_, _, term, term_const) in tab_bar_dirs {
+            assert!(
+                !text.to_lowercase().contains(term),
+                "{text_const} = {text:?} contains {term_const} = {term:?}. It can be page text in \
+                 the tab bar smoke's captures, as tab 0's `~/project` title, a path the header \
+                 would draw unabbreviated, or a readback path the cmdline strip draws, so it \
+                 would draw the term with no tab titled by its directory. Rename it; do NOT \
+                 change the OCR const."
+            );
+        }
+    }
+
     // This body reaches pixels through WebKit. `preview` is an ordinary word, so it must
     // appear on the page only in the preview pane's statusbar, never in the rendered document.
     let preview_body = format!("{PREVIEW_SOURCE_HEADING}\n{PREVIEW_SOURCE_PARAGRAPH}");
@@ -3597,31 +3679,25 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
              and do NOT touch the assertions."
         );
     }
-    // The name half of the same crossing, stated here as well, since fixtures do leave the registration
-    // table under documented exemptions.
-    for (name, name_const, other_term, other_const) in [
-        (
-            TABS_FIRST_FILE,
-            "TABS_FIRST_FILE",
-            TABS_OCR_SECOND,
-            "TABS_OCR_SECOND",
-        ),
-        (
-            TABS_SECOND_FILE,
-            "TABS_SECOND_FILE",
-            TABS_OCR_FIRST,
-            "TABS_OCR_FIRST",
-        ),
+    // The bar draws each tab's directory, `~/project` or `~/project/tbsub`, in the very captures
+    // whose discriminating half is a must-NOT-contain, so neither component may carry a term.
+    for (dir, dir_const) in [
+        (TEMP_CWD_BASENAME, "TEMP_CWD_BASENAME"),
+        (TABS_SUBDIR, "TABS_SUBDIR"),
     ] {
-        assert!(
-            !name.to_lowercase().contains(other_term),
-            "{name_const} = {name:?} contains {other_const} = {other_term:?}. The `adw::TabBar` \
-             draws BOTH tab titles — and a tab's title IS its file's name — in the very captures \
-             whose discriminating half is a must-NOT-contain, so this term would be on the page \
-             from the bar alone with the other page's pane view never drawn. That is this smoke's \
-             own reason for asserting on headings rather than on titles, and it only holds while \
-             the names stay clear of the terms."
-        );
+        for (term, term_const) in [
+            (TABS_OCR_FIRST, "TABS_OCR_FIRST"),
+            (TABS_OCR_SECOND, "TABS_OCR_SECOND"),
+        ] {
+            assert!(
+                !dir.to_lowercase().contains(term),
+                "{dir_const} = {dir:?} contains {term_const} = {term:?}. The `adw::TabBar` titles \
+                 each tab by its directory and draws BOTH titles in captures B and C, whose \
+                 discriminating half is a must-NOT-contain, so this term would be on the page \
+                 from the bar alone with that tab's pane view never drawn. Rename the DIRECTORY; \
+                 do NOT change either OCR const and do NOT touch the assertions."
+            );
+        }
     }
     // Leg (d)'s `:e` is a bare name resolved in the new tab's cwd, so it is the second fixture's last
     // component, or capture B fails for a fixture reason that reads as a tab failure.

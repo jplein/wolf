@@ -3,7 +3,8 @@
 //! (`specs/application-state.md#8-one-neovim-per-tab`).
 //!
 //! Every decision this module acts on is [`mod@crate::tabs_ui`]'s — what closing
-//! a tab does, the string a tab draws, and which tab's Neovim holds the UI focus.
+//! a tab does, the title and tooltip a tab shows, and which tab's Neovim holds the
+//! UI focus.
 //! This file is the widget work of carrying those answers out, in the same
 //! relationship [`crate::persistence`] has to [`crate::state_seam`].
 //!
@@ -412,27 +413,35 @@ impl TabHandle {
         self.inner.state.cached_tab()
     }
 
-    /// Refreshes this tab from its own core: its panes, then its title. While the
-    /// empty-state page shows, the title names no file, so an empty tab is titled
-    /// [`crate::title::WINDOW_TITLE_FALLBACK`] until a file opened from outside shows.
-    ///
-    /// The title is compared before it is set, so a steady-state frame costs one
-    /// string compare rather than a property notification on every wake — the same
-    /// reason [`crate::shell::AppShell`] caches the window title.
-    pub fn refresh(&self) {
+    /// Refreshes this tab from its own core: its panes, then its title and tooltip
+    /// ([`TabHandle::refresh_label`]). `home` is the shell's captured home directory.
+    pub fn refresh(&self, home: &str) {
         self.inner.panes.on_render_wake();
-        // Own statement: the snapshot guard and the cell borrow drop before the widget call.
-        let current_file = {
+        self.refresh_label(home);
+    }
+
+    /// Sets this tab's title and tooltip from its own Neovim's working directory
+    /// through [`tabs_ui::tab_label`], so a `:cd` in a background tab retitles that
+    /// tab alone.
+    ///
+    /// Both are compared before they are set, so a steady-state frame costs string
+    /// compares rather than a property notification on every wake — the same reason
+    /// [`crate::shell::AppShell`] caches the window title.
+    pub fn refresh_label(&self, home: &str) {
+        // Own statement: the cell borrow drops before the widget calls; `live_cwd` is no RPC.
+        let live = {
             let core_ref = self.inner.core.borrow();
-            core_ref
-                .as_ref()
-                .and_then(|core| core.read_snapshot().current_file.clone())
+            core_ref.as_ref().and_then(WolfCore::live_cwd)
         };
-        // Every Neovim names its anonymous buffer `Untitled.md`, which the empty-state page hides.
-        let current_file = current_file.filter(|_| !self.inner.empty_state.get_visible());
-        let title = tabs_ui::tab_title(self.is_empty(), current_file.as_deref());
-        if self.inner.page.title() != title {
-            self.inner.page.set_title(&title);
+        let label = tabs_ui::tab_label(self.is_empty(), live.as_deref(), home);
+        let page = &self.inner.page;
+        if page.title() != label.title {
+            page.set_title(&label.title);
+        }
+        // libadwaita treats an unset and an empty tooltip alike, falling back to the title.
+        let tooltip = label.tooltip.unwrap_or_default();
+        if page.tooltip().unwrap_or_default() != tooltip {
+            page.set_tooltip(&tooltip);
         }
     }
 
@@ -605,7 +614,7 @@ impl TabsInner {
         };
         // The real title arrives with this tab's first refresh; until then the bar
         // draws the fallback rather than libadwaita's empty string.
-        page.set_title(&tabs_ui::tab_title(parts.empty, None));
+        page.set_title(crate::title::WINDOW_TITLE_FALLBACK);
         entry.set_empty(parts.empty);
 
         self.entries.borrow_mut().push(entry.clone());

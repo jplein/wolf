@@ -44,7 +44,7 @@ Assertion 7's revert: delete the `- 2 * padding` term from `editor_inset::grid_r
 
 `cage` shows one toplevel at a time, so the two-window smoke can photograph nothing, but a tab bar is inside the one toplevel and the two-tab state is photographable. Each tab runs a Neovim of its own, so the smoke counts the app's live `nvim` children with `recovery.rs`'s `wait_nvim_count` at launch, after Ctrl+Shift+T and after the middle-click, and every readback comes from whichever Neovim the selected tab's core is.
 
-No assertion reads a tab title. `tabs_ui::tab_title` draws the current file's name, as do the statusbar strip and the `:e` echo, so no OCR term separates them, and tesseract reads one of two rendered titles at this page's calibration. The fixture names carry no asserted term, and every OCR claim is about a heading in an editor grid. `bar.is_visible()` reads `true` at one page as well as two; see `TAB_BAR_HEIGHT_EXPECTED`.
+No assertion reads a tab title. The bar draws each tab's directory, `~/project` or `~/project/tbsub`, which carries no asserted term, and tesseract reads one of two rendered titles at this page's calibration. The fixture names carry no asserted term either, and every OCR claim is about a heading in an editor grid. `bar.is_visible()` reads `true` at one page as well as two; see `TAB_BAR_HEIGHT_EXPECTED`.
 
 ```text
 <unique>/                     the app's HOME (cage_command's default)

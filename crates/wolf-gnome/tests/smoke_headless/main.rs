@@ -181,6 +181,7 @@ mod sidebar;
 mod sidebar_toggles;
 mod split_commands;
 mod symbols;
+mod tab_bar;
 mod terminal;
 mod terminal_colours;
 mod terminal_terminfo;

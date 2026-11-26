@@ -2321,8 +2321,8 @@ fn assert_frozen_tabs(smoke: &str, stage: &str, state_dir: &Path, diagnosis: &st
 /// The claim is about what reaches the saved window state and what comes back out of
 /// it, and neither is visible. A background tab's pane view is not drawn at all, so no
 /// capture could show more than one tab's content whatever the file holds; and a tab
-/// TITLE is the current file's name, which the per-pane statusbar strip and nvim's
-/// `:e` echo also draw, so no OCR term could discriminate one. The observables that
+/// TITLE is the tab's working directory, which all three tabs share and the header bar
+/// also draws, so no OCR term could tell one tab from another. The observables that
 /// DO discriminate are the process table, read through `/proc`, and a state database
 /// frozen before anything can write over it.
 ///

@@ -2065,10 +2065,9 @@ fn pane_status_bar_shows_each_panes_filename_under_cage() {
 ///
 /// Its name carries no asserted term — the CONTENT is what every OCR assertion is
 /// about — so the tree sidebar's row for it, the `:e` echo that spells it, and the
-/// tab bar's own title (which is this name) can satisfy nothing. That is the
-/// standing convention here and it matters more than usual, because the tab bar
-/// draws BOTH filenames in the very captures whose discriminating half is a
-/// must-NOT-contain.
+/// per-pane statusbar strip can satisfy nothing. The tab bar titles each tab by its
+/// directory, not its file, and `restore_fixture_names_cannot_satisfy_their_own_assertions`
+/// keeps those directories clear of both terms.
 pub(crate) const TABS_FIRST_FILE: &str = "tbxray.md";
 
 /// Heading written into [`TABS_FIRST_FILE`]; lowercased it contains

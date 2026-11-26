@@ -17,7 +17,7 @@
 //! concrete `<cwd>/Untitled N.md` name — collision-checked against files on disk,
 //! against every other buffer and against stale swap files — without writing it. So
 //! "never saved" here means "named but not on disk", not "unnamed", and that name is
-//! already on screen in the tab title, the pane statusbar and the window's file row.
+//! already on screen in the pane statusbar and the window's file row.
 //! Saving to the name the user is looking at is the least surprising outcome
 //! available.
 //!
@@ -567,8 +567,8 @@ mod tests {
         // --- A LIVE core: the only arm that may write or prompt ---------------
         PressCase {
             desc: "THE ROW FACT 3 IS ABOUT — a named but never-written buffer is WRITTEN, not \
-                   prompted for: the name is already in the tab title, the pane statusbar and the \
-                   window's file row",
+                   prompted for: the name is already in the pane statusbar and the window's file \
+                   row",
             liveness: Some(Liveness::Alive),
             target: NAMED,
             want: Want::Write,
@@ -981,7 +981,7 @@ mod tests {
     /// FALSIFYING EDIT 2 (behaviour 2) — add an existence probe and redirect a
     /// named-but-absent buffer to `Choose`, which the save rule rejects.
     /// `wolf_name_untitled` has already picked a collision-checked name that is on
-    /// screen in the tab title, the pane statusbar and the window's file row, so Save
+    /// screen in the pane statusbar and the window's file row, so Save
     /// writes it; Ctrl+S and a typed `:w` must not disagree. MEASURED with
     /// `Some(_) if target.path.is_some_and(Path::exists) => Write` and a `Choose`
     /// fall-through: red, and isolated to this test — `save_press(Some(Alive), NAMED)

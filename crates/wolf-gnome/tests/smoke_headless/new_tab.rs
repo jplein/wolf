@@ -22,7 +22,6 @@ use super::sidebar_toggles::{TG_OCR_TREE_ROW, TG_TREE_FILE};
 use super::*;
 use wolf_core::app_state::{Frame, Sidebar, Tab, TabContent};
 use wolf_core::{PaletteRowKind, PaletteWindow};
-use wolf_gnome::tabs_ui::TAB_TITLE_FALLBACK;
 
 /// The title an empty tab and its window draw, lowercased: [`WINDOW_TITLE_FALLBACK`]'s.
 ///
@@ -368,8 +367,8 @@ fn saved_origin_tab<'s>(smoke: &str, saved: &'s WindowState, project: &str) -> &
 /// The origin is the launch's folder tab on `project`, its sidebar shown. Capture P shows its
 /// sidebar's [`TG_TREE_FILE`] row. `Ctrl+Shift+T` opens the new tab, selected: capture A, then
 /// readback R1 from its Neovim. A click on the origin's bar entry selects it for capture B, whose
-/// header draws `~/project` and whose bar draws the origin's own title, so only the new tab's
-/// title can draw [`NT_OCR_TITLE`]. A click back on the new tab, then [`NT_FILL_DIR`]'s Open
+/// header and origin's bar entry draw `~/project`, so only the new tab's title can draw
+/// [`NT_OCR_TITLE`]. A click back on the new tab, then [`NT_FILL_DIR`]'s Open
 /// Recent row.
 ///
 /// Premise, measured by the green run: the tab bar's title text OCR-reads as [`NT_OCR_TITLE`] at
@@ -383,7 +382,7 @@ fn saved_origin_tab<'s>(smoke: &str, saved: &'s WindowState, project: &str) -> &
 /// | NE1a | R1 is `HOME`, and its final component is not [`TEMP_CWD_BASENAME`] | in `AppShell::new_tab`, set the planned tab's `cwd` to `selected.launch_cwd()` | R1 ends in `project` |
 /// | NE4a | capture A holds [`EMPTY_STATE_OCR`] | in `AppShell::new_tab`, open the tab with `empty: false` | `folder` absent |
 /// | NE5a | capture A lacks [`TG_OCR_TREE_ROW`] | in `state_seam::sidebar_is_shown`, return `user_wants` | the row is drawn |
-/// | NE3a | capture B holds [`NT_OCR_TITLE`] | in `TabHandle::refresh`, pass `false` as `tab_title`'s `empty` | `wolf` absent (`Untitled`) |
+/// | NE3a | capture B holds [`NT_OCR_TITLE`] | in `TabHandle::refresh_label`, pass `false` as `tab_label`'s `empty` | `wolf` absent (`~`) |
 /// | — | precondition: the save holds one window, the origin's tab and `D`'s | none | n/a |
 /// | NE6a | `D`'s saved tab has `sidebar.visible == true` | in `AppShell::new_tab`, capture `Some(false)` | `false` |
 #[test]
@@ -464,10 +463,10 @@ fn new_tab_opens_an_empty_tab_beside_its_folder_tab_under_cage() {
     assert!(
         page_b.contains(NT_OCR_TITLE),
         "{SMOKE}: capture B, the origin selected beside the empty tab, lacks {NT_OCR_TITLE:?}. \
-         Its header draws ~/project and its bar the origin's own title, so only the empty tab's \
-         bar entry can draw it: that entry is titled {TAB_TITLE_FALLBACK:?} or by some file \
-         rather than {WINDOW_TITLE_FALLBACK:?}, so tab_title was not told the tab is empty. If \
-         the dump shows a misread of the title instead, that is the premise in this smoke's doc. \
+         Its header and its own bar entry draw ~/project, so only the empty tab's bar entry can \
+         draw it: that entry is titled by its Neovim's cwd, `~`, rather than \
+         {WINDOW_TITLE_FALLBACK:?}, so tab_label was not told the tab is empty. If the dump \
+         shows a misread of the title instead, that is the premise in this smoke's doc. \
          PNG kept at {}. OCR output was:\n{page_b}",
         shot_b.display()
     );
@@ -790,7 +789,6 @@ fn the_new_tab_fixtures_cannot_draw_their_terms() {
     let mut on_page: Vec<(&str, &str)> = vec![
         (TEMP_CWD_BASENAME, "TEMP_CWD_BASENAME"),
         (TG_TREE_FILE, "TG_TREE_FILE"),
-        (TAB_TITLE_FALLBACK, "TAB_TITLE_FALLBACK"),
         (NT_FILL_DIR, "NT_FILL_DIR"),
         (NT_HIDDEN_DIR, "NT_HIDDEN_DIR"),
         (NT_OUTLIVE_DIR, "NT_OUTLIVE_DIR"),
