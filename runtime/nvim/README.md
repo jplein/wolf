@@ -54,7 +54,7 @@ Rebinds Neovim's window chords and the `:split`/`:close`/`:quit` Ex-command fami
 - `{ action = "focus_dir", dir = "left"|"right"|"up"|"down", from }` — a pure intent. nvim does not move focus.
 - `{ action = "drawer_open", win }` — emitted by `wolf_toggle_terminal` through the exposed `_G.wolf_emit_drawer`.
 
-It also notifies **`wolf_active_win`** with `nvim_get_current_win()` on `WinEnter`, and **`wolf_command`** with `close_tab` when a quit closes the tab ([which quits](#decisions)) or [`wolf_close_tab`](#wolf_close_tab)'s check passes. The tab's last pane is its tabpage's last window but the drawer, which no pane tree holds. Closing a pane emits no intent: the shell observes the `win_close` redraw event. Exposes `_G.wolf_do_split`, `wolf_do_close`, `wolf_do_quit`, `wolf_do_focus`, `wolf_emit_drawer` and [`wolf_close_tab`](#wolf_close_tab).
+It also notifies **`wolf_active_win`** with `nvim_get_current_win()` on `WinEnter`, and **`wolf_command`** with `close_tab` when a quit or [`wolf_close_pane`](#wolf_close_pane) closes the tab ([which quits](#decisions)) or [`wolf_close_tab`](#wolf_close_tab)'s check passes. The tab's last pane is its tabpage's last window but the drawer, which no pane tree holds. Exposes `_G.wolf_do_split`, `wolf_do_close`, `wolf_do_quit`, `wolf_do_focus`, `wolf_emit_drawer`, [`wolf_close_tab`](#wolf_close_tab) and [`wolf_close_pane`](#wolf_close_pane).
 
 `_G.wolf_split_pane(orient)` is the split commands' entry. In a terminal placeholder it notifies **`wolf_terminal_split`** with the session id and `orient`, because core starts the new session; anywhere else it is `wolf_do_split`.
 
@@ -169,6 +169,10 @@ Resolves the stable handle to its current tabpage number and runs `<n>tabclose` 
 #### `wolf_close_tab()`
 
 Close Tab's check, [`wolf_refuse_unsaved`](#wolf_refuse_unsaved), which `:qa` runs too. It returns `false` when the check refused with E37 or E162, and otherwise notifies `close_tab` and returns `true`. It ends no wait ([why](#decisions)). Core's caller is `WolfCore::request_close_tab`, which a front-end runs before a user's close of the tab. Defined by `wolf_setup_layout`, as a closure over its channel.
+
+#### `wolf_close_pane()`
+
+Close Pane's action, which core's `InputEvent::ClosePane` runs. A pane that can close, the drawer or any pane but the tab's last, closes as `wolf_do_close` closes it. The tab's last pane takes `:q`'s path, `do_quit`: it refuses with E37 or E162 and notifies nothing, or else ends every wait of the tab with `0` and notifies `close_tab` ([why not Close Tab's](#decisions)). Defined by `wolf_setup_layout`.
 
 #### `wolf_tab_cwd(handle)`
 
@@ -360,7 +364,7 @@ The durable dictionary is the global `'spellfile'` at `WOLF_SPELL_DIR/en.utf-8.a
 
 **Two payloads dodge the same msgpack ambiguity: an empty Lua table cannot be told apart from an empty map.** `wolf_theme` therefore sends four flat scalars with a `-1` sentinel rather than a table, and `wolf_highlight_code_blocks` returns the scalar `false` rather than an empty array for a non-highlightable block.
 
-**Split, close, and focus are deliberately asymmetric.** A split performs the real window operation and also reports an intent, so the shell learns the orientation and handles. A close performs a guarded `nvim_win_close` that refuses the tab's last pane and reports nothing, because the shell already observes `win_close`. A focus move performs nothing and is a pure intent, because the shell resolves the neighbour in its own layout.
+**Split, close, and focus are deliberately asymmetric.** A split performs the real window operation and also reports an intent, so the shell learns the orientation and handles. A close by `<C-w>c`, `<C-w>q` or `:close` performs a guarded `nvim_win_close` that refuses the tab's last pane and reports nothing, because the shell already observes `win_close`; Close Pane closes the tab there instead. A focus move performs nothing and is a pure intent, because the shell resolves the neighbour in its own layout.
 
 **The `:q` family routes through internal user commands, not registry commands.** A write variant that fails aborts the quit, matching native `:wq`. On the tab's last pane, `:q`, `:wq`, `:x` and `ZZ` close the tab only once [`wolf_refuse_unsaved`](#wolf_refuse_unsaved) finds nothing unsaved, and `:q!` closes it unchecked. The `:qa` family passes `all = true`, which skips the pane count, so it closes the tab whatever the number of panes: `:qa` checks, `:qa!` does not, and `:wqa` and `:xa` first run `:wall`, whose failure aborts.
 
@@ -371,6 +375,8 @@ The check covers every buffer of the tab, hidden ones included, because the tab'
 **A quit that closes the tab ends the waits of every buffer of the tab before it notifies `close_tab`.** The front-end shuts the tab's core down on that command, which ends every wait still held with `1`, and the `0` must reach the command first ([mechanism](../../notes/runtime/nvim/init.lua.md#waits-end-before-the-tab-closes)).
 
 **[`wolf_close_tab`](#wolf_close_tab) ends no wait, so it must not reuse `do_quit`.** Close Tab closes no window, and the shutdown's `1` is its answer, as [§6](../../specs/cli-and-file-open.md#6-waiting) gives for a tab closed by any other route. That is how `EDITOR="wolf --wait"` sees a failed editor when the tab is closed with its ×.
+
+**[`wolf_close_pane`](#wolf_close_pane) is a helper of its own, and on the tab's last pane it is `do_quit`, not `wolf_close_tab`.** Vim's own `:close` and `<C-w>c` refuse the last window, so a typed close never closes a tab, and `wolf_do_close` and `wolf_terminal_close` keep refusing the tab's last pane. Close Pane there closes the buffer's last window, which [§6](../../specs/cli-and-file-open.md#6-waiting) counts as a close that also closes its tab, so its waits end with `0` as `:q`'s do.
 
 **A hide asks core before it toasts.** A killed or interrupted command leaves its wait registered, and the toast must not name a file nobody waits for ([mechanism](../../notes/runtime/nvim/init.lua.md#a-hide-asks-core)).
 

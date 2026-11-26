@@ -304,6 +304,12 @@ The other files below cover what a seam cannot reach: a real Neovim, a real wind
 - A failing smoke keeps its runtime directory, with its captures and `cage.log`, and prints its path and the log's tail.
 - Spell checking is off in every smoke, so OCR reads glyphs not undercurls; see `seed_smoke_spell_override`.
 
+#### `smoke_headless/close_pane.rs`
+
+The Close Pane smoke, one launch restoring a planted window of two tabs of one pane each, each on a file of the project, with the selected second tab then modified. Ctrl+Shift+W there must keep both Neovims and leave E37 in its `:messages`. After `:w` it must close the tab, leaving the first, and in the last tab end the app. Every observable is a Neovim count, a readback a Neovim writes about itself or the app's exit, never OCR.
+
+It clicks nothing, because keys reach the selected tab after a restore, a premise exit 191 checks.
+
 #### `smoke_headless/close_tab.rs`
 
 The Close Tab smoke, one launch restoring a planted window of two tabs, each on a file of the project, with the second tab modified. A click on the background second tab's close button must select it, keep both Neovims and leave E37 in its `:messages`, and Close Tab from the palette must refuse the same way. After `:w` it must close the tab, leaving the first, and on the last tab end the app. Every observable is a Neovim count, a readback a Neovim writes about itself or the app's exit, never OCR.

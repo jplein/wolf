@@ -132,11 +132,12 @@ Purpose: The vendored Lighthouse's expected colours, for the tests that render u
 
 #### `TerminalClosePaneTests.swift`
 
-**Covers** — Close Pane through `PaneContainerView.canClosePane` and `closeActivePane()`: a focused terminal split closing and leaving the tree with its session hung up; the focused drawer closing with its session kept, which the next toggle shows again; the gate refusing a lone terminal pane and the last editor pane beside the drawer; and the close acting on the view's active pane while Neovim's current window lags it.
+**Covers** — Close Pane through `PaneContainerView.closeActivePane()`: a focused terminal split closing and leaving the tree with its session hung up; the focused drawer closing with its session kept, which the next toggle shows again; the only editor pane, a lone terminal pane and the last editor pane beside the drawer each draining `close_tab`, with every window and session kept for the front-end's close of the tab; and the close acting on the view's active pane while Neovim's current window lags it.
 
 **Gotchas**
 
-- `validateMenuItem` and `WolfWindowController`'s forwards reach no test here: AppKit routes no event offscreen, and [`PreviewKeyEquivalentTests.swift`](#previewkeyequivalenttestsswift) retargets the menu's items.
+- `WolfWindowController`'s forwards reach no test here, because AppKit routes no event offscreen. The item's validation is [`ClosePaneMenuTests.swift`](#closepanemenutestsswift)'.
+- No fixture drains commands, since `onRenderWake()` drains intents only, so a test sees every command core queued.
 - The lag test sends `focus_win` with no wake before the close, which recreates a focus move in flight.
 
 #### `SplitCommandTests.swift`
@@ -161,7 +162,7 @@ Purpose: The vendored Lighthouse's expected colours, for the tests that render u
 
 #### `PreviewKeyEquivalentTests.swift`
 
-**Covers** — with a preview's web view first responder, as a click leaves it: `noop:` sent to the web view reaching a sink hung at the end of its responder chain, and ⌘W and ⌘P firing Close and Command Palette… from the production `AppMenu`. Both are red when `PaneContainerView.doCommand(by:)` swallows the command ([why](../../../../notes/wolf-macos-decisions.md#key-equivalents-over-a-preview)).
+**Covers** — with a preview's web view first responder, as a click leaves it: `noop:` sent to the web view reaching a sink hung at the end of its responder chain, and ⌘W and ⌘P firing Close Pane and Command Palette… from the production `AppMenu`. Both are red when `PaneContainerView.doCommand(by:)` swallows the command ([why](../../../../notes/wolf-macos-decisions.md#key-equivalents-over-a-preview)).
 
 **Gotchas**
 
@@ -182,9 +183,15 @@ Purpose: The vendored Lighthouse's expected colours, for the tests that render u
 
 **Covers** — `AppMenu.install(target:)` over a bare `AppDelegate`: the application menu carries Install and Uninstall `wolf` Command after About, side by side between separators, each targeting the delegate with its action. No item is fired; what the actions do is [`CommandInstallSeam`](../WolfKeyMapTests/README.md#commandinstallseamtestsswift)'s and a person check's.
 
+#### `ClosePaneMenuTests.swift`
+
+**Covers** — `AppMenu.install(target:)` over a bare `AppDelegate`: the File menu carries Close Pane on ⌘W, targeting the delegate with `handleCommandMenuItem(_:)`, its tag decoding to `.closePane`, and `validateMenuItem(_:)` enabling it.
+
+**Gotchas** — no live core runs, because the validation reads no pane state, so a bare delegate's answer is a one-pane tab's, and AppKit makes no window key offscreen. The one-pane close itself is [`TerminalClosePaneTests.swift`](#terminalclosepanetestsswift)'.
+
 #### `CloseTabMenuTests.swift`
 
-**Covers** — `AppMenu.install(target:)` over a bare `AppDelegate`: the File menu carries Close Tab directly between Close and Close Window, targeting the delegate with `handleCommandMenuItem(_:)`, its tag decoding to `.closeTab`, and with no key equivalent. No item is fired; what the dispatch does is [`CloseTabDispatchTests`](#closetabdispatchtestsswift)'.
+**Covers** — `AppMenu.install(target:)` over a bare `AppDelegate`: the File menu carries Close Tab directly between Close Pane and Close Window, targeting the delegate with `handleCommandMenuItem(_:)`, its tag decoding to `.closeTab`, and with no key equivalent. No item is fired; what the dispatch does is [`CloseTabDispatchTests`](#closetabdispatchtestsswift)'.
 
 #### `OtherPaneFlowTests.swift`
 

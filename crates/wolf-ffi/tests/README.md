@@ -92,7 +92,7 @@ The baseline handle lifecycle: `wolf_ffi_start`, `read_frame` (dense `cols * row
 
 **Gotchas**
 
-- Drive the handle method, not a typed `:close<CR>`: the captive `init.lua`'s abbreviation sends a typed `:close` to the same `wolf_do_close` the method calls, so typing it would not test the method. Only the setup `:vsplit` is typed.
+- Drive the handle method, not a typed `:close<CR>`: the captive `init.lua`'s abbreviation sends a typed `:close` to `wolf_do_close`, while the method reaches `wolf_close_pane`, so typing it would test another helper. Only the setup `:vsplit` is typed.
 
 #### `cmdline_ui.rs`
 

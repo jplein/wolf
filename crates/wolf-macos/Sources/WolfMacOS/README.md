@@ -365,7 +365,7 @@ Purpose: The editor area: one flipped first-responder `NSView` painting every pa
 - `activeWin` — the active pane's window, `0` before one binds.
 - `activePreviewSourcePath` — `nil` in edit mode.
 - `otherPaneTarget(prefer:)` — `0` splits, `nil` no-ops.
-- `canClosePane`, `closeActivePane()`, `splitActivePane(_:)` — Close Pane's gate and action, and the splits' ([why](../../../../notes/wolf-macos-decisions.md#terminal-panes)).
+- `closeActivePane()`, `splitActivePane(_:)` — Close Pane's action and the splits' ([why](../../../../notes/wolf-macos-decisions.md#terminal-panes)).
 - `toggleZoom()`, `toggleTerminal()`, `isZoomed`, `zoomedPaneId`, `visiblePaneFrames` — Zoom Pane, Toggle Terminal unzooming first, the saved zoom, frames by window ([why](../../../../notes/wolf-macos-decisions.md#zoom-pane)).
 - `requestLayoutRebuild(_:tab:focused:drawer:)` — the launch restore at the first pane's bind ([order](../../../../notes/wolf-macos-decisions.md#the-per-tab-extras)).
 - `openFile(_:wait:at:)` — places a file by [§5.2](../../../../specs/cli-and-file-open.md#52-choosing-the-pane), waiting while a restore is pending ([why](../../../../notes/wolf-macos-decisions.md#opening-files-from-outside-wolf)).

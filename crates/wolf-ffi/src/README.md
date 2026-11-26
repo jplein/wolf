@@ -80,7 +80,7 @@ The `extern "C"` wake registrations, `wolf_ffi_set_wake` and its siblings, live 
 - `grid_for_win(&self, win: i64) -> u64` — 0 when no window maps to it.
 - `active_win(&self) -> i64` — 0 until nvim reports one.
 - `focus_win(&self, win: i64)` — Click-to-focus and resolved focus-direction moves.
-- `close_pane(&self)` — Closes the split rather than the buffer, through `init.lua`'s [`wolf_do_close`](../../../runtime/nvim/README.md#wolf_setup_layoutchan), which refuses the tab's last pane, the terminal drawer not counting.
+- `close_pane(&self)` — Close Pane: closes the split rather than the buffer, through `init.lua`'s [`wolf_close_pane`](../../../runtime/nvim/README.md#wolf_close_pane). On the tab's last pane, the terminal drawer not counting, it closes the tab as `:q` does there.
 - `split_horizontal(&self)`, `split_vertical(&self)` — Stacked (`:split`) and side-by-side (`:vsplit`) splits of Neovim's current window, through `WolfCore::split_pane`.
 - `open_split_left(&self, path: String) -> i64` — [`WolfCore::open_split_left`](../../wolf-core/src/README.md#apirs), the whole-tab split with `path` on the left. No split intent follows, so the caller binds the window it returns. Blocks briefly; 0 on failure or after shutdown.
 - `rebuild_tab(&self, tab: &FfiAppTab) -> Vec<i64>` — Realizes a saved tab's root in the current tabpage's lone window, returning the window handles in leaf order; empty when the tab has no root or the core is gone. Rust renders it with `wolf_core::app_state::tab_rebuild_spec`, so no front-end renders the spec, and it checks no file, so pass it `FfiAppTab::restored`'s output. Sizes come from the front-end's weights. When it returns, `win_buffer` and `previews` already report every returned window, so a state commit straight after it reads the restored files rather than the startup buffer. A terminal pane's window already shows its new session, and Neovim's current window and `active_win` are already the zoomed pane's, else the focused pane's, when the tab names one.
@@ -341,7 +341,7 @@ These `u8` values are the ABI: Swift decodes raw integers, so the numbers are co
 | 5     | `GO_TO_FILE`            | Open the file-picker overlay.                                                                   |
 | 6     | `OPEN_FILE`             | Native open-file dialog.                                                                        |
 | 7     | `OPEN_FOLDER`           | Native dialog to open a folder.                                                                 |
-| 8     | `CLOSE_PANE`            | Close the current split, not the buffer.                                                        |
+| 8     | `CLOSE_PANE`            | Close the current split, not the buffer, or on the tab's last pane the tab, as `:q` does.       |
 | 9     | `NEW_BUFFER`            | New empty buffer in the current window.                                                         |
 | 10    | `RESET_FONT_SIZE`       | Back to the configured default size.                                                            |
 | 11    | `INCREASE_FONT_SIZE`    | One point larger.                                                                               |
