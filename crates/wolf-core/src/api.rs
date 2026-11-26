@@ -129,8 +129,8 @@ pub enum CloseTabAnswer {
     NoAnswer,
     /// The tab has unsaved changes: Neovim showed E37 or E162 and nothing closes.
     Refused,
-    /// Nothing is unsaved: Neovim ended the tab's waits and notified `close_tab`, whose
-    /// drain closes the tab.
+    /// Nothing is unsaved: Neovim notified `close_tab`, whose drain closes the tab. No
+    /// `wolf --wait` ends here: the tab's shutdown ends each with `1`.
     Closing,
 }
 

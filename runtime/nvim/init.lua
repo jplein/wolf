@@ -946,8 +946,15 @@ function _G.wolf_setup_layout(chan)
 	_G.wolf_split_pane = split_pane
 	_G.wolf_do_close = do_close
 	_G.wolf_do_quit = do_quit
-	-- Close Tab's check is :qa's; true once close_tab is notified, false when refused.
-	_G.wolf_close_tab = function() return do_quit({ all = true }) end
+	-- Close Tab closes no window, so it ends no wait: the tab's shutdown ends each with 1.
+	-- See specs/cli-and-file-open.md#6-waiting
+	_G.wolf_close_tab = function()
+		if _G.wolf_refuse_unsaved() then
+			return false
+		end
+		vim.rpcnotify(chan, "wolf_command", "close_tab")
+		return true
+	end
 	_G.wolf_do_focus = do_focus
 	_G.wolf_emit_drawer = emit_drawer
 

@@ -47,15 +47,13 @@ const CT_CODES: &str = "Exit 180: the launch did not restore exactly two Neovims
      Exit 182: setup: after the click on tab 1's entry, the readback is missing or does not name \
      tab 1's file, so keys do not reach tab 1.\n\
      Exit 183: leg A: the click on modified tab 2's close button did not leave two Neovims, so \
-     the close-page veto closed the page without asking its Neovim. At the base commit this is \
-     the expected red.\n\
+     the close-page veto closed the page without asking its Neovim.\n\
      Exit 184: leg A: the readback typed after the click is missing or does not name tab 2's \
-     file, so the ask did not select the background page first, and its refusal shows in a tab \
-     nobody sees. If this is the red at the base commit, the click missed the close button: \
-     fix CT_CLOSE_BUTTON_INSET_PX, not the code.\n\
+     file. Either the ask did not select the background page first, so its refusal shows in a \
+     tab nobody sees, or the click hit neither tab 2's entry nor its close button.\n\
      Exit 185: leg A: tab 2's `:messages` holds no E37, so the page was neither closed nor \
-     refused by its Neovim. At the base commit this means the click landed on the tab's \
-     entry rather than its close button.\n\
+     refused by its Neovim: the click landed on the tab's entry rather than its close button. \
+     Fix CT_CLOSE_BUTTON_INSET_PX, not the code.\n\
      Exit 186: leg B: Close Tab from the palette did not leave two Neovims, or the readback \
      after it does not name tab 2's file, so the palette's Close Tab closed the modified tab \
      without asking.\n\
@@ -222,8 +220,6 @@ fn assert_close_tab_query_selects_close_tab(smoke: &str, project: &str) {
 /// | G1 | leg B: two Neovims, the readback names [`CT_FILE_B`], a fresh E37 | G1a: `AppShell::close_tab` confirms the selected tab before `TabsHandle::close` | 186, one Neovim |
 /// | G2 | leg C: one Neovim, the app alive, the readback names [`CT_FILE_A`] | G2a: `drain_and_dispatch_commands` no longer confirms a drained `CloseTab` | 188, the one-Neovim wait |
 /// | G4 | leg D: the app exits 0 within the wait | G4a: `tabs_ui::close_outcome` answers `CloseWindow` only for `live_pages == 0` | 189, the app stays alive |
-///
-/// At the base commit, leg A's click closes tab 2 unchecked, so the run exits 183.
 #[test]
 fn close_tab_asks_the_tabs_neovim_under_cage() {
     const SMOKE: &str = "close_tab_asks_the_tabs_neovim_under_cage";

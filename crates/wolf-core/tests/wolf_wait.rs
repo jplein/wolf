@@ -5,8 +5,9 @@
 //! directory, runs `wolf --wait <file>` (or `git commit` with `wolf --wait` as its editor), drains
 //! the wait with `drain_taken`, sends `InputEvent::Open` for the request's `OpenTarget::File` path
 //! and hands the wait to `WolfCore::wait_on`. Keys are typed with `send_ex` and `type_str`. A test
-//! that closes the tab's last pane shuts the core down as soon as `Command::CloseTab` drains, as
-//! a front-end closing the tab would.
+//! that closes the tab's last pane, or asks for Close Tab with `request_close_tab()` and is
+//! answered `Closing`, shuts the core down as soon as `Command::CloseTab` drains, as a front-end
+//! closing the tab would.
 //!
 //! An exit is polled for up to [`EXIT_WAIT`]; "still waiting" is a command still running after
 //! [`SETTLE`]. A command a test never sees exit is killed when its [`Proc`] drops.
@@ -48,8 +49,8 @@ use common::{
     type_str, FlushWaiter, FLUSH_TIMEOUT, POLL_INTERVAL,
 };
 use wolf_core::{
-    Command as CoreCommand, InputEvent, Key, Liveness, OpenListener, OpenTarget, OpenWait, WakeFn,
-    WolfCore,
+    CloseTabAnswer, Command as CoreCommand, InputEvent, Key, Liveness, OpenListener, OpenTarget,
+    OpenWait, WakeFn, WolfCore,
 };
 
 /// The variable Bazel names the `wolf` runfile in.
@@ -732,7 +733,8 @@ fn poll_still_waiting(core: &WolfCore, waiter: &FlushWaiter) -> String {
     .expect("poll_until returned only once a line was found")
 }
 
-/// W8: closing the tab, a core shutdown, ends the wait with `1`.
+/// W8: the unchecked close of the tab, a bare core shutdown as Close Window, the app's quit or a
+/// dead Neovim's close gives, ends the wait with `1`.
 #[test]
 fn closing_the_tab_exits_1() {
     let case = new_case();
@@ -1224,5 +1226,37 @@ fn q_on_the_last_pane_ends_a_hidden_buffers_wait_with_0() {
         ":q on the tab's last pane, then the tab's shutdown",
         "1 means the shutdown ended the hidden buffer's wait first: the quit ended only the \
          waits of the buffers its windows show.",
+    );
+}
+
+/// W21: Close Tab through its check closes no window, so the tab's shutdown ends the wait with
+/// `1`.
+#[test]
+fn close_tab_through_its_check_exits_1() {
+    let case = new_case();
+    case.write("msgtwentyone.md", "# twenty-one\n");
+    let (core, _waiter) = case.start_core();
+    let mut wolf = case.spawn_wait("msgtwentyone.md");
+    let path = case.open_waited(&core, &mut wolf);
+    let (shown, _, _) = case.current(&core);
+    assert_eq!(
+        shown,
+        path.display().to_string(),
+        "premise: msgtwentyone.md must be current"
+    );
+
+    let answer = core.request_close_tab();
+    assert_eq!(
+        answer,
+        CloseTabAnswer::Closing,
+        "request_close_tab() on the unmodified tab must answer Closing. Refused means the fresh \
+         buffer was modified; NoAnswer means the request failed or timed out."
+    );
+    shut_down_on_close_tab(core, "Close Tab");
+    wolf.assert_exits(
+        1,
+        "Close Tab through its check, then the tab's shutdown",
+        "0 means Close Tab ended the wait as a buffer close, which §6 keeps for a closed last \
+         window or a deleted buffer.",
     );
 }

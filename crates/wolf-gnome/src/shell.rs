@@ -94,8 +94,8 @@
 //! `UiAction::CloseWindow` / `UiAction::QuitApplication` synchronously run
 //! `window::wire_close`'s `close-request` handler, which takes every tab's core out
 //! with a `borrow_mut()`. `UiAction::CloseTab` borrows its tab's core for the ask, then
-//! may take it out, and on the window's last tab it runs the same handler. An outstanding `borrow()` there is a
-//! `RefCell` panic, not a warning.
+//! may take it out, and on the window's last tab it runs the same handler. An
+//! outstanding `borrow()` there is a `RefCell` panic, not a warning.
 //!
 //! The restart path adds a SECOND rule: **never hold a snapshot read guard across
 //! `open_files_for_tabpage`**. [`AppShell::capture_open_files`] binds

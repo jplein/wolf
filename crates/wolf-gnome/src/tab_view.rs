@@ -924,7 +924,8 @@ impl TabsHandle {
 
     /// Replaces `old` with a tab opened from `parts` at `old`'s page position, SELECTED,
     /// then closes `old` through the ordinary `close-page` path, confirmed since a
-    /// replacement is not a user's close, which shuts its Neovim down. `None`, with `old` untouched, when the new tab's core fails to start.
+    /// replacement is not a user's close, which shuts its Neovim down. `None`, with
+    /// `old` untouched, when the new tab's core fails to start.
     ///
     /// The new tab opens FIRST: closing a window's last page closes the window.
     /// No core borrow may be held across this call, since the close takes `old`'s
