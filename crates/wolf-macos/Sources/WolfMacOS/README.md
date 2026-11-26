@@ -131,7 +131,8 @@ Purpose: Maps a decoded `CommandKind` to its native AppKit action. Both the menu
 **Decisions**
 
 - The switch carries no `default` case, so adding a `CommandKind` variant fails to compile until it is handled here.
-- `.closeTab` closes `window`, which is the tab, with `close()` rather than `performClose(_:)`, so no `windowShouldClose` asks again: the quit that sent it has already refused unsaved changes. Closing a tab group's only window closes the window.
+- `.closeTab` closes `window`, which is the tab, with `performClose(_:)`, so `WolfWindowController`'s `windowShouldClose` decides, through [`CloseTabSeam`](../WolfKeyMap/README.md#closetabseamswift), whether the tab's Neovim is asked. A drained `close_tab` arrives confirmed and closes at once ([why](../../../../notes/wolf-macos-decisions.md#closing-a-tab-asks-its-neovim)). Closing a tab group's only window closes the window.
+- `.closeWindow` closes with `close()`, which no `windowShouldClose` refuses.
 
 #### `CommandPaletteView.swift`
 

@@ -74,7 +74,7 @@ Purpose: The write side of state persistence, as in wolf-gnome's [`state_seam.rs
 
 **Decisions**
 
-- A keep commits the tree read at its burst's first close, while a tabbed window's earlier tabs are live: its close button closes each tab in turn, so a later read keeps only the last.
+- A keep commits the tree read at its burst's first close, while its earlier tabs are live: the tabs that close in one turn close their windows in turn, so a later read keeps only the last.
 
 #### `StackingOrder.swift`
 

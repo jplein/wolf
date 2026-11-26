@@ -65,6 +65,16 @@ Wakes route through the core's `wakeToken`, looked up in `WindowRegistry`, becau
 
 A tab is focused while the app is active and the tab's window is main, by [`TabFocusSeam`](../crates/wolf-macos/Sources/WolfKeyMap/README.md#tabfocusseamswift). Each change reports a loss to the previous tab's Neovim and a gain to the next one's, and a gain fires `FocusGained`, whose `:checktime` reloads a file another tab saved. Main rather than key, because a picker panel takes key and cannot become main: key-based focus would report a loss and a gain around every picker use, and each gain also rescans the file tree.
 
+## Closing a tab asks its Neovim
+
+A user's close of a tab must not drop unsaved changes, and only the tab's own Neovim knows of them. The tab's close button closes the tab's `NSWindow` and calls nothing of Wolf's, so the check lives in `windowShouldClose(_:)`, decided by [`CloseTabSeam`](../crates/wolf-macos/Sources/WolfKeyMap/README.md#closetabseamswift), and Close Tab dispatches `performClose(_:)` to reach it. An unconfirmed close of a live tab answers no and asks the tab's Neovim through `request_close_tab`, which runs `:qa`'s check. The tab is raised first, so a background tab's E37 or E162 shows in its own toast.
+
+A drained `close_tab` is Neovim's own verdict, since Neovim sends it only once its check has passed or a `!` forced the quit. So the drain marks the close confirmed before it dispatches, and the window closes without asking again. The menu and the palette reach the same `CommandDispatcher` arm unconfirmed, so they ask, and each command keeps one implementation ([§6](../specs/command-lifecycle.md#6-dispatch--crateswolf-macossourceswolfmacoscommanddispatcherswift)).
+
+A dead or stalled Neovim, a tab with no core, or an ask with no answer within core's RPC timeout closes unchecked. A wedged tab must stay closable, and its swap files keep its edits recoverable ([§8](../specs/architecture.md#8-the-captive-neovim-is-hermetic-pinned-and-markdown-only)). A stalled Neovim is not asked at all, since a call has already outlasted the timeout and asking again would stall the UI for another.
+
+Close Window closes with `close()`, which no `windowShouldClose` refuses, and a close after the user has confirmed termination, `isTerminating`, is never refused either.
+
 ## State is a tree, and the front-end owns every write
 
 Each window's normal frame, its tabs with the selected one, whether it is minimized, and each tab's working directory, sidebar visibility, pane-split layout and [extras](#the-per-tab-extras) persist as the window state of [application-state.md](../specs/application-state.md), and restore at launch before the windows are shown. The coordinator walks its live windows and tabs and submits the whole tree through [`WindowStateCodec`](../crates/wolf-macos/Sources/WolfKeyMap/Persistence/README.md#windowstatecodecswift), and the store writes each open directory's project state in the same transaction. Core does not mirror the working directory into a store, and there is no per-window slot.
@@ -77,9 +87,11 @@ Every Alive core wake requests a commit, alongside the geometry, sidebar, cwd, t
 
 Two restored views never gather and go on contributing their seed. One whose rebuild failed shows a fallback pane rather than its saved split. One restored to the empty state because its saved folder was missing keeps that folder until the user opens another, so remounting a volume brings the session back.
 
-**Closing the last window is quitting, so it commits the tree with that window in it.** The app terminates after its last window closes, and a commit after the close would find no live view. The commit writes the tree as it stood at the first close of that runloop turn, because a tabbed window's close button closes each tab's window in turn, and by the last close the earlier tabs are torn down. So the closing window keeps all its tabs, and a close-all keeps every window.
+**Closing the last window is quitting, so it commits the tree with that window in it.** The app terminates after its last window closes, and a commit after the close would find no live view. The commit writes the tree as it stood at the first close of that runloop turn, because the tabs that close in one turn close their windows in turn, and by the last close the earlier tabs are torn down. Only tabs whose `windowShouldClose` answers yes at once close in one turn: confirmed ones, and those whose Neovim is not asked or gives no answer.
 
-A tab closed alone ends its close burst on the next turn, so it drops, and a later close of the last tab keeps only that tab. That AppKit closes a tab group's windows within one turn is a premise no automated test measures. Any other close commits without the closing view, and a close during termination commits nothing over the terminate commit. A walk with no live view or no window commits nothing at all, because it would erase the session.
+A tab whose Neovim is asked closes on its own drained `close_tab`, in a turn of its own. So when a tabbed window's red close button asks every tab, as AppKit does, the last window keeps only the tab that closed last, a present limitation until Close Window has its own path. A tab closed alone likewise ends its burst on the next turn, so it drops, and a later close of the last tab keeps only that tab. That AppKit closes a tab group's windows within one turn is a premise no automated test measures.
+
+Any other close commits without the closing view, and a close during termination commits nothing over the terminate commit. A walk with no live view or no window commits nothing at all, because it would erase the session.
 
 Saved tabs that no view took at launch, because their core failed to start, are never retried in that session. They are carried into every commit, under their window's saved frame, active tab and minimized flag, so the next launch tries them again.
 

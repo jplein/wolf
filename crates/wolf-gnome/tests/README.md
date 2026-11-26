@@ -304,6 +304,12 @@ The other files below cover what a seam cannot reach: a real Neovim, a real wind
 - A failing smoke keeps its runtime directory, with its captures and `cage.log`, and prints its path and the log's tail.
 - Spell checking is off in every smoke, so OCR reads glyphs not undercurls; see `seed_smoke_spell_override`.
 
+#### `smoke_headless/close_tab.rs`
+
+The Close Tab smoke, one launch restoring a planted window of two tabs, each on a file of the project, with the second tab modified. A click on the background second tab's close button must select it, keep both Neovims and leave E37 in its `:messages`, and Close Tab from the palette must refuse the same way. After `:w` it must close the tab, leaving the first, and on the last tab end the app. Every observable is a Neovim count, a readback a Neovim writes about itself or the app's exit, never OCR.
+
+The close button's x is `CT_CLOSE_BUTTON_INSET_PX` left of the output's right edge, derived from libadwaita's stylesheet rather than measured, and a background tab shows its button only while hovered. At the base commit the click's red is exit 183, and 184 or 185 means the click missed the button: fix the inset, not the code.
+
 #### `smoke_headless/compose.rs`
 
 Input-method smokes: composed text reaching Neovim, and a control chord typed while a compose sequence is pending.
@@ -542,6 +548,17 @@ Every observable is a Neovim readback of `winwidth` and `winheight` per recorded
 
 - Pure: no display, no Neovim and no compositor. Whether the window applies the answer, and applies it again as tabs open and close, is [`smoke_headless/titlebar_tabs.rs`](#smoke_headlesstitlebar_tabsrs)'s question.
 
+#### `tab_close.rs`
+
+**Covers**
+
+- `tabs_ui::close_page_now`'s table: a live tab is asked once and only `NoAnswer` closes it, while a dead, stalled or gone core and a confirmed close close without asking.
+- The `win.close-tab` row: `Command::CloseTab`, no accelerator or fold, `MenuOnly`, `action_for_command`'s answer, and the menu item directly before Close Window.
+
+**Gotchas**
+
+- Pure: no display, no Neovim and no compositor. Whether `on_close_page` passes the page's own confirmation, liveness and ask, and selects a background page first, is [`smoke_headless/close_tab.rs`](#smoke_headlessclose_tabrs)'s question.
+
 #### `tab_focus.rs`
 
 **Covers**
@@ -663,6 +680,8 @@ The third reaches past names to the fixture bodies an assertion's line, column o
 
 **Exit codes carry meaning, and folding two causes into one code destroys evidence.** A process that vanishes because the main loop panicked looks exactly like one that shut down cleanly, so "exited non-zero" gets its own code rather than joining "still alive"; likewise "the app died with its Neovim", "not exactly one live child", and "the killed child never left the process table" are each distinct.
 
+**A smoke closes a tab by its close button or a middle-click only once the tab is unmodified.** The close asks the tab's Neovim, which refuses while any of its buffers is modified, so `panes.rs`'s native-tabs smoke and `titlebar_tabs.rs`'s first smoke type `:set nomodified` in the closing tab first.
+
 **A message smoke may press no key after the one that produced the message.** Any `Key`, `Mouse` or `Scroll` is dismissing input for a non-prompt toast in `wolf_core`, and so are the drawer toggle, a focus move into a terminal pane and input to one, so a stray keystroke or chord between the command and the capture clears the surface the smoke exists to read. The completion popup has the same shape for a different reason: the next key closes it.
 
 **No scenario sends input before `wait_ready`.** The environment helper prepends one shell prelude to every scenario and sets `WOLF_READY_FILE`; after each launch the scenario calls `wait_ready "$app_pid" <died-code> "<label>"`, which primes the seat's keyboard with a key-free `wtype ""` and returns once the file holds that pid — the app writes it when its windows accept keystrokes ([wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md#the-readiness-file)). A dead app exits with the scenario's own died-early code, and a launch that never gets ready exits 40 after 30 s; the app's `wolf-ready:` stderr lines then name the condition it was stuck on.
@@ -724,6 +743,7 @@ The directory is a sibling of the working directory rather than a child, for the
 A smoke pins `native` through `main.rs`'s `titlebar_pinned_config_dir` when, with two tabs or more open, it clicks or reads the tab bar's row, or asserts a size or position that includes it, because `tabs` moves that row into the header bar. These pin it:
 
 - every `titlebar.rs` smoke, through `smoke_config_dir_at`'s style argument, since each also forces its `appearance`;
+- `close_tab.rs`'s `close_tab_asks_the_tabs_neovim_under_cage`;
 - `tab_bar.rs`'s `each_tab_is_titled_by_its_own_directory_under_cage`;
 - every `new_tab.rs` smoke, through `run_new_tab`;
 - `panes.rs`'s `native_tabs_open_switch_and_close_under_cage` and `a_file_saved_in_one_tab_reloads_in_another_on_switch_under_cage`;
@@ -896,7 +916,7 @@ Being scrupulous about this is the point of the section.
 
 Behavior this front-end has that is deliberately not smoked, with what covers it instead.
 
-- **The primary menu popover.** The keystroke injector cannot click a header-bar menu button, and keyboard-navigating to it is too fragile to be worth the flake. The action namespace's own tests cover every item referencing a declared, implemented, non-reserved action and every label matching the command registry. Ten of the menu's items have their action activated end to end by the accelerator smokes, and the smokes that type `:WolfCloseWindow` perform Close Window's action through the command drain rather than through the menu's own action. The two-window smoke reaches New Window's action through the palette and Quit's through Ctrl+Shift+Q, so the two `app.`-scoped rows are exercised by a route of their own.
+- **The primary menu popover.** The keystroke injector cannot click a header-bar menu button, and keyboard-navigating to it is too fragile to be worth the flake. The action namespace's own tests cover every item referencing a declared, implemented, non-reserved action and every label matching the command registry. Ten of the menu's items have their action activated end to end by the accelerator smokes, and the smokes that type `:WolfCloseWindow` perform Close Window's action through the command drain rather than through the menu's own action. The two-window smoke reaches New Window's action through the palette and Quit's through Ctrl+Shift+Q, so the two `app.`-scoped rows are exercised by a route of their own. No smoke reaches `win.close-tab`, though the palette runs its `UiAction`.
 - **The About dialog.** Its widget layer is covered by nothing, and cannot be: the row is reachable only from the primary menu popover, itself a gap above. What covers it instead is where the weight is — the dialog's text is asserted from the compiled artifact, against every bundled font's licence phrase and, in [`about_notices.rs`](#about_noticesrs), the seven libraries', all re-typed locally rather than imported, so the assertion is about what ships; the row's status is pinned by `actions.rs`, and its `UiAction` by `command_action.rs`.
 - **The header-bar buttons' click path**: no pointer smoke clicks Back or Forward. A header-bar button offers no probe click for Neovim to report back, so the honest alternatives are a theme-owned inset pinned as a second measured constant with nothing to cross-check it, or distorting the buttons to buy hit margin. What covers them instead: the two chord smokes drive the same `gio` actions end to end, and [`nav_ui.rs`](../src/README.md#nav_uirs)'s tables cover the sensitivity and per-pane rules.
 

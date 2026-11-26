@@ -8,7 +8,7 @@ A few read something else. [`PreviewKeyEquivalentTests.swift`](#previewkeyequiva
 bazel test //crates/wolf-macos:WolfMacOSTests
 ```
 
-[`PreviewMarginTests.swift`](#previewmargintestsswift) samples no pixels either: it reads a preview web view's frame, its recorded root style and AppKit's hit test. [`CloseTabDispatchTests.swift`](#closetabdispatchtestsswift) reads the close calls a dispatch makes on a window, with no core.
+[`PreviewMarginTests.swift`](#previewmargintestsswift) samples no pixels either: it reads a preview web view's frame, its recorded root style and AppKit's hit test. [`CloseTabDispatchTests.swift`](#closetabdispatchtestsswift) reads the close calls a dispatch makes on a window, with no core, and [`CloseTabMenuTests.swift`](#closetabmenutestsswift) the File menu's items.
 
 **Adding a file means editing `srcs`.** As for [`WolfKeyMapTests`](../WolfKeyMapTests/README.md), the target's `srcs` is a hand-maintained list, not a glob, so a file missing from it never compiles and never runs. Helpers such as `OffscreenRenderer.swift` are listed too.
 
@@ -182,6 +182,10 @@ Purpose: The vendored Lighthouse's expected colours, for the tests that render u
 
 **Covers** — `AppMenu.install(target:)` over a bare `AppDelegate`: the application menu carries Install and Uninstall `wolf` Command after About, side by side between separators, each targeting the delegate with its action. No item is fired; what the actions do is [`CommandInstallSeam`](../WolfKeyMapTests/README.md#commandinstallseamtestsswift)'s and a person check's.
 
+#### `CloseTabMenuTests.swift`
+
+**Covers** — `AppMenu.install(target:)` over a bare `AppDelegate`: the File menu carries Close Tab directly between Close and Close Window, targeting the delegate with `handleCommandMenuItem(_:)`, its tag decoding to `.closeTab`, and with no key equivalent. No item is fired; what the dispatch does is [`CloseTabDispatchTests`](#closetabdispatchtestsswift)'.
+
 #### `OtherPaneFlowTests.swift`
 
 **Covers** — Preview and Edit in Another Pane reusing the other pane, over a live core through `PaneContainerView.otherPaneTarget(prefer:)` and the bridge. With an editor beside a preview, previewing a second file binds into the existing preview pane and leaves the editor focused; with the preview repointed at a second file, Edit binds its source into the existing editor pane and focuses it. Both keep two panes, and the first press, from a lone pane, splits.
@@ -278,7 +282,7 @@ A `wolf --wait` popped into `Request(owning:)` exits `0` at `:q` in its pane.
 
 #### `CloseTabDispatchTests.swift`
 
-**Covers** — `CommandDispatcher.dispatch(.closeTab, …)`, the arm a drained `close_tab` reaches, closing its window once with `close()` and never calling `performClose(_:)`, so no `windowShouldClose` asks again after the quit's own check.
+**Covers** — `CommandDispatcher.dispatch`'s two close arms: `.closeTab` calling `performClose(_:)` alone, so `windowShouldClose` decides whether the tab's Neovim is asked, and `.closeWindow` calling `close()` alone, which no `windowShouldClose` refuses.
 
 **Decisions**
 
@@ -395,7 +399,7 @@ Purpose: Checks the toolbar's sidebar control in a production `MainWindow`, neve
 
 **Gotchas**
 
-- `WolfWindowController` cannot be built offscreen: its `build()` needs a started `TabCore`, and orders its window front. The tests enter at the `MainWindow` members it forwards to, so the forwarders and the `CommandDispatcher` arms but `.closeTab`'s are compile-verified only.
+- `WolfWindowController` cannot be built offscreen: its `build()` needs a started `TabCore`, and orders its window front. The tests enter at the `MainWindow` members it forwards to, so the forwarders and the `CommandDispatcher` arms but `.closeTab`'s and `.closeWindow`'s are compile-verified only.
 - A click is `selectedSegment` set, then `sendAction`, as a `.selectOne` click does.
 - Selection is read with `isSelected(forSegment:)`, because `selectedSegment` keeps its old value after a segment is deselected.
 - Search seeding and field focus touch private `SearchView` state, so they are manual-smoke.

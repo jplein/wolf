@@ -53,6 +53,21 @@ Purpose: Pure line-height and baseline math for the grid cell, split out of `Cel
 
 - `CellMetrics` supplies the line-height percentage from user config, so a config change moves both the cell height and the baseline together.
 
+#### `CloseTabSeam.swift`
+
+Purpose: Whether a tab's window closes at once or stays open while its Neovim is asked, the decision [`WolfWindowController`](../WolfMacOS/README.md#wolfwindowcontrollerswift)'s `windowShouldClose(_:)` makes. The same rule as wolf-gnome's [`tabs_ui::close_page_now`](../../../wolf-gnome/src/README.md#tabs_uirs).
+
+**Public API**
+
+- `CloseTabAnswer` — its raw values are `wolf-ffi`'s `mod close_tab_answer` discriminants, kept by hand since Swift cannot import that module; an unknown one decodes to `nil`.
+- `shouldClose(confirmed:liveness:ask:)` — `true` at once for a confirmed close or a Neovim that is not `.alive`. Otherwise `ask` runs once, and only `.noAnswer` closes.
+
+**Decisions**
+
+- `.closing` keeps the window open too: Neovim has notified `close_tab`, and the window closes on that command's drain, confirmed, as after a `:q`, not on the answer.
+- A dead or stalled Neovim, or one that gives no answer, closes unchecked, so a wedged tab stays closable ([why](../../../../notes/wolf-macos-decisions.md#closing-a-tab-asks-its-neovim)).
+- Neither `switch` has a `default`, so a new liveness or answer fails to compile until classified.
+
 #### `CmdlineSeam.swift`
 
 Purpose: Pure line-composition and caret-prefix math behind the macOS command-line overlay (`ext_cmdline`), taking scalar inputs only so it stays headlessly testable.

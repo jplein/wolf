@@ -43,6 +43,8 @@ Where the wolf-core suite panics without a real nvim, these tests skip loudly th
 
 `WolfCoreHandle::set_background(dark)` flipping the captive Neovim's global `&background`. Spawns a real Neovim: needs `WOLF_NVIM_BIN`, and the `:appearance` target stages the nvim runfiles and is tagged `no-sandbox`.
 
+`request_close_tab()` answers `2` and drains `close_tab` on an unmodified tab, `1` once the buffer is modified, and `0` after `shutdown()`, checked as literals, since the Swift `CloseTabAnswer` mirrors them by value.
+
 **Gotchas**
 
 - The bridge exposes no `&background` accessor. A case observes it indirectly, by setting `WolfCursor guibg` to a marker chosen by the live option and reading `FfiFrame::cursor_fill()` back.
@@ -135,8 +137,9 @@ The command channel and the Rust side's discriminant record: for every `wolf_cor
 
 **Gotchas**
 
-- Typing every command is safe only because each Ex face just `rpcnotify`s its id (`_G.wolf_setup_commands` in `runtime/nvim/init.lua`) and no front-end is present to act on a drain, so nothing closes, quits or splits. The editor-affecting halves are covered in their own files.
+- Typing every command is safe only because each Ex face just `rpcnotify`s its id, `close_tab`'s once its check passes (`_G.wolf_setup_commands` in `runtime/nvim/init.lua`), and no front-end is present to act on a drain, so nothing closes, quits or splits. The editor-affecting halves are covered in their own files.
 - Each step takes the first command drained rather than waiting for the expected kind, so a wrong discriminant fails at once instead of after `FLUSH_TIMEOUT`.
+- The edit before the `1` is typed, on the ordered input channel, while the request is a direct RPC, so the test waits for the edit in the frame before it asks. The marker text is built in Neovim from two halves, so the typed command line cannot satisfy that wait.
 
 #### `config.rs`
 

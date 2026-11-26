@@ -33,7 +33,7 @@ Everything below is re-exported from the crate root as `wolf_core::…`. The own
 | Tab IDs            | `TabId`, `WOLF_TAB_ID_ENV`                                                                                                                    |
 | Opening files      | `OpenTarget`, `project_directory`, `choose_pane`, `PaneChoice`, `PanePlacement`                                                               |
 | Open channel       | `OpenListener`, `OpenClient`, `OpenRequest`, `OpenReply`, `OpenWait`, `TakenRequest`, `OpenChannelError`, `open_socket_path`, `OPEN_SOCKET_*` |
-| Commands           | `Command`, `CommandSpec`, `COMMAND_SPECS`, `MenuGroup`                                                                                        |
+| Commands           | `Command`, `CommandSpec`, `COMMAND_SPECS`, `MenuGroup`, `CloseTabAnswer`                                                                      |
 | File picker        | `FileSearch`, `FileEntry`, `FileSearchReadGuard`, `rank_matches`, `MruStore`                                                                  |
 | Content search     | `SearchSession`, `SearchOptions`, `SearchMatch`, `project`, `context_window`                                                                  |
 | Buffer picker      | `rank_buffers`, `BufInfo`, `BufferRow`                                                                                                        |

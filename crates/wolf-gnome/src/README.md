@@ -1041,7 +1041,7 @@ Purpose: where the window's tab bar sits, in a row below the header bar or insid
 
 #### `tab_view.rs`
 
-Purpose: the GTK glue for native tabs, each owning its `WolfCore`, wake drain, restart state, [`pane_view.rs`](#pane_viewrs) and [`persistence.rs`](#persistencers) handle, carrying out [`tabs_ui.rs`](#tabs_uirs)'s decisions.
+Purpose: the GTK glue for native tabs, each owning its `WolfCore`, wake drain, restart state, [`pane_view.rs`](#pane_viewrs) and [`persistence.rs`](#persistencers) handle.
 
 **Public API**
 
@@ -1056,7 +1056,7 @@ Purpose: the GTK glue for native tabs, each owning its `WolfCore`, wake drain, r
 
 - A tab's wake channel exists before its core starts, so the startup flush's wake is queued. The core's [tab ID](../../../specs/cli-and-file-open.md#3-tab-ids) is set first, so no terminal session lacks it.
 - Window-level widgets take a `CoreSource`, never a cell, stale after a switch, and try `drawer_opener`'s `FileOpener` before `InputEvent::Open`, which would edit in an active drawer ([why](../README.md#entry-point)).
-- `close-page` is a veto: every arm answers `close_page_finish` and returns `Propagation::Stop`, or the page stays. Closing the last page closes the window, so `replace` opens first, keeping `old` on failure.
+- `close-page` is a veto: every arm answers `close_page_finish` and returns `Propagation::Stop`, or the page stays, and it asks first ([why](../../../notes/wolf-gnome-decisions.md#closing-a-tab-asks-its-neovim)). Closing the last page closes the window, so `replace` opens first, keeping `old` on failure.
 - Handlers and drains hold only `Weak`s, or leak every tab's pane view.
 - A tab is titled from its own Neovim's `live_cwd`, never the shell's read ([why](../../../notes/wolf-gnome-decisions.md#threading-and-the-wake)).
 
@@ -1071,6 +1071,7 @@ Purpose: the pure, widget-free rulebook for a window's native tabs: what closing
 **Public API**
 
 - `close_outcome(live_pages) -> TabClose` — `CloseTab` or `CloseWindow`; `live_pages` counts the page being closed.
+- `close_page_now(confirmed, liveness, ask) -> bool` — whether the veto closes at once; `None` is no core ([rule](../../../notes/wolf-gnome-decisions.md#closing-a-tab-asks-its-neovim)).
 - `tab_label(empty, cwd, home) -> TabLabel` — the title is `title::window_title` of `cwd`, so the selected tab's equals its window's. An empty tab, or one whose cwd is not yet reported, is titled `title::WINDOW_TITLE_FALLBACK` with no tooltip, so libadwaita shows the title. Otherwise the tooltip is `cwd` in full, as Pango markup.
 - `TabId`, `FocusEdge`, `focused_tab(window_active, selected)` and `focus_edges(previous, next)` — the focus trigger.
 

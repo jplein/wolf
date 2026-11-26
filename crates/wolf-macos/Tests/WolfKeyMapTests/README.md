@@ -34,6 +34,13 @@ Note that the nearby `swift_format_srcs` glob feeds lint and format only, not te
 
 - This is the only headless slice of the cell-metrics work — font registration and CTFont family resolution need a live font and stay manual-smoke, so a new case must be expressible as plain `Double` inputs, with an exact-valued result to assert against the tight `eps`.
 
+#### `CloseTabSeamTests.swift`
+
+**Covers**
+
+- `CloseTabSeam.shouldClose`, table-driven over a modified, an unmodified and an unanswered live tab, a dead and a stalled Neovim, and a confirmed close: each row's answer and how many times the `ask` closure runs, which is never for a confirmed close or a Neovim that is not `.alive`.
+- `CloseTabAnswer`'s raw values `0`, `1` and `2` against `mod close_tab_answer`, and `3` decoding to `nil`.
+
 #### `CmdlineSeamTests.swift`
 
 **Covers**

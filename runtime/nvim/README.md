@@ -54,7 +54,7 @@ Rebinds Neovim's window chords and the `:split`/`:close`/`:quit` Ex-command fami
 - `{ action = "focus_dir", dir = "left"|"right"|"up"|"down", from }` — a pure intent. nvim does not move focus.
 - `{ action = "drawer_open", win }` — emitted by `wolf_toggle_terminal` through the exposed `_G.wolf_emit_drawer`.
 
-It also notifies **`wolf_active_win`** with `nvim_get_current_win()` on `WinEnter`, and **`wolf_command`** with `close_tab` when a quit closes the tab ([which quits](#decisions)). The tab's last pane is its tabpage's last window but the drawer, which no pane tree holds. Closing a pane emits no intent: the shell observes the `win_close` redraw event. Exposes `_G.wolf_do_split`, `wolf_do_close`, `wolf_do_quit`, `wolf_do_focus`, and `wolf_emit_drawer`, which the `cnoreabbrev` overrides invoke from the command line.
+It also notifies **`wolf_active_win`** with `nvim_get_current_win()` on `WinEnter`, and **`wolf_command`** with `close_tab` when a quit closes the tab ([which quits](#decisions)). The tab's last pane is its tabpage's last window but the drawer, which no pane tree holds. Closing a pane emits no intent: the shell observes the `win_close` redraw event. Exposes `_G.wolf_do_split`, `wolf_do_close`, `wolf_do_quit`, `wolf_do_focus`, `wolf_emit_drawer` and [`wolf_close_tab`](#wolf_close_tab).
 
 `_G.wolf_split_pane(orient)` is the split commands' entry. In a terminal placeholder it notifies **`wolf_terminal_split`** with the session id and `orient`, because core starts the new session; anywhere else it is `wolf_do_split`.
 
@@ -79,6 +79,8 @@ Groups are read with `link = false`, so a linked group resolves to its target's 
 Registers both user-facing faces of every Wolf command. `commands` is a list of `{ id, ex_command }` pairs core builds from `COMMAND_SPECS` in [`command.rs`](../../crates/wolf-core/src/command.rs), for example `{"close_window", "WolfCloseWindow"}`.
 
 For each pair the helper seeds `package.loaded["wolf"][id]` and creates a `:<ex_command>` user command (`nargs = 0`, `force = true`). Both faces notify **`wolf_command`** with the canonical id, which core resolves through `Command::from_id` onto a drainable queue; an unknown id is dropped. Commands are user-triggered only: no autocmd, no emit on attach.
+
+`close_tab`'s two faces run [`wolf_close_tab`](#wolf_close_tab) instead, so they notify only once the tab's check passes. It is looked up when the face runs, so this helper may run before `wolf_setup_layout`.
 
 #### `wolf_setup_tabs(chan)`
 
@@ -164,13 +166,17 @@ It shares one local function with `wolf_rebuild_layout`'s edit leaves, so their 
 
 Resolves the stable handle to its current tabpage number and runs `<n>tabclose` under `pcall`. Tabpage numbers renumber as tabs open and close, which is why the handle cannot be used directly. A stale handle, or the last-tabpage error, degrades to a no-op — the front-end never closes the last view, it shuts the whole nvim down instead.
 
+#### `wolf_close_tab()`
+
+Close Tab's check, which is `:qa`'s: it runs `do_quit` with `all = true` and no force. It returns `true` once it has ended the tab's waits and notified `close_tab`, and `false` when [`wolf_refuse_unsaved`](#wolf_refuse_unsaved) refused with E37 or E162. Core's caller is `WolfCore::request_close_tab`, which a front-end runs before a user's close of the tab. Defined by `wolf_setup_layout`, as a closure over its channel.
+
 #### `wolf_tab_cwd(handle)`
 
 Returns the tab-local working directory of the tabpage named by its stable handle, or `""` for a stale handle. No core caller: `cwd_for_tabpage` reads the `wolf_tab_cwds` snapshot map instead, because a per-tab blocking RPC turned a wedged nvim into a sequence of timeouts.
 
 #### `wolf_refuse_unsaved()`
 
-Whether closing the tab must be refused for unsaved changes. At the first modified buffer of this Neovim, which is the tab's ([§8](../../specs/application-state.md#8-one-neovim-per-tab)), it echoes Vim's refusal as an `ErrorMsg` and returns `true`; with none it echoes nothing and returns `false`. `do_quit` calls it unless forced, and no core caller exists.
+Whether closing the tab must be refused for unsaved changes. At the first modified buffer of this Neovim, which is the tab's ([§8](../../specs/application-state.md#8-one-neovim-per-tab)), it echoes Vim's refusal as an `ErrorMsg` and returns `true`; with none it echoes nothing and returns `false`. `do_quit` calls it unless forced, and core reaches it through [`wolf_close_tab`](#wolf_close_tab).
 
 The search runs over the current buffer, then the current tabpage's windows, then every buffer, which is the order of Neovim's `check_changed_any`. The current buffer gives `E37: No write since last change (add ! to override)`, and any other `E162: No write since last change for buffer "<name>"`. `<name>` is the one Vim gives: `[Quickfix List]` or `[Location List]` for a quickfix buffer, else the buffer's name, else `[Prompt]`, `[Scratch]` for an `acwrite` buffer, or `[No Name]`. Unlike native `:qa`, it does not show the refused buffer, because a refusal changes nothing.
 

@@ -100,6 +100,14 @@ The trailing edge is undroppable, and the cases that could drop it are answered 
 - A tab switched away mid-burst keeps its armed fire, which renders against that tab's own Neovim, so the render cannot land in another tab's document.
 - A closing window is covered twice over: the armed closure holds a `Weak`, and the close handler's `core.borrow_mut().take()` leaves `may_render(None)` false — which is why that gate takes an `Option`.
 
+## Closing a tab asks its Neovim
+
+A user's close of a tab must not drop unsaved changes, and only the tab's own Neovim knows of them. So the `close-page` veto asks [`tabs_ui::close_page_now`](../crates/wolf-gnome/src/README.md#tabs_uirs) before it answers, and an unconfirmed close of a live tab refuses the page and asks through `WolfCore::request_close_tab`, which runs `:qa`'s check. The veto selects the page first: commands drain from the selected tab only, so a background tab's `close_tab` could not drain otherwise, and its E37 or E162 must show. `Closing` keeps the page too, since the tab closes on its drained `close_tab`.
+
+A drained `close_tab` is Neovim's own verdict, sent only once its check passed or a `!` forced the quit, so the drain confirms the tab's close before it dispatches and the veto does not ask again. The palette and the menu reach the same `UiAction::CloseTab` unconfirmed, so they ask, and `dispatch_command` stays a single funnel. `TabsHandle::replace` confirms the tab it replaces, since a replacement is not a user's close.
+
+A dead, stalled or gone core, or an ask with no answer within core's RPC timeout, closes unchecked. A wedged tab must stay closable, and its swap files keep its edits recoverable. A stalled core is not asked at all, since a call has already outlasted the timeout and asking again would stall the UI for another.
+
 ## The coordinator and its windows
 
 Eight things are process-scoped, each because a second copy would be wrong rather than wasteful: the one `AppStateStore`, the window stacking order, the config read, the `CellMetrics`, the `app.` actions, the launch plans, the readiness probe and the open channel's listener. [The coordinator and its windows](wolf-gnome/the-coordinator-and-its-windows.md) gives each reason, why restore is positional, why it maps the windows backmost first, each after the one behind it, and how a request from outside Wolf is routed.

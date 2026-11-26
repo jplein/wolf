@@ -173,6 +173,7 @@ The app's side of the [`wolf` command's channel](../../../specs/cli-and-file-ope
 ### Commands and the command palette
 
 - `drain_commands(&self) -> Vec<FfiCommand>` — User-triggered `:Wolf…` Ex-commands and `require('wolf')` Lua calls, in arrival order.
+- `request_close_tab(&self) -> u8` — `mod close_tab_answer`: Close Tab's check in the tab's Neovim, through [`WolfCore::request_close_tab`](../../wolf-core/src/README.md#apirs). It blocks up to the RPC timeout, so a front-end asks only an `ALIVE` core. `CLOSING` means the tab closes on its drained `close_tab`, and `NO_ANSWER`, which a shut-down core also gives, means the caller closes the tab unchecked.
 - `FfiCommand::kind() -> u8` — `mod command_kind`. The packing match is exhaustive, so a new `wolf_core::Command` variant is a compile error here.
 - `wolf_ffi_command_count() -> u8` — A free function, no session needed: `wolf_core::COMMAND_SPECS.len()`, one past the highest `command_kind`. Panics should the registry outgrow a `u8`, which the discriminants could not carry either.
 - `wolf_ffi_command_kind(id: String) -> u8` — A free function, no session needed: the `command_kind` the command with registry id `id` drains as, or `u8::MAX` for an unknown id. The app calls neither function. They exist for the tests: `CommandSeamTests` checks Swift's decode against the registry through both, and the Rust tests read a kind by id rather than hand-typing it.
@@ -308,6 +309,7 @@ These `u8` values are the ABI: Swift decodes raw integers, so the numbers are co
 | `mouse_action`          | `wolf_core::MouseAction`                           | `PRESS` 0, `RELEASE` 1, `DRAG` 2                                                                                                                                          |
 | `scroll_dir`            | `wolf_core::ScrollDirection`                       | `UP` 0, `DOWN` 1, `LEFT` 2, `RIGHT` 3                                                                                                                                     |
 | `liveness`              | `wolf_core::Liveness`                              | `ALIVE` 0, `NOT_RESPONDING` 1, `DEAD` 2                                                                                                                                   |
+| `close_tab_answer`      | `wolf_core::CloseTabAnswer`                        | `NO_ANSWER` 0, `REFUSED` 1, `CLOSING` 2                                                                                                                                   |
 | `palette_row_kind`      | `wolf_core::PaletteRowKind`                        | `STATIC` 0, `SWITCH_WINDOW` 1, `OPEN_RECENT` 2                                                                                                                            |
 | `terminal_target`       | `wolf_core::TerminalTarget`                        | `WINDOW` 0, `SPLIT_HORIZONTAL` 1, `SPLIT_VERTICAL` 2                                                                                                                      |
 | `terminal_mouse_kind`   | `wolf_core::TerminalMouseKind`                     | `PRESS` 0, `RELEASE` 1, `MOTION` 2                                                                                                                                        |
@@ -362,7 +364,7 @@ These `u8` values are the ABI: Swift decodes raw integers, so the numbers are co
 | 28    | `SPLIT_HORIZONTAL`      | Split the active pane into two stacked panes, as `:split`.                                      |
 | 29    | `SPLIT_VERTICAL`        | Split the active pane into two side-by-side panes, as `:vsplit`.                                |
 | 30    | `ZOOM_PANE`             | Toggle the active pane between zoomed, over the whole pane area, and not; a native-only action. |
-| 31    | `CLOSE_TAB`             | Close the tab that queued it, and its window on its last tab.                                   |
+| 31    | `CLOSE_TAB`             | Close the tab, and its window on its last tab, once the tab's Neovim finds nothing unsaved.     |
 
 #### `bin/gen_bindings.rs`
 
