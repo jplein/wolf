@@ -396,7 +396,7 @@ The preview's content-width smoke, read from raw pixels and the frozen window st
 
 #### `smoke_headless/preview_render.rs`
 
-Preview rendering smokes read from raw pixels: fenced-code highlighting, the inline-code baseline grid, and the file picker drawn over a live preview, with guards on the thresholds those pixel readings use.
+Preview rendering smokes read from raw pixels: fenced-code highlighting, the baseline grid under inline code and the baseline below h3, h4 and h6 headings, and the file picker drawn over a live preview, with guards on the thresholds those pixel readings use.
 
 #### `smoke_headless/recovery.rs`
 
