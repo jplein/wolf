@@ -77,6 +77,9 @@ public enum CommandKind: CaseIterable {
   /// Toggle the active pane, the drawer included, between zoomed over the whole pane area
   /// and not; front-end geometry that never reaches Neovim.
   case zoomPane
+  /// Close the tab that queued it, and its window when that is the window's only tab: what
+  /// the `:q` and `:qa` families send.
+  case closeTab
 
   /// Maps an FFI command-kind discriminant to its case, or `nil` for any value no case
   /// holds, guarding the contract shared with `wolf-ffi`'s `mod command_kind`.
@@ -113,6 +116,7 @@ public enum CommandKind: CaseIterable {
     case 28: self = .splitHorizontal
     case 29: self = .splitVertical
     case 30: self = .zoomPane
+    case 31: self = .closeTab
     default: return nil
     }
   }

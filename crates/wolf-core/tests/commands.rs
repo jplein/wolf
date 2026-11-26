@@ -39,7 +39,7 @@ use wolf_core::{Command, Key, Liveness, MenuGroup, WolfCore, COMMAND_SPECS};
 const GLOBAL_GRID: u64 = 1;
 
 /// How long to let a (non-)event settle before asserting that something did NOT
-/// happen — long enough that a stray `close_window` command would have arrived if
+/// happen — long enough that a stray `close_tab` command would have arrived if
 /// it were going to. Generous on purpose so the negative "refused close" assertion
 /// cannot pass by mere luck of timing. Mirrors `layout_intents.rs`'s `SETTLE`.
 const SETTLE: Duration = Duration::from_secs(1);
@@ -193,13 +193,143 @@ fn ex_and_lua_faces_emit_commands() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
-/// Typing `:q<CR>` on the SOLE (unmodified) pane routes through the `WolfQuit`
-/// user command's `do_quit`, whose last-pane branch fires the existing
-/// `close_window` registry command over RPC. A freshly attached core has no queued
-/// commands (no emit-on-attach), so the drained `Command::CloseWindow` can only be
-/// the one `:q` produced.
+/// The second file's contents in the tests that hide a modified buffer behind the first.
+const SECOND_DOC: &str = "# Second\nother body\n";
+
+/// Text typed into the second file before it is hidden, absent from both files.
+const HIDDEN_MARKER: &str = "wolfhiddenmarker";
+
+/// Text typed into the first file in the tests that also modify a hidden second one.
+const FIRST_MARKER: &str = "wolffirstmarker";
+
+/// Vim's refusal of a quit that would lose the current buffer's changes.
+const E37: &str = "E37: No write since last change (add ! to override)";
+
+/// How long the sweep of every quit form waits, after a form's `CloseTab`, for a second
+/// notification the same quit sent.
+const SWEEP_SETTLE: Duration = Duration::from_millis(300);
+
+/// Vim's refusal of a quit that would lose the changes of another buffer, the one Vim names
+/// `name`.
+fn e162(name: &str) -> String {
+    format!("E162: No write since last change for buffer \"{name}\"")
+}
+
+/// Evaluates `exprs` in Neovim, behind every input sent before. Its typed command clears the
+/// toast, so a test reads the toast before it probes.
+fn probe(core: &WolfCore, exprs: &[&str]) -> Vec<String> {
+    let dir = tempfile::tempdir().expect("failed to create the probe dir");
+    probe_values(core, exprs, &dir.path().join("probe.txt"))
+}
+
+/// The toast's lines, each its chunks joined, joined with newlines.
+fn toast_text(core: &WolfCore) -> String {
+    core.read_snapshot()
+        .toast
+        .lines()
+        .iter()
+        .map(|line| line.iter().map(|chunk| chunk.text.as_str()).collect())
+        .collect::<Vec<String>>()
+        .join("\n")
+}
+
+/// Waits for the toast to show `want` after the quit `what`, then drains commands for
+/// [`SETTLE`]. Returns the toast's text and every command drained since the quit was typed.
+fn refused(
+    core: &WolfCore,
+    waiter: &FlushWaiter,
+    what: &str,
+    want: &str,
+) -> (String, Vec<Command>) {
+    let toast = poll_until(
+        waiter,
+        &format!(
+            "the toast to show {want:?} after {what}; another message means the refusal named \
+             the wrong buffer, and none means the quit was not refused"
+        ),
+        || toast_text(core),
+        |text| text.contains(want),
+    );
+    let mut drained = core.drain_commands();
+    let deadline = Instant::now() + SETTLE;
+    while Instant::now() < deadline {
+        drained.extend(core.drain_commands());
+        waiter.drain();
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    (toast, drained)
+}
+
+/// Drains the first batch of commands after the quit `what` and asserts it holds
+/// `Command::CloseTab`.
+fn expect_close_tab(core: &WolfCore, what: &str) {
+    let commands = drain_until_command(
+        core,
+        FLUSH_TIMEOUT,
+        &format!(
+            "CloseTab from {what}; a timeout means the quit was refused, closed a pane, or \
+             notified nothing"
+        ),
+    );
+    assert!(
+        commands.contains(&Command::CloseTab),
+        "{what} must enqueue Command::CloseTab; got {commands:?}. CloseWindow alone means the \
+         quit still asks for the whole window rather than the tab."
+    );
+}
+
+/// Inserts `text` at the cursor, returns to normal mode and waits for the edit's flush.
+fn insert_text(core: &WolfCore, waiter: &FlushWaiter, text: &str) {
+    core.send_input(ch('i'));
+    type_str(core, text);
+    core.send_input(key(Key::Esc));
+    waiter.wait_for_flush(core, FLUSH_TIMEOUT);
+}
+
+/// Edits a new second file, types [`HIDDEN_MARKER`] into it, then edits `first` again, which
+/// leaves the second buffer modified and in no window. Returns the second file, kept alive,
+/// and its `bufname()`.
+fn hide_a_modified_second_file(
+    core: &WolfCore,
+    waiter: &FlushWaiter,
+    first: &std::path::Path,
+) -> (tempfile::NamedTempFile, String) {
+    let second = common::temp_md(SECOND_DOC);
+    let first_buf = probe(core, &["bufnr()"]).remove(0);
+    ex_command(core, &format!("e {}", second.path().display()));
+    insert_text(core, waiter, HIDDEN_MARKER);
+    let shown = probe(core, &["bufnr()", "bufname('%')", "&modified"]);
+    assert!(
+        shown[0] != first_buf && shown[2] == "1",
+        "premise: `:e` of the second file must make a buffer other than the first file's \
+         ({first_buf}) current, and the typed marker must leave it modified; (bufnr, bufname, \
+         &modified) reads {shown:?}"
+    );
+    ex_command(core, &format!("e {}", first.display()));
+    let second_modified = format!("getbufvar({}, '&modified')", shown[0]);
+    let second_win = format!("bufwinnr({})", shown[0]);
+    let back = probe(
+        core,
+        &["bufnr()", second_modified.as_str(), second_win.as_str()],
+    );
+    assert_eq!(
+        back,
+        [first_buf.clone(), "1".to_owned(), "-1".to_owned()],
+        "premise: `:e` of the first file must make buffer {first_buf} current again and leave \
+         the second, buffer {}, modified and in no window: (bufnr, its &modified, its \
+         bufwinnr). The second buffer still current means `:e` was refused with E37, because \
+         'hidden' is off.",
+        shown[0]
+    );
+    (second, shown[1].clone())
+}
+
+/// Typing `:q<CR>` on the SOLE (unmodified) pane routes through the `WolfQuit` user command's
+/// `do_quit`, whose last-pane branch notifies `close_tab`. A freshly attached core has no
+/// queued commands (no emit-on-attach), so the drained `Command::CloseTab` can only be the one
+/// `:q` produced.
 #[test]
-fn ex_q_on_last_pane_emits_close_window() {
+fn ex_q_on_last_pane_emits_close_tab() {
     let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
     wait_for_initial_window(&core, &waiter);
 
@@ -209,151 +339,162 @@ fn ex_q_on_last_pane_emits_close_window() {
         "a freshly attached core must have NO queued commands before :q"
     );
 
-    // `:q` on the sole unmodified pane -> last-pane branch -> close_window.
     ex_command(&core, "q");
-    let commands =
-        drain_until_command(&core, FLUSH_TIMEOUT, "CloseWindow from :q on the last pane");
-    assert!(
-        commands.contains(&Command::CloseWindow),
-        ":q on the sole (unmodified) pane must enqueue Command::CloseWindow; got {commands:?}"
-    );
+    expect_close_tab(&core, ":q on the sole (unmodified) pane");
 
     core.shutdown().expect("shutdown should be Ok");
 }
 
-/// `:q!` on a MODIFIED sole pane must still fire `close_window`: the trailing `!`
-/// rides through the bare-`q` abbrev to `:WolfQuit!`, whose callback sees
-/// `o.bang == true` and passes `force = true`, overriding the modified-buffer
-/// guard. This exercises the FRAGILE bang path.
+/// A plain `:q` on the last pane is refused while a buffer no window shows is modified: the
+/// check covers the whole tab's Neovim, and names that buffer with E162 rather than E37.
 #[test]
-fn ex_q_bang_forces_close_window_when_modified() {
+fn ex_q_refuses_hidden_modified_buffer_with_e162() {
     let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
     wait_for_initial_window(&core, &waiter);
 
-    // Modify the buffer so a plain `:q` would be refused; only the bang closes.
-    core.send_input(ch('i'));
-    core.send_input(ch('x'));
-    core.send_input(key(Key::Esc));
-    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
-
-    // Discard anything queued during setup so we observe only `:q!`'s effect.
+    insert_text(&core, &waiter, "x");
+    let file = probe(&core, &["bufnr()", "bufname('%')"]);
+    ex_command(&core, "enew");
+    let file_modified = format!("getbufvar({}, '&modified')", file[0]);
+    let premise = probe(
+        &core,
+        &["bufname('%')", "&modified", file_modified.as_str()],
+    );
+    assert_eq!(
+        premise,
+        ["", "0", "1"],
+        "premise: `:enew` must show a new unnamed, unmodified buffer and leave the file's \
+         buffer {} modified: (bufname, &modified, the file's &modified). The file still current \
+         means `:enew` was refused with E37, because 'hidden' is off.",
+        file[0]
+    );
+    // Discard anything queued during setup so we observe only `:q`'s (non-)effect.
     let _ = core.drain_commands();
 
-    // `:q!` -> WolfQuit! -> force = true -> last-pane branch fires close_window.
-    ex_command(&core, "q!");
-    let commands = drain_until_command(
-        &core,
-        FLUSH_TIMEOUT,
-        "CloseWindow from :q! on a modified last pane",
+    ex_command(&core, "q");
+    let (toast, drained) = refused(&core, &waiter, ":q", &e162(&file[1]));
+    assert!(
+        !toast.contains("E37"),
+        "the refusal must name the hidden buffer with E162 alone; the toast reads {toast:?}, so \
+         E37 was echoed as well"
     );
     assert!(
-        commands.contains(&Command::CloseWindow),
-        ":q! on a modified last pane must force Command::CloseWindow (bang reached the \
-         callback and overrode the modified-buffer guard); got {commands:?}"
+        drained.is_empty(),
+        "a refused :q must notify nothing; got {drained:?}. CloseTab means the check looked at \
+         the current buffer only; CloseWindow means the quit still closes the window."
     );
 
     core.shutdown().expect("shutdown should be Ok");
 }
 
-/// `:wq` on the sole pane writes the buffer to disk FIRST (so the distinctive
-/// inserted text lands in the file) and THEN, the buffer no longer modified, fires
-/// `close_window`. Proves the write side of the write-quit family and that the
-/// last-pane branch still closes the front-end window afterward.
+/// A plain `:q` on a MODIFIED last pane is refused with E37 (native `:q` parity) and notifies
+/// nothing, so no tab is torn out from under unsaved edits.
 #[test]
-fn ex_wq_writes_to_disk_and_closes_window() {
+fn ex_q_refuses_modified_current_buffer_with_e37() {
+    let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
+    wait_for_initial_window(&core, &waiter);
+
+    insert_text(&core, &waiter, "x");
+    // Discard anything queued during setup so we observe only `:q`'s (non-)effect.
+    let _ = core.drain_commands();
+
+    ex_command(&core, "q");
+    let (toast, drained) = refused(&core, &waiter, ":q", E37);
+    assert!(
+        !toast.contains("E162"),
+        "a refusal for the current buffer must be E37 alone; the toast reads {toast:?}, so the \
+         current buffer was reported as another buffer"
+    );
+    assert!(
+        drained.is_empty(),
+        "a plain :q on a MODIFIED last pane must be refused and notify nothing; got {drained:?}"
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// `:q!` on a last pane whose buffer is MODIFIED, beside a hidden modified buffer, still
+/// notifies `close_tab`: the trailing `!` rides through the bare-`q` abbrev to `:WolfQuit!`,
+/// whose callback passes `force = true`, which skips the whole tab's check.
+#[test]
+fn ex_q_bang_forces_close_tab_when_modified() {
+    let (core, waiter, file) = common::start_core_with_temp_md(DOC);
+    wait_for_initial_window(&core, &waiter);
+
+    let (_second, _) = hide_a_modified_second_file(&core, &waiter, file.path());
+    insert_text(&core, &waiter, FIRST_MARKER);
+    assert_eq!(
+        probe(&core, &["&modified"]),
+        ["1"],
+        "premise: the typed marker must leave the current buffer modified"
+    );
+    // Discard anything queued during setup so we observe only `:q!`'s effect.
+    let _ = core.drain_commands();
+
+    ex_command(&core, "q!");
+    expect_close_tab(
+        &core,
+        ":q! on a modified last pane beside a hidden modified buffer (the bang must reach the \
+         callback and skip the check)",
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// `:wq` on the sole pane writes the buffer to disk FIRST (so the distinctive inserted text
+/// lands in the file) and THEN, the buffer no longer modified, notifies `close_tab`.
+#[test]
+fn ex_wq_writes_to_disk_and_closes_tab() {
     let (core, waiter, file) = common::start_core_with_temp_md(DOC);
     let path = file.path().to_path_buf();
     wait_for_initial_window(&core, &waiter);
 
-    // Insert distinctive text so we can prove the edited buffer reached disk.
-    core.send_input(ch('i'));
-    for c in WQ_MARKER.chars() {
-        core.send_input(ch(c));
-    }
-    core.send_input(key(Key::Esc));
-    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
-
+    insert_text(&core, &waiter, WQ_MARKER);
     // Discard anything queued during setup so we observe only `:wq`'s command.
     let _ = core.drain_commands();
 
-    // `:wq` -> WolfWriteQuit -> write then last-pane close_window.
     ex_command(&core, "wq");
-
-    // The write is async over RPC: poll the file until the inserted text appears.
-    let deadline = Instant::now() + FLUSH_TIMEOUT;
-    loop {
-        if let Ok(contents) = std::fs::read_to_string(&path) {
-            if contents.contains(WQ_MARKER) {
-                break;
-            }
-        }
-        if Instant::now() >= deadline {
-            panic!(
-                "timed out after {FLUSH_TIMEOUT:?} waiting for :wq to write {WQ_MARKER:?} to disk"
-            );
-        }
-        std::thread::sleep(POLL_INTERVAL);
-    }
-
-    // The write completed; the last-pane branch must then fire close_window.
-    let commands = drain_until_command(
-        &core,
-        FLUSH_TIMEOUT,
-        "CloseWindow from :wq on the last pane",
-    );
-    assert!(
-        commands.contains(&Command::CloseWindow),
-        ":wq must close the front-end window after writing; got {commands:?}"
-    );
+    wait_for_file_to_hold(&path, WQ_MARKER, ":wq");
+    expect_close_tab(&core, ":wq on the last pane, after writing");
 
     core.shutdown().expect("shutdown should be Ok");
 }
 
-/// A plain `:q` on a MODIFIED last pane must be REFUSED (native `:q` parity): the
-/// unsaved-changes guard surfaces an error and returns WITHOUT firing
-/// `close_window`, so no window is torn out from under unsaved edits. Mirrors the
-/// negative style of `ctrl_w_c_noop_on_last_window`.
+/// `:wq` writes the current buffer, then runs the same check as `:q`: a hidden buffer still
+/// modified refuses the close with E162 naming it.
 #[test]
-fn ex_q_refuses_modified_last_pane() {
-    let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
+fn ex_wq_writes_then_refuses_a_hidden_modified_buffer() {
+    let (core, waiter, file) = common::start_core_with_temp_md(DOC);
+    let path = file.path().to_path_buf();
     wait_for_initial_window(&core, &waiter);
 
-    // Modify the buffer so the unsaved-changes guard should trip.
-    core.send_input(ch('i'));
-    core.send_input(ch('x'));
-    core.send_input(key(Key::Esc));
-    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
-
-    // Discard anything queued during setup so we observe only `:q`'s (non-)effect.
+    let (_second, second_name) = hide_a_modified_second_file(&core, &waiter, &path);
+    insert_text(&core, &waiter, FIRST_MARKER);
+    // Discard anything queued during setup so we observe only `:wq`'s (non-)effect.
     let _ = core.drain_commands();
 
-    // Plain `:q` (no bang) on the modified last pane: must NOT close.
-    ex_command(&core, "q");
-
-    // Let any (erroneous) command settle, accumulating drained commands (draining
-    // is what wakes the queue side), then assert none was a close_window.
-    let mut drained: Vec<Command> = Vec::new();
-    let settle_deadline = Instant::now() + SETTLE;
-    while Instant::now() < settle_deadline {
-        drained.extend(core.drain_commands());
-        std::thread::sleep(POLL_INTERVAL);
-    }
+    ex_command(&core, "wq");
+    wait_for_file_to_hold(&path, FIRST_MARKER, ":wq on the current buffer");
+    let (toast, drained) = refused(&core, &waiter, ":wq", &e162(&second_name));
     assert!(
-        !drained.contains(&Command::CloseWindow),
-        "a plain :q on a MODIFIED last pane must be refused (no close_window); got {drained:?}"
+        !toast.contains("E37"),
+        "the current buffer was written, so the refusal must be E162 alone; the toast reads \
+         {toast:?}"
+    );
+    assert!(
+        drained.is_empty(),
+        "a :wq that leaves a hidden buffer modified must notify nothing; got {drained:?}. \
+         CloseTab means the check is skipped after a write."
     );
 
     core.shutdown().expect("shutdown should be Ok");
 }
 
-/// Typing `:qa<CR>` on the SOLE (unmodified) pane routes through the
-/// `WolfQuitAll` user command's `do_quit({ all = true })`, which always takes the
-/// close-window branch and fires the existing `close_window` registry command over
-/// RPC. In the single-pane case `:qa` is identical to `:q`. A freshly attached
-/// core has no queued commands (no emit-on-attach), so the drained
-/// `Command::CloseWindow` can only be the one `:qa` produced.
+/// Typing `:qa<CR>` on the SOLE (unmodified) pane routes through the `WolfQuitAll` user
+/// command's `do_quit({ all = true })`, which notifies `close_tab`. In the single-pane case
+/// `:qa` is identical to `:q`.
 #[test]
-fn ex_qa_on_last_pane_emits_close_window() {
+fn ex_qa_on_last_pane_emits_close_tab() {
     let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
     wait_for_initial_window(&core, &waiter);
 
@@ -363,162 +504,180 @@ fn ex_qa_on_last_pane_emits_close_window() {
         "a freshly attached core must have NO queued commands before :qa"
     );
 
-    // `:qa` on the sole unmodified pane -> always-close branch -> close_window.
     ex_command(&core, "qa");
-    let commands = drain_until_command(
-        &core,
-        FLUSH_TIMEOUT,
-        "CloseWindow from :qa on the last pane",
-    );
-    assert!(
-        commands.contains(&Command::CloseWindow),
-        ":qa on the sole (unmodified) pane must enqueue Command::CloseWindow; got {commands:?}"
-    );
+    expect_close_tab(&core, ":qa on the sole (unmodified) pane");
 
     core.shutdown().expect("shutdown should be Ok");
 }
 
-/// `:qa!` on a MODIFIED sole pane must still fire `close_window`: the trailing `!`
-/// rides through the bare-`qa` abbrev to `:WolfQuitAll!`, whose callback sees
-/// `o.bang == true` and passes `force = true`, overriding the modified-buffer
-/// guard. This exercises the FRAGILE bang path for the qa family.
+/// `:qa!` on a MODIFIED sole pane still notifies `close_tab`: the trailing `!` rides through
+/// the bare-`qa` abbrev to `:WolfQuitAll!`, whose callback passes `force = true`.
 #[test]
-fn ex_qa_bang_forces_close_window_when_modified() {
+fn ex_qa_bang_forces_close_tab_when_modified() {
     let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
     wait_for_initial_window(&core, &waiter);
 
-    // Modify the buffer so a plain `:qa` would be refused; only the bang closes.
-    core.send_input(ch('i'));
-    core.send_input(ch('x'));
-    core.send_input(key(Key::Esc));
-    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
-
+    insert_text(&core, &waiter, "x");
     // Discard anything queued during setup so we observe only `:qa!`'s effect.
     let _ = core.drain_commands();
 
-    // `:qa!` -> WolfQuitAll! -> force = true -> always-close branch fires close_window.
     ex_command(&core, "qa!");
-    let commands = drain_until_command(
+    expect_close_tab(
         &core,
-        FLUSH_TIMEOUT,
-        "CloseWindow from :qa! on a modified last pane",
-    );
-    assert!(
-        commands.contains(&Command::CloseWindow),
-        ":qa! on a modified last pane must force Command::CloseWindow (bang reached the \
-         callback and overrode the modified-buffer guard); got {commands:?}"
+        ":qa! on a modified last pane (the bang must reach the callback and skip the check)",
     );
 
     core.shutdown().expect("shutdown should be Ok");
 }
 
-/// `:wqa` on the sole pane writes the buffer to disk FIRST (so the distinctive
-/// inserted text lands in the file) and THEN, the buffer no longer modified, fires
-/// `close_window`. Proves the write side of the qa write-quit family and that the
-/// always-close branch still closes the front-end window afterward.
+/// `:wqa` writes every modified buffer, the hidden one as well as the current one, as Vim's
+/// `:wqa` does, and THEN notifies `close_tab`.
 #[test]
-fn ex_wqa_writes_to_disk_and_closes_window() {
+fn ex_wqa_writes_every_modified_buffer_then_closes_tab() {
     let (core, waiter, file) = common::start_core_with_temp_md(DOC);
     let path = file.path().to_path_buf();
     wait_for_initial_window(&core, &waiter);
 
-    // Insert distinctive text so we can prove the edited buffer reached disk.
-    core.send_input(ch('i'));
-    for c in WQ_MARKER.chars() {
-        core.send_input(ch(c));
-    }
-    core.send_input(key(Key::Esc));
-    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
-
+    let (second, _) = hide_a_modified_second_file(&core, &waiter, &path);
+    insert_text(&core, &waiter, FIRST_MARKER);
     // Discard anything queued during setup so we observe only `:wqa`'s command.
     let _ = core.drain_commands();
 
-    // `:wqa` -> WolfWriteQuitAll -> write then always-close close_window.
     ex_command(&core, "wqa");
-
-    // The write is async over RPC: poll the file until the inserted text appears.
-    let deadline = Instant::now() + FLUSH_TIMEOUT;
-    loop {
-        if let Ok(contents) = std::fs::read_to_string(&path) {
-            if contents.contains(WQ_MARKER) {
-                break;
-            }
-        }
-        if Instant::now() >= deadline {
-            panic!(
-                "timed out after {FLUSH_TIMEOUT:?} waiting for :wqa to write {WQ_MARKER:?} to disk"
-            );
-        }
-        std::thread::sleep(POLL_INTERVAL);
-    }
-
-    // The write completed; the always-close branch must then fire close_window.
-    let commands = drain_until_command(
-        &core,
-        FLUSH_TIMEOUT,
-        "CloseWindow from :wqa on the last pane",
+    wait_for_file_to_hold(&path, FIRST_MARKER, ":wqa, for the current buffer,");
+    wait_for_file_to_hold(
+        second.path(),
+        HIDDEN_MARKER,
+        ":wqa, for the hidden buffer (unchanged alone means it wrote the current buffer only),",
     );
-    assert!(
-        commands.contains(&Command::CloseWindow),
-        ":wqa must close the front-end window after writing; got {commands:?}"
-    );
+    expect_close_tab(&core, ":wqa after writing every modified buffer");
 
     core.shutdown().expect("shutdown should be Ok");
 }
 
-/// A plain `:qa` on a MODIFIED pane must be REFUSED (native `:qa` parity, and the
-/// same current-buffer-scoped guard as `:q`): the unsaved-changes guard surfaces an
-/// error and returns WITHOUT firing `close_window`. Mirrors
-/// `ex_q_refuses_modified_last_pane`.
+/// `:wqa!` whose write fails, here for a modified buffer with no file name, aborts and
+/// notifies nothing, bang or not. Once the buffer is named, the same `:wqa!` closes the tab,
+/// so the abort is the failed write's and not a route that never ran.
 #[test]
-fn ex_qa_refuses_modified_last_pane() {
+fn ex_wqa_bang_aborts_when_a_write_fails() {
     let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
     wait_for_initial_window(&core, &waiter);
 
-    // Modify the buffer so the unsaved-changes guard should trip.
-    core.send_input(ch('i'));
-    core.send_input(ch('x'));
-    core.send_input(key(Key::Esc));
-    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
+    ex_command(&core, "enew");
+    insert_text(&core, &waiter, "unnamed text");
+    assert_eq!(
+        probe(&core, &["bufname('%')", "&modified"]),
+        ["", "1"],
+        "premise: `:enew` and the typed text must leave an unnamed, modified buffer current"
+    );
+    // Discard anything queued during setup so we observe only `:wqa!`'s (non-)effect.
+    let _ = core.drain_commands();
 
+    ex_command(&core, "wqa!");
+    settle_for(&waiter, SETTLE);
+    let drained = core.drain_commands();
+    assert!(
+        drained.is_empty(),
+        ":wqa! with an unnamed modified buffer cannot write it, so it must abort and notify \
+         nothing; got {drained:?}. CloseTab means the failed write did not abort the quit."
+    );
+
+    let dir = tempfile::tempdir().expect("failed to create the named file's dir");
+    let named = dir.path().join("named.md");
+    ex_command(&core, &format!("file {}", named.display()));
+    ex_command(&core, "wqa!");
+    wait_for_file_to_hold(&named, "unnamed text", ":wqa! once the buffer is named");
+    expect_close_tab(&core, ":wqa! once every write can succeed");
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// A plain `:qa` on a MODIFIED pane is refused with E37 (native `:qa` parity) and notifies
+/// nothing.
+#[test]
+fn ex_qa_refuses_modified_current_buffer() {
+    let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
+    wait_for_initial_window(&core, &waiter);
+
+    insert_text(&core, &waiter, "x");
     // Discard anything queued during setup so we observe only `:qa`'s (non-)effect.
     let _ = core.drain_commands();
 
-    // Plain `:qa` (no bang) on the modified pane: must NOT close.
     ex_command(&core, "qa");
-
-    // Let any (erroneous) command settle, accumulating drained commands (draining
-    // is what wakes the queue side), then assert none was a close_window.
-    let mut drained: Vec<Command> = Vec::new();
-    let settle_deadline = Instant::now() + SETTLE;
-    while Instant::now() < settle_deadline {
-        drained.extend(core.drain_commands());
-        std::thread::sleep(POLL_INTERVAL);
-    }
+    let (_toast, drained) = refused(&core, &waiter, ":qa", E37);
     assert!(
-        !drained.contains(&Command::CloseWindow),
-        "a plain :qa on a MODIFIED pane must be refused (no close_window); got {drained:?}"
+        drained.is_empty(),
+        "a plain :qa on a MODIFIED pane must be refused and notify nothing; got {drained:?}"
     );
 
     core.shutdown().expect("shutdown should be Ok");
 }
 
-/// THE differentiator between `:qa` and `:q`. With MULTIPLE panes open, `:qa` must
-/// still fire `close_window` (the whole front-end window closes), whereas `:q`
-/// would instead close just the active pane and fire NO command (see
-/// `layout_intents.rs::ex_q_closes_pane_when_multiple`, which proves `:q` merely
-/// drops the pane count). We make a second pane via `:vsplit` (using only
-/// `ex_command` + a snapshot poll, so this test needs no intent machinery), then
-/// `:qa` and assert a `Command::CloseWindow` is drained.
+/// With two panes, `:qa` refuses while the buffer shown in the other pane is modified, naming
+/// it with E162, and closes neither pane.
 #[test]
-fn ex_qa_emits_close_window_when_multiple_panes() {
+fn ex_qa_refuses_a_modified_buffer_in_another_pane() {
+    let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
+    wait_for_initial_window(&core, &waiter);
+    let base = core.read_snapshot().windows.len();
+
+    insert_text(&core, &waiter, "x");
+    let file = probe(&core, &["bufnr()", "bufname('%')"]);
+    ex_command(&core, "vsplit");
+    poll_until(
+        &waiter,
+        "windows.len() to grow by one after :vsplit",
+        || core.read_snapshot().windows.len() == base + 1,
+        |&ok| ok,
+    );
+    ex_command(&core, "enew");
+    let file_modified = format!("getbufvar({}, '&modified')", file[0]);
+    let file_shown = format!("bufwinnr({}) > 0", file[0]);
+    let premise = probe(
+        &core,
+        &[
+            "bufname('%')",
+            "winnr('$')",
+            file_modified.as_str(),
+            file_shown.as_str(),
+        ],
+    );
+    assert_eq!(
+        premise,
+        ["", "2", "1", "1"],
+        "premise: `:enew` in the new pane must show an unnamed buffer there, beside the other \
+         pane still showing the modified file: (bufname, windows, the file's &modified, the \
+         file shown)"
+    );
+    // Discard anything queued during setup so we observe only `:qa`'s (non-)effect.
+    let _ = core.drain_commands();
+
+    ex_command(&core, "qa");
+    let (_toast, drained) = refused(&core, &waiter, ":qa with two panes", &e162(&file[1]));
+    assert!(
+        drained.is_empty(),
+        "a refused :qa must notify nothing; got {drained:?}. CloseTab means :qa skips the check."
+    );
+    assert_eq!(
+        probe(&core, &["winnr('$')"]),
+        ["2"],
+        "a refused :qa must close no pane; one window left means it closed the current pane"
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// The differentiator between `:qa` and `:q`: with MULTIPLE panes open, `:qa` still notifies
+/// `close_tab`, whereas `:q` closes just the active pane and notifies nothing (see
+/// `layout_intents.rs::ex_q_closes_pane_when_multiple`).
+#[test]
+fn ex_qa_emits_close_tab_when_multiple_panes() {
     let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
     wait_for_initial_window(&core, &waiter);
 
     let base = core.read_snapshot().windows.len();
 
-    // Make a second pane so this is genuinely the multi-pane case. Drive it via a
-    // plain `:vsplit` and observe the window count grow (no intent/ctrl imports).
+    // Make a second pane so this is genuinely the multi-pane case.
     ex_command(&core, "vsplit");
     poll_until(
         &waiter,
@@ -530,28 +689,215 @@ fn ex_qa_emits_close_window_when_multiple_panes() {
     // Discard anything queued during setup so we observe only `:qa`'s command.
     let _ = core.drain_commands();
 
-    // `:qa` with multiple panes -> always-close branch (unlike `:q`) -> close_window.
     ex_command(&core, "qa");
-    let commands = drain_until_command(
+    expect_close_tab(
         &core,
-        FLUSH_TIMEOUT,
-        "CloseWindow from :qa with multiple panes",
-    );
-    assert!(
-        commands.contains(&Command::CloseWindow),
-        ":qa with multiple panes must close the WHOLE window (Command::CloseWindow), \
-         not merely drop the pane count; got {commands:?}"
+        ":qa with multiple panes (it closes the tab, not merely the current pane)",
     );
 
     core.shutdown().expect("shutdown should be Ok");
 }
 
-/// Inserts `text` at the cursor, returns to normal mode and waits for the edit's flush.
-fn insert_text(core: &WolfCore, waiter: &FlushWaiter, text: &str) {
-    core.send_input(ch('i'));
-    type_str(core, text);
-    core.send_input(key(Key::Esc));
-    waiter.wait_for_flush(core, FLUSH_TIMEOUT);
+/// Every form of the `:q` and `:qa` families, on an unmodified last pane, notifies `close_tab`
+/// and never `close_window`. Nothing in core acts on `close_tab`, so one Neovim serves every
+/// form in turn.
+#[test]
+fn no_quit_command_notifies_close_window() {
+    let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
+    wait_for_initial_window(&core, &waiter);
+    assert!(
+        core.drain_commands().is_empty(),
+        "a freshly attached core must have NO queued commands before the sweep"
+    );
+
+    let ex_forms = [
+        "q", "quit", "q!", "wq", "x", "xit", "qa", "qall", "quitall", "qa!", "wqa", "wqall", "xa",
+        "xall",
+    ];
+    let forms = ex_forms
+        .iter()
+        .map(|form| format!(":{form}"))
+        .chain(["ZZ".to_owned(), "ZQ".to_owned()]);
+    for name in forms {
+        match name.strip_prefix(':') {
+            Some(form) => ex_command(&core, form),
+            None => type_str(&core, &name),
+        }
+        let mut drained = drain_until_command(
+            &core,
+            FLUSH_TIMEOUT,
+            &format!("a command from {name}; a timeout means it notified nothing"),
+        );
+        let deadline = Instant::now() + SWEEP_SETTLE;
+        while Instant::now() < deadline {
+            drained.extend(core.drain_commands());
+            std::thread::sleep(POLL_INTERVAL);
+        }
+        assert!(
+            drained.contains(&Command::CloseTab) && !drained.contains(&Command::CloseWindow),
+            "{name} on an unmodified last pane must notify close_tab and never close_window; \
+             got {drained:?}. CloseWindow alone means the form still closes the window; both \
+             mean it notifies close_window after close_tab."
+        );
+    }
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// Types `:q` on the sole, unmodified pane and asserts it refuses with E162 for the buffer Vim
+/// names `name` and notifies nothing. `what` says which modified buffer the step made.
+fn expect_q_refused_naming(core: &WolfCore, waiter: &FlushWaiter, what: &str, name: &str) {
+    // Discard anything queued during setup so we observe only `:q`'s (non-)effect.
+    let _ = core.drain_commands();
+    ex_command(core, "q");
+    let (toast, drained) = refused(core, waiter, &format!(":q beside {what}"), &e162(name));
+    assert!(
+        !toast.contains("E37"),
+        "the refusal beside {what} must be E162 alone; the toast reads {toast:?}, so the current \
+         buffer was reported as modified"
+    );
+    assert!(
+        drained.is_empty(),
+        "a :q refused beside {what} must notify nothing; got {drained:?}. CloseTab means {what} \
+         did not count as unsaved."
+    );
+}
+
+/// A hidden, unnamed buffer refuses `:q` whatever its `'buftype'`, once Neovim reads it as
+/// modified, and E162 names it as Vim's `:ls!` does: `[Prompt]`, `[Scratch]` for `acwrite`, and
+/// `[No Name]` for a normal buffer.
+#[test]
+fn ex_q_refuses_unnamed_hidden_buffers_by_their_vim_names() {
+    let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
+    wait_for_initial_window(&core, &waiter);
+
+    // (buftype, the Lua that makes buffer `b` modified, the name Vim gives it)
+    let steps = [
+        ("prompt", "vim.bo[b].modified = true", "[Prompt]"),
+        (
+            "acwrite",
+            "vim.api.nvim_buf_set_lines(b, 0, -1, false, { 'wolf' })",
+            "[Scratch]",
+        ),
+        (
+            "",
+            "vim.api.nvim_buf_set_lines(b, 0, -1, false, { 'wolf' })",
+            "[No Name]",
+        ),
+    ];
+    for (buftype, modify, name) in steps {
+        ex_command(
+            &core,
+            &format!(
+                "lua local b = vim.api.nvim_create_buf(false, false); vim.g.wolf_test_buf = b; \
+                 vim.bo[b].buftype = '{buftype}'; {modify}"
+            ),
+        );
+        let premise = probe(
+            &core,
+            &[
+                "getbufvar(g:wolf_test_buf, '&modified')",
+                "getbufvar(g:wolf_test_buf, '&buftype')",
+                "bufname(g:wolf_test_buf)",
+                "&modified",
+            ],
+        );
+        assert_eq!(
+            premise,
+            ["1", buftype, "", "0"],
+            "premise: the new buffer must be an unnamed, modified {buftype:?} buffer beside the \
+             unmodified current one: (its &modified, its &buftype, its bufname, the current \
+             &modified). A 0 first means Neovim does not mark this buftype modified."
+        );
+
+        expect_q_refused_naming(
+            &core,
+            &waiter,
+            &format!("a modified, unnamed {buftype:?} buffer"),
+            name,
+        );
+
+        ex_command(
+            &core,
+            "lua vim.api.nvim_buf_delete(vim.g.wolf_test_buf, { force = true })",
+        );
+    }
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// A hidden, modified quickfix list refuses `:q` as `[Quickfix List]`, and a hidden, modified
+/// location list as `[Location List]`, the names Vim's `:ls!` gives them.
+#[test]
+fn ex_q_refuses_hidden_quickfix_and_location_lists_by_their_vim_names() {
+    let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
+    wait_for_initial_window(&core, &waiter);
+
+    // (the list's setter, its open and close commands, its getter, the name Vim gives it)
+    let steps = [
+        (
+            "setqflist(",
+            "copen",
+            "cclose",
+            "getqflist(",
+            "[Quickfix List]",
+        ),
+        (
+            "setloclist(0, ",
+            "lopen",
+            "lclose",
+            "getloclist(0, ",
+            "[Location List]",
+        ),
+    ];
+    for (set, open, close, get, name) in steps {
+        ex_command(
+            &core,
+            &format!("lua vim.fn.{set}{{ {{ text = 'wolf' }} }})"),
+        );
+        ex_command(&core, open);
+        ex_command(&core, close);
+        ex_command(
+            &core,
+            &format!(
+                "lua local b = vim.fn.{get}{{ qfbufnr = 0 }}).qfbufnr; vim.g.wolf_test_buf = b; \
+                 vim.bo[b].modifiable = true; vim.api.nvim_buf_set_lines(b, 0, -1, false, \
+                 {{ 'wolf' }})"
+            ),
+        );
+        let premise = probe(
+            &core,
+            &[
+                "g:wolf_test_buf != 0",
+                "getbufvar(g:wolf_test_buf, '&modified')",
+                "getbufvar(g:wolf_test_buf, '&buftype')",
+                "bufwinnr(g:wolf_test_buf)",
+                "winnr('$')",
+                "&modified",
+                "g:wolf_test_buf == getqflist({'qfbufnr': 0}).qfbufnr",
+            ],
+        );
+        let is_quickfix = if open == "copen" { "1" } else { "0" };
+        assert_eq!(
+            premise,
+            ["1", "1", "quickfix", "-1", "1", "0", is_quickfix],
+            "premise: after `:{open}` and `:{close}`, the list's buffer must exist, be modified, \
+             be a quickfix buffer in no window, beside the sole, unmodified pane, and be the \
+             quickfix list's buffer only for `:copen`: (it exists, its &modified, its \
+             &buftype, its bufwinnr, windows, the current &modified, it is the quickfix list's)"
+        );
+
+        expect_q_refused_naming(
+            &core,
+            &waiter,
+            &format!("the modified list `:{open}` showed"),
+            name,
+        );
+
+        ex_command(&core, "lua vim.bo[vim.g.wolf_test_buf].modified = false");
+    }
+
+    core.shutdown().expect("shutdown should be Ok");
 }
 
 /// Polls `path` until it holds `marker`, failing with `what` after [`FLUSH_TIMEOUT`].
@@ -573,21 +919,21 @@ fn wait_for_file_to_hold(path: &std::path::Path, marker: &str, what: &str) {
 }
 
 /// Asserts the captive Neovim is still `Alive` after [`SETTLE`], since `what` closed the last
-/// pane through `close_window` rather than by quitting Neovim.
+/// pane through `close_tab` rather than by quitting Neovim.
 fn assert_alive_after_settle(core: &WolfCore, waiter: &FlushWaiter, what: &str) {
     settle_for(waiter, SETTLE);
     assert_eq!(
         core.liveness(),
         Liveness::Alive,
         "{what} on the last pane must leave Neovim running. Dead means Neovim quit itself, \
-         the native key's crash, even though close_window drained; NotResponding means it hung."
+         the native key's crash, even though close_tab drained; NotResponding means it hung."
     );
 }
 
 /// `ZZ` on a MODIFIED sole pane behaves as `:x` there: it writes the buffer through `do_quit`,
-/// then fires `close_window`, and Neovim keeps running. Native `ZZ` would quit Neovim instead.
+/// then notifies `close_tab`, and Neovim keeps running. Native `ZZ` would quit Neovim instead.
 #[test]
-fn zz_on_last_pane_writes_and_emits_close_window() {
+fn zz_on_last_pane_writes_and_emits_close_tab() {
     let (core, waiter, file) = common::start_core_with_temp_md(DOC);
     let path = file.path().to_path_buf();
     wait_for_initial_window(&core, &waiter);
@@ -598,14 +944,9 @@ fn zz_on_last_pane_writes_and_emits_close_window() {
 
     type_str(&core, "ZZ");
     wait_for_file_to_hold(&path, ZZ_MARKER, "ZZ on a modified last pane");
-    let commands = drain_until_command(
+    expect_close_tab(
         &core,
-        FLUSH_TIMEOUT,
-        "CloseWindow from ZZ on the last pane; a timeout means Neovim quit instead",
-    );
-    assert!(
-        commands.contains(&Command::CloseWindow),
-        "ZZ must close the front-end window after writing; got {commands:?}"
+        "ZZ on the last pane, after writing (a timeout may mean Neovim quit instead)",
     );
     assert_alive_after_settle(&core, &waiter, "ZZ");
 
@@ -615,19 +956,14 @@ fn zz_on_last_pane_writes_and_emits_close_window() {
 /// `ZZ` on an UNMODIFIED sole pane writes nothing, as native `ZZ` does and unlike Wolf's `:x`,
 /// which always writes. The file is deleted from disk first, so any write would recreate it.
 #[test]
-fn zz_on_unmodified_last_pane_writes_nothing_and_emits_close_window() {
+fn zz_on_unmodified_last_pane_writes_nothing_and_emits_close_tab() {
     let (core, waiter, file) = common::start_core_with_temp_md(DOC);
     let path = file.path().to_path_buf();
     wait_for_initial_window(&core, &waiter);
 
     file.close()
         .expect("failed to delete the temp file from disk");
-    let probe_dir = tempfile::tempdir().expect("failed to create the probe dir");
-    let premise = probe_values(
-        &core,
-        &["&modified", "filereadable(expand('%:p'))"],
-        &probe_dir.path().join("probe.txt"),
-    );
+    let premise = probe(&core, &["&modified", "filereadable(expand('%:p'))"]);
     assert_eq!(
         premise,
         ["0", "0"],
@@ -637,14 +973,9 @@ fn zz_on_unmodified_last_pane_writes_nothing_and_emits_close_window() {
     let _ = core.drain_commands();
 
     type_str(&core, "ZZ");
-    let commands = drain_until_command(
+    expect_close_tab(
         &core,
-        FLUSH_TIMEOUT,
-        "CloseWindow from ZZ on an unmodified last pane; a timeout means Neovim quit instead",
-    );
-    assert!(
-        commands.contains(&Command::CloseWindow),
-        "ZZ on an unmodified last pane must close the front-end window; got {commands:?}"
+        "ZZ on an unmodified last pane (a timeout may mean Neovim quit instead)",
     );
     assert_alive_after_settle(&core, &waiter, "ZZ");
     assert!(
@@ -657,10 +988,10 @@ fn zz_on_unmodified_last_pane_writes_nothing_and_emits_close_window() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
-/// `ZQ` on a MODIFIED sole pane behaves as `:q!` there: it discards the edit, fires
-/// `close_window` and leaves Neovim running.
+/// `ZQ` on a MODIFIED sole pane behaves as `:q!` there: it discards the edit, notifies
+/// `close_tab` and leaves Neovim running.
 #[test]
-fn zq_on_last_pane_discards_and_emits_close_window() {
+fn zq_on_last_pane_discards_and_emits_close_tab() {
     let (core, waiter, file) = common::start_core_with_temp_md(DOC);
     let path = file.path().to_path_buf();
     wait_for_initial_window(&core, &waiter);
@@ -670,15 +1001,10 @@ fn zq_on_last_pane_discards_and_emits_close_window() {
     let _ = core.drain_commands();
 
     type_str(&core, "ZQ");
-    let commands = drain_until_command(
+    expect_close_tab(
         &core,
-        FLUSH_TIMEOUT,
-        "CloseWindow from ZQ on a modified last pane; a timeout means Neovim quit instead, or \
-         ZQ was refused with E37 because it did not force",
-    );
-    assert!(
-        commands.contains(&Command::CloseWindow),
-        "ZQ on a modified last pane must force Command::CloseWindow; got {commands:?}"
+        "ZQ on a modified last pane (a timeout may mean Neovim quit instead, or ZQ was refused \
+         because it did not force)",
     );
     assert_alive_after_settle(&core, &waiter, "ZQ");
     let contents = std::fs::read_to_string(&path).expect("failed to read the temp file back");
@@ -749,6 +1075,20 @@ fn command_specs_ex_commands_start_with_wolf() {
             spec.id
         );
     }
+}
+
+/// `close_tab`, the command the quit families notify, is registered under File as "Close Tab",
+/// with its `:WolfCloseTab` face.
+#[test]
+fn close_tab_is_registered_in_the_file_group() {
+    let spec = Command::CloseTab.spec();
+    assert_eq!(
+        (spec.id, spec.ex_command, spec.title, spec.menu),
+        ("close_tab", "WolfCloseTab", "Close Tab", MenuGroup::File),
+        "Command::CloseTab's registry row must read (id, ex_command, title, menu) as shown; \
+         another id means init.lua's wolf_command \"close_tab\" names no command, and another \
+         title or menu shows the command misnamed or misplaced"
+    );
 }
 
 /// Pins each command's `menu` group to the intended macOS menu-bar convention,

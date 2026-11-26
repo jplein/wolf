@@ -31,7 +31,8 @@
 //! | `51` | S5's leg 1: the `git commit` typed into the terminal never wrote its status |
 //! | `52` | S5's leg 2: the `git commit` from the scenario shell was still running at its bound |
 //! | `53` | S5's leg 3: `wolf --wait` was still running at its bound |
-//! | `54` | S5's leg 3: the app still ran after `:wq` on tab 1's last pane closed its window |
+//! | `54` | S5's leg 3: `:wq` on tab 1's last pane ended the app, not that tab alone |
+//! | `55` | S5's leg 3: `:wq` on tab 1's last pane did not leave exactly one Neovim |
 
 use super::open_folder::{canonical, edit, make_dir, plant};
 use super::recovery::with_nvim_pid_helper;
@@ -245,7 +246,8 @@ fo_probe "$FO_READ" "$FO_A" "$FO_FILE" "the front window after the cold launch"
 
 /// S5's body: leg 1 commits from tab 2's terminal, leg 2 commits from this shell and aborts
 /// with `:cq`, and leg 3 waits on a file of tab 1 and closes its last pane with `:wq`, which
-/// closes the window and so ends the app. Each leg leaves its evidence in files for the test.
+/// closes tab 1 alone and leaves the app running on tab 2. Each leg leaves its evidence in files
+/// for the test.
 const FO_WAIT_BODY: &str = r#"
 wait_nvim_count 2 21 "after the launch restored two tabs"
 sleep "$SETTLE"
@@ -285,15 +287,24 @@ wtype -- ":wq"
 wtype -k Return
 fo_wait_pid "$fo_wolf_pid" 53 "leg 3's wolf --wait"
 echo "rc=$fo_rc" > "$FO_W_RC3"
+# Until the close lands: fewer than two Neovims, or no app; then a settle, so a window close
+# that shuts both tabs down has finished before the app's aliveness is read.
 _fo_n=0
-while kill -0 "$app_pid" 2>/dev/null; do
-    _fo_n=$((_fo_n + 1))
-    if [ "$_fo_n" -ge "$QUIT_TRIES" ]; then
-        echo "wolf-gnome file-open smoke: :wq on tab 1's last pane left the app running." >&2
-        exit 54
+while pid_is_live "$app_pid" && [ "$_fo_n" -lt "$QUIT_TRIES" ]; do
+    find_nvim_pid || true
+    if [ "$count" -lt 2 ]; then
+        break
     fi
+    _fo_n=$((_fo_n + 1))
     sleep "$WAIT_INTERVAL"
 done
+sleep "$SETTLE"
+if ! pid_is_live "$app_pid"; then
+    echo "wolf-gnome file-open smoke: :wq on tab 1's last pane ended the app; it must close" >&2
+    echo "  tab 1 alone and leave tab 2 open." >&2
+    exit 54
+fi
+wait_nvim_count 1 55 "after :wq on tab 1's last pane"
 "#;
 
 /// What one file-open scenario is given.
@@ -352,7 +363,9 @@ fn run_file_open(run: &FileOpenRun<'_>, runtime_dir: &CageRuntime<'_>) -> PathBu
          have been reused. Exit 21: the launch did not restore the planted tabs, and nothing \
          below is about opening files. Exit 32: a terminal's shell wrote no readback. Exit 51 \
          to 53: a wolf --wait leg's git or wolf never finished, so nothing ended its wait. Exit \
-         54: :wq on a tab's last pane did not close its window. Exit 11, 40 or 41: the app never \
+         54: :wq on tab 1's last pane ended the app, closing the window rather than the tab. \
+         Exit 55: that :wq did not leave exactly one Neovim, so the tab's close shut down no \
+         core or more than one. Exit 11, 40 or 41: the app never \
          became ready. Exit 12, 13 or 16: the quit failed or left no save. The cage log in the \
          runtime dir carries the scenario's own lines, each readback that did not match among \
          them."
@@ -1189,14 +1202,15 @@ fn fo_git_env() -> Vec<(String, String)> {
 /// 2. From the scenario shell: `GIT_EDITOR="<wolf> --wait" git -C R commit &`. The file lands
 ///    in a pane split off the whole tab; the scenario types a message, `:w` and `:cq`.
 /// 3. From the scenario shell: `wolf --wait A/notes.md &`. It lands in tab 1, which it selects;
-///    the scenario types a line and `:wq` on tab 1's last pane. That closes the window
-///    (`specs/command-lifecycle.md`), its only one, so the app exits before the quit.
+///    the scenario types a line and `:wq` on tab 1's last pane. That closes tab 1 alone
+///    (`specs/command-lifecycle.md`), so the app stays alive with tab 2's one Neovim.
 ///
 /// ## Observables
 ///
 /// Leg 1's commit exits 0 and `R`'s newest commit has the typed subject. Leg 2's commit exits
-/// non-zero and `R`'s commit count is what leg 1 left. Leg 3's `wolf` exits 0 and `notes.md`
-/// starts with the typed line. Each leg's readback first shows its file landed.
+/// non-zero and `R`'s commit count is what leg 1 left. Leg 3's `wolf` exits 0, `notes.md`
+/// starts with the typed line, and the app is left running one Neovim. Each leg's readback first
+/// shows its file landed.
 ///
 /// ## Falsifiers
 ///
@@ -1205,7 +1219,7 @@ fn fo_git_env() -> Vec<(String, String)> {
 /// | S5a | `handle_open_requests` drains with `drain_requests` | leg 1, no commit |
 /// | S5b | `run_pending_file_opens` drops the wait instead of `wait_on` | leg 1 |
 /// | S5c | `WolfCquit`'s waited branch ends with `0` | leg 2 commits |
-/// | S5d | delete the `end_waits` loop before `close_window` | leg 3 exits 1 |
+/// | S5d | delete the `end_waits` loop before `close_tab` | leg 3 exits 1 |
 #[test]
 fn wolf_wait_serves_git_and_the_last_pane_under_cage() {
     const SMOKE: &str = "wolf_wait_serves_git_and_the_last_pane_under_cage";
@@ -1327,8 +1341,7 @@ fn wolf_wait_serves_git_and_the_last_pane_under_cage() {
         read_trimmed(rc3, SMOKE),
         "rc=0",
         "{SMOKE}: leg 3's wolf --wait must exit 0 for :wq on tab 1's last pane, though that \
-         closes the window; rc=1 means the window's close reached the command before the \
-         buffer's"
+         closes the tab; rc=1 means the tab's close reached the command before the buffer's"
     );
     let written = std::fs::read_to_string(&notes)
         .unwrap_or_else(|e| panic!("{SMOKE}: failed to read {notes}: {e}"));

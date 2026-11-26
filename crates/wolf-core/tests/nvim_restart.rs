@@ -122,8 +122,8 @@ const RESTART_SETTLE: Duration = Duration::from_secs(1);
 /// SIGKILL, so the round also shows that a surviving child cannot hold nvim's stdout open.
 ///
 /// A typed `:qa!` is not a round: `init.lua`'s `qa` abbreviation turns it into
-/// `:WolfQuitAll!`, a window close by design, which `commands.rs`'s
-/// `ex_qa_bang_forces_close_window_when_modified` pins. Round 3 therefore runs `qa!` through
+/// `:WolfQuitAll!`, a tab close by design, which `commands.rs`'s
+/// `ex_qa_bang_forces_close_tab_when_modified` pins. Round 3 therefore runs `qa!` through
 /// `vim.cmd`, as a script or plugin would; the abbreviation's `getcmdline()` guard leaves the
 /// typed `lua` line alone, and `vim.cmd` takes no abbreviations.
 const DEATH_MODES: [(&str, &[&str]); 4] = [

@@ -2258,15 +2258,15 @@ pub(crate) const TABCRASH_READ_NAME: &str = "cr_after.txt";
 /// tab, which a `:cd` makes a folder tab on the project before it opens [`TABCRASH_FILE_B`].
 /// With tab 2 selected, tab 1's Neovim is SIGKILLed. A third pid
 /// must appear, tab 2's must stay live and the app with it; then tab 2's buffer is read back,
-/// `:qa` saves the session and the state database is frozen.
+/// `:WolfCloseWindow` saves the session and the state database is frozen.
 ///
 /// ## Exit codes
 ///
 /// | code | meaning |
 /// | --- | --- |
 /// | `11` | the app died before it was ready for input |
-/// | `12` | the app was still alive after `:qa` |
-/// | `13` | the app exited non-zero after `:qa` |
+/// | `12` | the app was still alive after `:WolfCloseWindow` |
+/// | `13` | the app exited non-zero after `:WolfCloseWindow` |
 /// | `14` | the readback never appeared |
 /// | `16` | THE APP DIED after the kill (see [`FIND_NVIM_PID_HELPER`]) |
 /// | `17` | tab 1's Neovim could not be identified as the one live `nvim` child |
@@ -2408,7 +2408,8 @@ wtype -- ":call writefile([fnamemodify(bufname('%'), ':t')], '$TABCRASH_READ')"
 wtype -k Return
 wait_file "$TABCRASH_READ" || exit 14
 
-wtype -- ":qa"
+# Close Window, since `:qa` closes only the selected tab of two.
+wtype -- ":WolfCloseWindow"
 wtype -k Return
 tries=0
 gone=0
@@ -2421,14 +2422,14 @@ while [ "$tries" -lt "$QUIT_TRIES" ]; do
     sleep "$WAIT_INTERVAL"
 done
 if [ "$gone" -ne 1 ]; then
-    echo "wolf-gnome per-tab crash smoke: the app (pid $app_pid) is still alive after :qa." >&2
+    echo "wolf-gnome per-tab crash smoke: the app (pid $app_pid) is still alive after :WolfCloseWindow." >&2
     exit 12
 fi
 rc=0
 wait "$app_pid" || rc=$?
 app_pid=
 if [ "$rc" -ne 0 ]; then
-    echo "wolf-gnome per-tab crash smoke: the app exited $rc after :qa, not 0." >&2
+    echo "wolf-gnome per-tab crash smoke: the app exited $rc after :WolfCloseWindow, not 0." >&2
     exit 13
 fi
 
@@ -2496,7 +2497,7 @@ fn one_tabs_neovim_crash_restarts_only_that_tab_under_cage() {
         "{SMOKE}: the cage per-tab crash scenario exited unsuccessfully ({status}). Read the exit \
          code first; the scenario's stderr names the pids it saw.\n\
          Exit 11: the app died before it was ready for input.\n\
-         Exit 12 / 13: the app did not quit cleanly on `:qa`.\n\
+         Exit 12 / 13: the app did not quit cleanly on `:WolfCloseWindow`.\n\
          Exit 14: the readback never appeared: keys did not reach the selected tab's Neovim.\n\
          Exit 16: THE APP DIED after one tab's Neovim was killed; a crash must cost only its own \
          tab.\n\

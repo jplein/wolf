@@ -86,6 +86,10 @@ enum CommandDispatcher {
       controller?.splitPane(.vertical)
     case .zoomPane:
       controller?.zoomPane()
+    case .closeTab:
+      // close(), not performClose(_:): the quit that sent it has already refused unsaved
+      // changes, so windowShouldClose is not asked again.
+      window?.close()
     }
   }
 }

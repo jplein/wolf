@@ -5,8 +5,8 @@
 //! directory, runs `wolf --wait <file>` (or `git commit` with `wolf --wait` as its editor), drains
 //! the wait with `drain_taken`, sends `InputEvent::Open` for the request's `OpenTarget::File` path
 //! and hands the wait to `WolfCore::wait_on`. Keys are typed with `send_ex` and `type_str`. A test
-//! that closes the tab's last pane shuts the core down as soon as `Command::CloseWindow` drains,
-//! as a front-end closing the tab would.
+//! that closes the tab's last pane shuts the core down as soon as `Command::CloseTab` drains, as
+//! a front-end closing the tab would.
 //!
 //! An exit is polled for up to [`EXIT_WAIT`]; "still waiting" is a command still running after
 //! [`SETTLE`]. A command a test never sees exit is killed when its [`Proc`] drops.
@@ -414,24 +414,24 @@ fn type_first_line(core: &WolfCore, text: &str) {
     core.send_input(key(Key::Esc));
 }
 
-/// Shuts `core` down once Neovim asks the front-end to close its window, as a front-end closing
-/// the tab does; fails with `what` when no `CloseWindow` drains within [`EXIT_WAIT`].
-fn shut_down_on_close_window(core: WolfCore, what: &str) {
+/// Shuts `core` down once Neovim asks the front-end to close its tab, as a front-end closing
+/// the tab does; fails with `what` when no `CloseTab` drains within [`EXIT_WAIT`].
+fn shut_down_on_close_tab(core: WolfCore, what: &str) {
     let deadline = Instant::now() + EXIT_WAIT;
     loop {
         let commands = core.drain_commands();
-        if commands.contains(&CoreCommand::CloseWindow) {
+        if commands.contains(&CoreCommand::CloseTab) {
             break;
         }
         assert!(
             Instant::now() < deadline,
-            "premise: {what} on the tab's only window must ask the front-end to close it, \
-             draining Command::CloseWindow; none drained within {EXIT_WAIT:?}. E37 means the \
+            "premise: {what} on the tab's only window must ask the front-end to close the tab, \
+             draining Command::CloseTab; none drained within {EXIT_WAIT:?}. E37 or E162 means a \
              buffer was left modified."
         );
         thread::sleep(POLL_INTERVAL);
     }
-    core.shutdown().expect("shutdown after CloseWindow failed");
+    core.shutdown().expect("shutdown after CloseTab failed");
 }
 
 /// Opens the drawer, waits for its window to carry a session, then makes `editor` current
@@ -523,7 +523,7 @@ fn q_closing_the_waited_split_exits_0() {
 }
 
 /// W2: `:wq` on the tab's only window reports `0` before the front-end closes the tab, though
-/// the test shuts the core down as soon as `CloseWindow` drains.
+/// the test shuts the core down as soon as `CloseTab` drains.
 #[test]
 fn wq_on_the_last_pane_exits_0_before_the_tab_closes() {
     const TEXT: &str = "typed before the last pane closed";
@@ -541,12 +541,12 @@ fn wq_on_the_last_pane_exits_0_before_the_tab_closes() {
 
     type_first_line(&core, TEXT);
     send_ex(&core, "wq");
-    shut_down_on_close_window(core, ":wq");
+    shut_down_on_close_tab(core, ":wq");
     wolf.assert_exits(
         0,
         ":wq on the tab's last pane, then the tab's shutdown",
         "1 means the shutdown ended the wait first: the buffer's close never reached the \
-         command before close_window did.",
+         command before close_tab did.",
     );
     let written = std::fs::read_to_string(&file).expect("failed to read msgtwo.md back");
     assert!(
@@ -971,7 +971,7 @@ fn git_commit_lands_the_typed_message() {
 
     type_first_line(&core, MESSAGE);
     send_ex(&core, "wq");
-    shut_down_on_close_window(core, ":wq");
+    shut_down_on_close_tab(core, ":wq");
     let (status, stderr) = commit.exit_within(":wq on the message file");
     assert!(
         status.success(),
@@ -1053,7 +1053,7 @@ fn zz_on_the_last_pane_exits_0() {
 
     type_first_line(&core, TEXT);
     type_str(&core, "ZZ");
-    shut_down_on_close_window(core, "ZZ");
+    shut_down_on_close_tab(core, "ZZ");
     wolf.assert_exits(
         0,
         "ZZ on the tab's last pane, then the tab's shutdown",
@@ -1086,7 +1086,7 @@ fn zq_on_the_last_pane_exits_0() {
 
     type_first_line(&core, TEXT);
     type_str(&core, "ZQ");
-    shut_down_on_close_window(core, "ZQ");
+    shut_down_on_close_tab(core, "ZQ");
     wolf.assert_exits(
         0,
         "ZQ on the tab's last pane, then the tab's shutdown",
@@ -1182,4 +1182,47 @@ fn cq_beside_the_drawer_exits_1_and_keeps_the_pane() {
         ":cq in a waited window beside the drawer must still delete the waited buffer {buf}."
     );
     core.shutdown().expect("shutdown failed");
+}
+
+/// W20: `:q` on the tab's last pane ends with `0` the wait of a buffer `:e other` hid, before
+/// the front-end closes the tab, though the test shuts the core down as soon as `CloseTab`
+/// drains.
+#[test]
+fn q_on_the_last_pane_ends_a_hidden_buffers_wait_with_0() {
+    let case = new_case();
+    case.write("msgtwenty.md", "# twenty\n");
+    case.write("plaint.md", "# plain t\n");
+    let (core, waiter) = case.start_core();
+    let mut wolf = case.spawn_wait("msgtwenty.md");
+    let path = case.open_waited(&core, &mut wolf);
+    let (shown, _, _) = case.current(&core);
+    assert_eq!(
+        shown,
+        path.display().to_string(),
+        "premise: msgtwenty.md must be current"
+    );
+
+    send_ex(&core, "e plaint.md");
+    let line = poll_still_waiting(&core, &waiter);
+    assert!(
+        line.contains("msgtwenty.md"),
+        "premise: the toast must say msgtwenty.md is still waited on once hidden; it reads \
+         {line:?}"
+    );
+    if let Some((status, stderr)) = wolf.exited() {
+        panic!(
+            "premise: {} must still be waiting after :e plaint.md hid its buffer; it exited \
+             {status}. stderr:\n{stderr}",
+            wolf.what
+        );
+    }
+
+    send_ex(&core, "q");
+    shut_down_on_close_tab(core, ":q");
+    wolf.assert_exits(
+        0,
+        ":q on the tab's last pane, then the tab's shutdown",
+        "1 means the shutdown ended the hidden buffer's wait first: the quit ended only the \
+         waits of the buffers its windows show.",
+    );
 }

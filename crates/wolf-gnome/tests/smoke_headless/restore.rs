@@ -468,10 +468,10 @@ pub(crate) const TABS_RESTORE_READBACK_NAME: &str = "tabs_run2.txt";
 /// | code | meaning |
 /// | --- | --- |
 /// | `11` | run 1's app died before it was ready for input |
-/// | `12` | run 1 was still alive after `:qa` |
+/// | `12` | run 1 was still alive after `:WolfCloseWindow` |
 /// | `13` | run 1 exited NON-ZERO — it went away, but not cleanly |
 /// | `14` | run 2's app died before it was ready for input |
-/// | `16` | run 2 was still alive after `:qa` |
+/// | `16` | run 2 was still alive after `:WolfCloseWindow` |
 /// | `17` | run 2 exited NON-ZERO |
 /// | `21` | run 1 did not reach THREE live Neovims, so Ctrl+Shift+T failed and nothing below is about persistence |
 /// | `22` | run 1 wrote no `wolf.sqlite` at all |
@@ -574,8 +574,9 @@ wait_nvim_count 3 21 "after two Ctrl+Shift+T chords in run 1"
 
 # Quit. `Coordinator::on_window_closing` gathers this window -- once per TAB, each
 # from its own Neovim -- commits the window state and blocks on
-# `AppStateStore::flush`, so wolf.sqlite holds it before the process goes.
-wtype -- ":qa"
+# `AppStateStore::flush`, so wolf.sqlite holds it before the process goes. Close Window,
+# since `:qa` closes only the selected tab of three.
+wtype -- ":WolfCloseWindow"
 wtype -k Return
 
 tries=0
@@ -589,7 +590,7 @@ while [ "$tries" -lt "$QUIT_TRIES" ]; do
     sleep "$WAIT_INTERVAL"
 done
 if [ "$gone" -ne 1 ]; then
-    echo "wolf-gnome three-tab smoke: run 1 (pid $app_pid) still alive after :qa." >&2
+    echo "wolf-gnome three-tab smoke: run 1 (pid $app_pid) still alive after :WolfCloseWindow." >&2
     exit 12
 fi
 rc=0
@@ -642,8 +643,9 @@ echo "wolf-gnome three-tab smoke: run 2 swap map has $rows row(s) after $rb read
 cat "$TABS_READBACK" >&2
 
 # NOTHING selects another tab: no chord, no click. Tabs 1 and 2 keep whatever the
-# restore gave them, which is the whole subject of the third assertion.
-wtype -- ":qa"
+# restore gave them, which is the whole subject of the third assertion. Close Window, since
+# `:qa` closes only the selected tab.
+wtype -- ":WolfCloseWindow"
 wtype -k Return
 
 tries=0
@@ -657,7 +659,7 @@ while [ "$tries" -lt "$QUIT_TRIES" ]; do
     sleep "$WAIT_INTERVAL"
 done
 if [ "$gone" -ne 1 ]; then
-    echo "wolf-gnome three-tab smoke: run 2 (pid $app_pid) still alive after :qa." >&2
+    echo "wolf-gnome three-tab smoke: run 2 (pid $app_pid) still alive after :WolfCloseWindow." >&2
     exit 16
 fi
 rc=0
@@ -2452,11 +2454,11 @@ fn three_tabs_survive_a_relaunch_under_cage() {
         "{SMOKE}: the cage three-tab relaunch scenario exited unsuccessfully ({status}). Read the \
          exit code FIRST; each names a different half of the claim.\n\
          Exit 11: run 1's app died before it was ready for input — a LAUNCH failure.\n\
-         Exit 12: run 1 was still alive after `:qa`.\n\
+         Exit 12: run 1 was still alive after `:WolfCloseWindow`.\n\
          Exit 13: run 1 exited NON-ZERO — it went away, but not cleanly. Three tabs close in \
          sequence here, so a borrow discipline that held at one tab is the first suspect.\n\
          Exit 14: run 2's app died before it was ready for input.\n\
-         Exit 16: run 2 was still alive after `:qa`.\n\
+         Exit 16: run 2 was still alive after `:WolfCloseWindow`.\n\
          Exit 17: run 2 exited NON-ZERO — it RESTORED tabs, so suspect `window::build` opening \
          the planned tabs.\n\
          Exit 21: run 1 never reached three live Neovims, so Ctrl+Shift+T failed and nothing \

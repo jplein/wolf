@@ -705,6 +705,50 @@ local function closable(win)
 	return false
 end
 
+-- The name Vim's E162 gives buffer `b`: its buf_spname, else its file name.
+local function refusal_name(b)
+	local bt = vim.bo[b].buftype
+	if bt == "quickfix" then
+		if b == vim.fn.getqflist({ qfbufnr = 0 }).qfbufnr then
+			return "[Quickfix List]"
+		end
+		return "[Location List]"
+	end
+	local name = vim.fn.bufname(b)
+	if name ~= "" then
+		return name
+	end
+	if bt == "prompt" then
+		return "[Prompt]"
+	end
+	if bt == "acwrite" then
+		return "[Scratch]"
+	end
+	return "[No Name]"
+end
+
+-- Echoes Vim's E37 or E162 for the first modified buffer of this Neovim, the tab's, and returns
+-- true; false, silently, with none. Neovim never marks a nofile or terminal buffer modified.
+function _G.wolf_refuse_unsaved()
+	local cur = vim.api.nvim_get_current_buf()
+	local order = { cur }
+	for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+		order[#order + 1] = vim.api.nvim_win_get_buf(w)
+	end
+	vim.list_extend(order, vim.api.nvim_list_bufs())
+	for _, b in ipairs(order) do
+		if vim.api.nvim_buf_is_valid(b) and vim.bo[b].modified then
+			local msg = "E37: No write since last change (add ! to override)"
+			if b ~= cur then
+				msg = string.format('E162: No write since last change for buffer "%s"', refusal_name(b))
+			end
+			vim.api.nvim_echo({ { msg, "ErrorMsg" } }, true, {})
+			return true
+		end
+	end
+	return false
+end
+
 -- The buffer Neovim 0.12's do_buffer_ext shows in `win` when `:bd` deletes its buffer, or nil
 -- for a new empty one. `targets` is a set of the buffers being deleted.
 local function bdelete_replacement(win, targets)
@@ -844,35 +888,28 @@ function _G.wolf_setup_layout(chan)
 		end
 	end
 
-	-- A failed write aborts the quit; a plain quit of a modified last pane is refused with E37.
-	-- all=true skips the pane count; the modified guard stays current-buffer only, as for :q.
+	-- A failed write aborts the quit. Unless forced, closing the tab is refused while any buffer of
+	-- its Neovim is unsaved; all=true closes the tab whatever the pane count.
 	local function do_quit(opts)
 		if opts.write then
-			local ok = pcall(vim.cmd, opts.force and "write!" or "write")
+			local ok = pcall(vim.cmd, (opts.all and "wall" or "write") .. (opts.force and "!" or ""))
 			if not ok then
 				return
 			end
 		end
 		if not opts.all and closable(0) then
 			pcall(vim.api.nvim_win_close, 0, opts.force or false)
-		else
-			if not opts.force and vim.bo.modified then
-				vim.api.nvim_echo(
-					{ { "E37: No write since last change (add ! to override)", "ErrorMsg" } },
-					true,
-					{}
-				)
-				return
-			end
-			-- Before close_window, on which the front-end shuts the tab's core down and ends every
-			-- wait with 1. See notes/runtime/nvim/init.lua.md#waits-end-before-close_window
-			local wins = opts.all and vim.api.nvim_tabpage_list_wins(0)
-				or { vim.api.nvim_get_current_win() }
-			for _, win in ipairs(wins) do
-				end_waits(vim.api.nvim_win_get_buf(win), 0)
-			end
-			vim.rpcnotify(chan, "wolf_command", "close_window")
+			return
 		end
+		if not opts.force and _G.wolf_refuse_unsaved() then
+			return
+		end
+		-- Before close_tab, on which the front-end shuts the tab's core down and ends every wait
+		-- with 1. See notes/runtime/nvim/init.lua.md#waits-end-before-the-tab-closes
+		for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+			end_waits(buf, 0)
+		end
+		vim.rpcnotify(chan, "wolf_command", "close_tab")
 	end
 
 	-- FOCUS: PURE intent. Do NOT change nvim focus here; just report the request.

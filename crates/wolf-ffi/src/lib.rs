@@ -231,6 +231,8 @@ mod command_kind {
     pub const SPLIT_VERTICAL: u8 = 29;
     /// Toggle the active pane between zoomed, over the whole pane area, and not.
     pub const ZOOM_PANE: u8 = 30;
+    /// Close the tab that queued it, and its window on its last tab.
+    pub const CLOSE_TAB: u8 = 31;
 }
 
 /// The palette-row-kind discriminants packed into [`FfiCommandRow::row_kind`].
@@ -4419,6 +4421,7 @@ impl FfiCommand {
             Command::SplitHorizontal => command_kind::SPLIT_HORIZONTAL,
             Command::SplitVertical => command_kind::SPLIT_VERTICAL,
             Command::ZoomPane => command_kind::ZOOM_PANE,
+            Command::CloseTab => command_kind::CLOSE_TAB,
         };
         Self { kind }
     }

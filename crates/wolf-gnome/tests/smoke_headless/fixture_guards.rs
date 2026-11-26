@@ -28,13 +28,14 @@ use super::open_folder::{
 };
 use super::panes::{
     CHORD_CLOSE_OCR_GONE, CHORD_CLOSE_OCR_KEEP, CLOSE_OCR_GONE, CLOSE_OCR_KEEP, FOCUS_OCR_LEFT,
-    FOCUS_OCR_MARKER, FOCUS_OCR_RIGHT, HSPLIT_OCR_BOTTOM, HSPLIT_OCR_TOP, QUIT_OCR_GONE,
-    QUIT_OCR_KEEP, RELOAD_FILE, RELOAD_PID_ONE_NAME, RELOAD_PID_TWO_NAME, RELOAD_READ_NAME,
-    STATUS_FILE_A, STATUS_FILE_B, STATUS_FIXTURE_BODY, STATUS_FIXTURE_DIR, STATUS_OCR_A,
-    STATUS_OCR_B, STATUS_OCR_MARKER, STATUS_READBACK_NAME, TABS_FIRST_FILE, TABS_FIRST_HEADING,
-    TABS_OCR_FIRST, TABS_OCR_SECOND, TABS_READ_A_NAME, TABS_READ_C_NAME, TABS_READ_E_NAME,
-    TABS_READ_F_NAME, TABS_SECOND_FILE, TABS_SECOND_HEADING, TABS_SECOND_NAME, TABS_SUBDIR,
-    TRI_OCR_A, TRI_OCR_B, TRI_OCR_C, VSPLIT_OCR_LEFT, VSPLIT_OCR_RIGHT,
+    FOCUS_OCR_MARKER, FOCUS_OCR_RIGHT, HSPLIT_OCR_BOTTOM, HSPLIT_OCR_TOP, OWNQUIT_FIRST_FILE,
+    OWNQUIT_READ_QA_NAME, OWNQUIT_READ_Q_NAME, OWNQUIT_SECOND_FILE, QUIT_OCR_GONE, QUIT_OCR_KEEP,
+    RELOAD_FILE, RELOAD_PID_ONE_NAME, RELOAD_PID_TWO_NAME, RELOAD_READ_NAME, STATUS_FILE_A,
+    STATUS_FILE_B, STATUS_FIXTURE_BODY, STATUS_FIXTURE_DIR, STATUS_OCR_A, STATUS_OCR_B,
+    STATUS_OCR_MARKER, STATUS_READBACK_NAME, TABS_FIRST_FILE, TABS_FIRST_HEADING, TABS_OCR_FIRST,
+    TABS_OCR_SECOND, TABS_READ_A_NAME, TABS_READ_C_NAME, TABS_READ_E_NAME, TABS_READ_F_NAME,
+    TABS_SECOND_FILE, TABS_SECOND_HEADING, TABS_SECOND_NAME, TABS_SUBDIR, TRI_OCR_A, TRI_OCR_B,
+    TRI_OCR_C, VSPLIT_OCR_LEFT, VSPLIT_OCR_RIGHT,
 };
 use super::pointer::{WEDGE_OCR_CLICK, WEDGE_OCR_STAY};
 use super::preview::{
@@ -1717,6 +1718,27 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         TABCRASH_READ_NAME,
         "TABCRASH_READ_NAME",
         "one_tabs_neovim_crash_restarts_only_that_tab_under_cage",
+    ),
+    // The own-tab quit smoke OCRs nothing either; its rows serve the generic loop.
+    (
+        OWNQUIT_FIRST_FILE,
+        "OWNQUIT_FIRST_FILE",
+        "quit_closes_only_its_own_tab_under_cage",
+    ),
+    (
+        OWNQUIT_SECOND_FILE,
+        "OWNQUIT_SECOND_FILE",
+        "quit_closes_only_its_own_tab_under_cage",
+    ),
+    (
+        OWNQUIT_READ_Q_NAME,
+        "OWNQUIT_READ_Q_NAME",
+        "quit_closes_only_its_own_tab_under_cage",
+    ),
+    (
+        OWNQUIT_READ_QA_NAME,
+        "OWNQUIT_READ_QA_NAME",
+        "quit_closes_only_its_own_tab_under_cage",
     ),
     // The save smokes OCR nothing; these rows serve the generic loop. SAVEAS_PROPOSED_NAME is absent:
     // it is asserted not to exist on disk, so registering it would say the opposite.

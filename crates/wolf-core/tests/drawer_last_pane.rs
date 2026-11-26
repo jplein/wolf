@@ -215,11 +215,11 @@ fn session_chord(core: &WolfCore, id: TerminalId, next: char) {
     core.terminal_key(id, term_key(Key::Char(next)));
 }
 
-/// Drains commands for up to `within`, returning whether `Command::CloseWindow` was one.
-fn close_window_drains(core: &WolfCore, waiter: &FlushWaiter, within: Duration) -> bool {
+/// Drains commands for up to `within`, returning whether `Command::CloseTab` was one.
+fn close_tab_drains(core: &WolfCore, waiter: &FlushWaiter, within: Duration) -> bool {
     let deadline = Instant::now() + within;
     loop {
-        if core.drain_commands().contains(&Command::CloseWindow) {
+        if core.drain_commands().contains(&Command::CloseTab) {
             return true;
         }
         if Instant::now() >= deadline {
@@ -683,7 +683,7 @@ fn quit_beside_the_drawer(quit: Quit) {
     let _ = f.core.drain_commands();
 
     (quit.send)(&f.core);
-    let drained = close_window_drains(&f.core, &f.waiter, FLUSH_TIMEOUT);
+    let drained = close_tab_drains(&f.core, &f.waiter, FLUSH_TIMEOUT);
     let open = f.probe(&[
         format!("win_id2win({editor}) > 0"),
         format!("win_id2win({drawer}) > 0"),
@@ -692,7 +692,7 @@ fn quit_beside_the_drawer(quit: Quit) {
         (drained, open[0].as_str()),
         (true, "1"),
         "{} on the tab's only editor window {editor} (buffer {first}) beside the drawer \
-         {drawer} must drain Command::CloseWindow and leave the window open: (CloseWindow, \
+         {drawer} must drain Command::CloseTab and leave the window open: (CloseTab, \
          window open). (false, 0) means the quit closed the editor as a split, because the \
          drawer was counted as a pane; (false, 1) means the quit was refused or never ran.",
         quit.name
@@ -774,7 +774,7 @@ fn close_refused_beside_the_drawer(name: &str, send: impl Fn(&WolfCore)) {
     let _ = f.core.drain_commands();
 
     send(&f.core);
-    let drained = close_window_drains(&f.core, &f.waiter, NEGATIVE_SETTLE);
+    let drained = close_tab_drains(&f.core, &f.waiter, NEGATIVE_SETTLE);
     let values = f.probe(&[
         format!("win_id2win({editor}) > 0"),
         format!("win_id2win({drawer}) > 0"),
@@ -784,9 +784,9 @@ fn close_refused_beside_the_drawer(name: &str, send: impl Fn(&WolfCore)) {
         (values, drained),
         (vec!["1".to_owned(), "1".to_owned(), first.clone()], false),
         "{name} on the tab's only editor window {editor} beside the drawer {drawer} must be \
-         refused: ((editor open, drawer open, editor's buffer), CloseWindow) must read ((1, 1, \
+         refused: ((editor open, drawer open, editor's buffer), CloseTab) must read ((1, 1, \
          {first}), false). An editor window gone means the close counted the drawer as a pane \
-         and closed the last one; CloseWindow means it was treated as a quit."
+         and closed the last one; CloseTab means it was treated as a quit."
     );
     assert_eq!(
         f.core.live_terminals(),

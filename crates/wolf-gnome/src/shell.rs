@@ -49,7 +49,7 @@
 //! wakes it ([`AppShell::on_tab_selected`]).
 //!
 //! The drain keeps running in ALL THREE liveness states. The drain is the ONLY
-//! path by which a `close_window` / `quit_application` reaches
+//! path by which a `close_window` / `close_tab` / `quit_application` reaches
 //! `window.close()`, so a command queued in the instant before a crash would
 //! otherwise be stranded behind the crash overlay with no way out but the window
 //! manager. Reading the queue issues no RPC; some dispatched commands do.
@@ -93,8 +93,9 @@
 //! commands into a `Vec`, and drops the borrow before dispatching any of them.
 //! `UiAction::CloseWindow` / `UiAction::QuitApplication` synchronously run
 //! `window::wire_close`'s `close-request` handler, which takes every tab's core out
-//! with a `borrow_mut()`; an outstanding `borrow()` there is a `RefCell` panic, not a
-//! warning.
+//! with a `borrow_mut()`. `UiAction::CloseTab` takes its tab's core out, and on the
+//! window's last tab it runs the same handler. An outstanding `borrow()` there is a
+//! `RefCell` panic, not a warning.
 //!
 //! The restart path adds a SECOND rule: **never hold a snapshot read guard across
 //! `open_files_for_tabpage`**. [`AppShell::capture_open_files`] binds
@@ -1993,6 +1994,7 @@ impl AppShell {
             UiAction::ToggleFullWidth => self.send_input(InputEvent::ToggleFullWidth),
             UiAction::ToggleTerminal => self.toggle_terminal(),
             UiAction::CloseWindow => self.close_window(),
+            UiAction::CloseTab => self.close_tab(),
             UiAction::MinimizeWindow => self.minimize_window(),
             UiAction::QuitApplication => self.quit_application(),
             UiAction::OpenPreview => self.open_preview(),
@@ -2064,6 +2066,16 @@ impl AppShell {
     /// exits once its last window closes.
     fn close_window(&self) {
         self.inner.window.close();
+    }
+
+    /// Closes the selected tab, whose Neovim queued the `close_tab` (commands drain from
+    /// the selected tab only), through [`TabsHandle::close`]; on the window's last tab,
+    /// `tabs_ui::close_outcome` closes the window instead. Nothing asks again: the quit
+    /// that sent it has already refused unsaved changes.
+    fn close_tab(&self) {
+        if let Some(tab) = self.inner.tabs.selected() {
+            self.inner.tabs.close(&tab);
+        }
     }
 
     /// Minimizes the window, telling the coordinator first: Wayland never reports a

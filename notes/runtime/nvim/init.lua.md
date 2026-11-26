@@ -60,7 +60,7 @@ A buffer that already has a swap is renamed earlier, by `buf_name_changed` betwe
 
 A live owner's swap, which is another tab's Neovim, stays under `A` and raises nothing. A long-path buffer is skipped, since it gets `noswapfile`.
 
-## Waits end before close_window
+## Waits end before the tab closes
 
 `do_quit` ends the waits of every buffer whose window the close takes before it notifies `close_window`. The front-end shuts the tab's core down on that command, and the shutdown ends every wait it still holds with `1`. Core applies notifications in the order Neovim sent them, so the `0` reaches the command first. `WinClosed` cannot do it here, because the front-end closes the tab without closing its last window in Neovim.
 

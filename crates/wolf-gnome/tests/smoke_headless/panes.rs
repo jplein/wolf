@@ -1,5 +1,6 @@
 //! Pane and layout smokes: splits, focus moves, closing panes, `:q` and `:qa`, the per-pane
-//! statusbar, native tabs, and a file saved in one tab reloading in another.
+//! statusbar, native tabs, a file saved in one tab reloading in another, and `:q` and `:qa`
+//! closing only their own tab.
 
 use super::recovery::with_nvim_pid_helper;
 use super::*;
@@ -564,8 +565,8 @@ wtype -k Return
 sleep "$SETTLE"
 
 # Close the focused (right) pane with `:q`. init.lua's do_quit closes the PANE
-# (nvim_win_close) whenever more than one window is open, and only fires the
-# `close_window` command when it is the last one -- so this must NOT quit the app.
+# (nvim_win_close) whenever more than one window is open, and only notifies
+# `close_tab` when it is the last one -- so this must NOT quit the app.
 wtype -- ":q"
 wtype -k Return
 
@@ -586,6 +587,9 @@ exit 0
 /// launch the app, wait until it is ready for input (`wait_ready`), type `:qa<CR>`,
 /// then POLL for the app process to disappear and REAP it to check how it went.
 ///
+/// The window holds one tab, so the `close_tab` that `:qa` notifies closes the window:
+/// `tabs_ui::close_outcome` routes the last tab's close into `window.close()`.
+///
 /// This is the only scenario that captures NO screenshot: its whole assertion is
 /// that the process is gone and exited cleanly, which is a property of the process
 /// table, not of any pixel. It therefore calls neither `grim` nor `tesseract`, and
@@ -599,8 +603,8 @@ exit 0
 ///
 /// Exit codes: `0` the app exited cleanly (success); `11` the app died before it
 /// was ready for input; `12` the app was still alive after `QUIT_TRIES * WAIT_INTERVAL`
-/// seconds — i.e. the drained `close_window` command never reached
-/// `window.close()`; `13` the app exited but with a NON-ZERO status — i.e. the
+/// seconds — i.e. the drained `close_tab` command never reached `window.close()`
+/// through the last tab's close; `13` the app exited but with a NON-ZERO status — i.e. the
 /// shutdown path itself panicked or aborted.
 const COLON_QA_SCENARIO: &str = r#"
 set -eu
@@ -619,9 +623,10 @@ app_pid=$!
 wait_ready "$app_pid" 11 "wolf-gnome :qa smoke"
 
 # Quit-all. init.lua's do_quit sees `all` and fires
-# `vim.rpcnotify(chan, "wolf_command", "close_window")` (behind its E37 guard; the
-# startup buffer is untouched here, so the guard does not trip). redraw.rs queues
-# the command AND fires the wake, so the GTK drain runs promptly.
+# `vim.rpcnotify(chan, "wolf_command", "close_tab")` (behind its unsaved-changes check;
+# the startup buffer is untouched here, so the check does not trip). redraw.rs queues
+# the command AND fires the wake, so the GTK drain runs promptly. This is the window's
+# only tab, so closing it closes the window.
 wtype -- ":qa"
 wtype -k Return
 
@@ -1570,7 +1575,7 @@ fn colon_qa_closes_the_window_under_cage() {
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
     // A fresh temp cwd with no fixture files: nothing is opened, and the startup
-    // buffer stays untouched so init.lua's E37 modified-buffer guard does not trip.
+    // buffer stays untouched so init.lua's unsaved-changes check does not trip.
     let cwd = make_temp_cwd();
 
     // No PNG: the assertion is that the app process exited cleanly, which no pixel can show.
@@ -1582,17 +1587,19 @@ fn colon_qa_closes_the_window_under_cage() {
     assert!(
         status.success(),
         "cage :qa scenario exited unsuccessfully ({status}). This is the load-bearing proof of \
-         the WHOLE command drain: `:qa` -> init.lua's do_quit -> `wolf_command close_window` -> \
+         the WHOLE command drain: `:qa` -> init.lua's do_quit -> `wolf_command close_tab` -> \
          redraw.rs queues it AND fires the wake -> `WolfCore::drain_commands` on the render wake \
-         -> `UiAction::CloseWindow` -> `window.close()` -> clean `WolfCore::shutdown`. The \
+         -> `UiAction::CloseTab` -> the tab's `close-page` -> `tabs_ui::close_outcome`'s last-tab \
+         arm -> `window.close()` -> clean `WolfCore::shutdown`. The \
          scenario reports WHICH half failed through its exit code; read it before anything else. \
          \n\
          Exit 11: the app died before it was ready for input. That is a LAUNCH failure, not a \
          drain failure — `:qa` was never even typed. \n\
          Exit 12: the app was STILL RUNNING after the poll budget, i.e. the drained \
-         `close_window` never reached `window.close()`. Check that `shell.on_render_wake()` is \
-         actually called from the wake closure (and called LAST, after panes and tree), and that \
-         `UiAction::CloseWindow` calls `window.close()` rather than `window.destroy()`. \n\
+         `close_tab` never reached `window.close()`. Check that `shell.on_render_wake()` is \
+         actually called from the wake closure (and called LAST, after panes and tree), that \
+         `AppShell::close_tab` closes the selected page, and that `close_outcome` answers \
+         `CloseWindow` on the last page. \n\
          Exit 13: the app DID exit, but with a non-zero status — it went away without closing \
          cleanly, so the shutdown path itself panicked or aborted. The most likely culprit is an \
          outstanding `core.borrow()` held across the dispatch while `wire_close`'s handler does \
@@ -2978,4 +2985,262 @@ fn a_file_saved_in_one_tab_reloads_in_another_on_switch_under_cage() {
          `:checktime` on `FocusGained`. The scenario re-issued this readback until the heading \
          changed or its budget ran out, so this is no reload rather than a late one."
     );
+}
+
+// Own-tab quit smoke: `:q` and `:qa` close the tab they are typed in, and not its window.
+// No capture is taken; the fixtures are in `RELAUNCH_FIXTURE_NAMES` for the generic loop.
+
+/// The file tab 1 opens: the tab that must survive both quits.
+pub(crate) const OWNQUIT_FIRST_FILE: &str = "qolima.md";
+
+/// The file the second new tab opens before its split and `:qa`.
+pub(crate) const OWNQUIT_SECOND_FILE: &str = "qosierra.md";
+
+/// Heading inside [`OWNQUIT_FIRST_FILE`]. Nothing reads it.
+const OWNQUIT_FIRST_HEADING: &str = "# OWNQUITONE";
+
+/// Heading inside [`OWNQUIT_SECOND_FILE`]. Nothing reads it.
+const OWNQUIT_SECOND_HEADING: &str = "# OWNQUITTWO";
+
+/// After leg (c)'s `:q`, the surviving Neovim writes the tail of `bufname('%')` here.
+pub(crate) const OWNQUIT_READ_Q_NAME: &str = "qo_afterq.txt";
+
+/// After leg (d)'s `:qa`, the surviving Neovim writes the tail of `bufname('%')` here.
+pub(crate) const OWNQUIT_READ_QA_NAME: &str = "qo_afterqa.txt";
+
+/// The own-tab quit scenario for [`quit_closes_only_its_own_tab_under_cage`], one `sh -c`
+/// string inside `cage`, keyboard only, composed with `recovery::with_nvim_pid_helper`.
+///
+/// Tab 1 opens [`OWNQUIT_FIRST_FILE`]. Ctrl+Shift+T opens an empty second tab, where `:q` on
+/// its only pane must close that tab alone. Ctrl+Shift+T opens another, which opens
+/// [`OWNQUIT_SECOND_FILE`] and splits, and `:qa` there must close that tab alone. After each
+/// quit the app must be alive, with one Neovim left, and that Neovim must be tab 1's.
+///
+/// Every quit's close is waited for by polling, until fewer than two Neovims are live or the
+/// app is gone, and then one settle more, so an app that is shutting down has gone by the time
+/// its aliveness is read.
+///
+/// ## Exit codes
+///
+/// | code | leg | meaning |
+/// | --- | --- | --- |
+/// | `11` | | the app died before it was ready for input |
+/// | `14` | c, d | a readback never appeared |
+/// | `21` | a | the app did not start with exactly one live Neovim |
+/// | `22` | b | Ctrl+Shift+T did not leave exactly two live Neovims |
+/// | `23` | c | the app exited, or every Neovim went, on `:q` in the second tab |
+/// | `24` | c | `:q` did not leave exactly one live Neovim |
+/// | `25` | c | the Neovim left after `:q` is not tab 1's |
+/// | `26` | d | Ctrl+Shift+T did not leave exactly two live Neovims again |
+/// | `27` | d | the app exited, or every Neovim went, on `:qa` in the split tab |
+/// | `28` | d | `:qa` did not leave exactly one live Neovim |
+/// | `29` | d | the Neovim left after `:qa` is not tab 1's |
+const OWNQUIT_SCENARIO: &str = r#"
+set -eu
+
+# SETTLE is the settle between steps; see SCENARIO.
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+QUIT_TRIES=75
+FILE_TRIES=100
+# The adw::TabBar animates its height in over about a second; see POINTER_TABS_BODY.
+TABS_BAR_SETTLE=2.0
+
+cleanup() {
+    set +e
+    if [ -n "${app_pid:-}" ]; then
+        kill "$app_pid" 2>/dev/null
+        wait "$app_pid" 2>/dev/null
+    fi
+}
+trap cleanup EXIT INT TERM HUP
+
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome own-tab quit smoke: readback file $f never appeared (or stayed empty)." >&2
+    return 1
+}
+
+# Polls until fewer than two Neovims are live or the app is gone, then settles, so a window
+# close that shuts every tab down has finished before anything reads the app's aliveness.
+await_close() {
+    t=0
+    while [ "$t" -lt "$QUIT_TRIES" ]; do
+        pid_is_live "$app_pid" || break
+        find_nvim_pid || true
+        if [ "$count" -lt 2 ]; then
+            break
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    sleep "$SETTLE"
+    find_nvim_pid || true
+}
+
+# Exits $2 when the app is gone or no Neovim is live: the quit $1 closed the window.
+assert_window_kept() {
+    if ! pid_is_live "$app_pid" || [ "${count:-0}" -eq 0 ]; then
+        echo "wolf-gnome own-tab quit smoke: after $1 in one of TWO tabs, the app is gone or" >&2
+        echo "  no Neovim is live (count ${count:-0}). The quit closed the whole window, and" >&2
+        echo "  every tab with it, rather than the tab it was typed in." >&2
+        exit "$2"
+    fi
+}
+
+"$WOLF_BIN" &
+app_pid=$!
+wait_ready "$app_pid" 11 "wolf-gnome own-tab quit smoke"
+
+# --- Leg (a): tab 1, its Neovim and its file ---------------------------------
+wait_nvim_count 1 21 "at launch, with one tab open"
+wtype -- ":e $OWNQUIT_FIRST_FILE"
+wtype -k Return
+sleep "$SETTLE"
+
+# --- Leg (b): an empty second tab ---------------------------------------------
+wtype -M ctrl -M shift -k t -m shift -m ctrl
+wait_nvim_count 2 22 "after Ctrl+Shift+T opened a second tab"
+sleep "$TABS_BAR_SETTLE"
+
+# --- Leg (c): :q on the second tab's only pane ------------------------------
+wtype -- ":q"
+wtype -k Return
+await_close
+assert_window_kept ":q" 23
+wait_nvim_count 1 24 "after :q on the second tab's last pane"
+wtype -- ":call writefile([fnamemodify(bufname('%'), ':t')], '$OWNQUIT_READ_Q')"
+wtype -k Return
+wait_file "$OWNQUIT_READ_Q" || exit 14
+buf_q=$(cat "$OWNQUIT_READ_Q")
+echo "wolf-gnome own-tab quit smoke: leg (c) bufname=$buf_q" >&2
+if [ "$buf_q" != "$OWNQUIT_FIRST_FILE" ]; then
+    echo "wolf-gnome own-tab quit smoke: after :q in the second tab, the Neovim left shows" >&2
+    echo "  '$buf_q', not $OWNQUIT_FIRST_FILE: the quit closed tab 1 rather than its own tab." >&2
+    exit 25
+fi
+
+# --- Leg (d): :qa in a split second tab ---------------------------------------
+wtype -M ctrl -M shift -k t -m shift -m ctrl
+wait_nvim_count 2 26 "after Ctrl+Shift+T opened a second tab again"
+sleep "$TABS_BAR_SETTLE"
+# New Tab's tab is empty, its Neovim at HOME: this relative :cd puts it where the :e resolves.
+wtype -- ":cd $OWNQUIT_PROJECT_BASE"
+wtype -k Return
+sleep "$SETTLE"
+wtype -- ":e $OWNQUIT_SECOND_FILE"
+wtype -k Return
+sleep "$SETTLE"
+wtype -M ctrl -k w -m ctrl
+wtype -k v
+sleep "$SETTLE"
+wtype -- ":qa"
+wtype -k Return
+await_close
+assert_window_kept ":qa" 27
+wait_nvim_count 1 28 "after :qa in the split second tab"
+wtype -- ":call writefile([fnamemodify(bufname('%'), ':t')], '$OWNQUIT_READ_QA')"
+wtype -k Return
+wait_file "$OWNQUIT_READ_QA" || exit 14
+buf_qa=$(cat "$OWNQUIT_READ_QA")
+echo "wolf-gnome own-tab quit smoke: leg (d) bufname=$buf_qa" >&2
+if [ "$buf_qa" != "$OWNQUIT_FIRST_FILE" ]; then
+    echo "wolf-gnome own-tab quit smoke: after :qa in the split second tab, the Neovim left" >&2
+    echo "  shows '$buf_qa', not $OWNQUIT_FIRST_FILE: the quit closed tab 1 instead." >&2
+    exit 29
+fi
+exit 0
+"#;
+
+/// `:q` on a tab's last pane, and `:qa` in a split tab, close the tab they are typed in and
+/// leave the window and its other tab open, with that tab's Neovim still running.
+///
+/// ## What it proves
+///
+/// A quit's `close_tab` drains from the selected tab, whose Neovim sent it, and
+/// `AppShell::close_tab` closes that tab's page through `close-page`, so `close_outcome` shuts
+/// down that tab's core alone while another page is live. A quit that still closed the window
+/// shuts every tab down, which leg (c) reports as `23`.
+///
+/// ## Assertions
+///
+/// | # | assertion | kind | falsifier | predicted red |
+/// | --- | --- | --- | --- | --- |
+/// | 1 | (in-scenario) the app and a Neovim survive `:q` in the second tab | **discriminator** | G1a: `perform`'s arm becomes `UiAction::CloseTab => self.close_window()` | scenario exit 23, as at the base |
+/// | 2 | (in-scenario) one Neovim is left after `:q` | **discriminator** | G1b: `AppShell::close_tab`'s body is emptied | scenario exit 24 |
+/// | 3 | the Neovim left after `:q` shows [`OWNQUIT_FIRST_FILE`] | **discriminator** | G1c: `AppShell::close_tab` closes the first entry instead of the selected tab | scenario exit 25 |
+/// | 4 | (in-scenario) the app and a Neovim survive `:qa` in the split tab | **discriminator** | G1d: `do_quit` notifies `close_window` for `all` | scenario exit 27 |
+/// | 5 | one Neovim is left after `:qa`, and it shows [`OWNQUIT_FIRST_FILE`] | corroboration of 4 | none isolated | n/a |
+#[test]
+fn quit_closes_only_its_own_tab_under_cage() {
+    const SMOKE: &str = "quit_closes_only_its_own_tab_under_cage";
+
+    let runtime_dir = require_smoke_env();
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+    let cwd = make_temp_cwd();
+    write_relaunch_fixtures(
+        SMOKE,
+        &cwd,
+        &[
+            (OWNQUIT_FIRST_FILE, OWNQUIT_FIRST_HEADING),
+            (OWNQUIT_SECOND_FILE, OWNQUIT_SECOND_HEADING),
+        ],
+    );
+    let read_q = cwd.join(OWNQUIT_READ_Q_NAME);
+    let read_qa = cwd.join(OWNQUIT_READ_QA_NAME);
+    for path in [&read_q, &read_qa] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let status = cage_command(&with_nvim_pid_helper(OWNQUIT_SCENARIO), &cwd, &runtime_dir)
+        .env("WOLF_BIN", bin)
+        .env("OWNQUIT_FIRST_FILE", OWNQUIT_FIRST_FILE)
+        .env("OWNQUIT_SECOND_FILE", OWNQUIT_SECOND_FILE)
+        .env("OWNQUIT_PROJECT_BASE", TEMP_CWD_BASENAME)
+        .env("OWNQUIT_READ_Q", &read_q)
+        .env("OWNQUIT_READ_QA", &read_qa)
+        .status()
+        .expect("failed to spawn `cage` for the headless own-tab quit scenario");
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage own-tab quit scenario exited unsuccessfully ({status}). Read the exit \
+         code first; the scenario's stderr names what it read back.\n\
+         Exit 11: the app died before it was ready for input.\n\
+         Exit 14: a readback never appeared: keys did not reach the surviving tab's Neovim.\n\
+         Exit 21: the app did not start with exactly one live `nvim` child.\n\
+         Exit 22 / 26: Ctrl+Shift+T did not leave two live Neovims, so there was no second tab \
+         to quit in.\n\
+         Exit 23: `:q` on the second tab's last pane closed the WINDOW: the app exited or every \
+         Neovim went. The drained `close_tab` reached `window.close()`, or `do_quit` still \
+         notifies `close_window` on the last pane.\n\
+         Exit 24: `:q` did not leave exactly one live Neovim. Two means nothing closed the tab: \
+         `AppShell::close_tab` did nothing, or `do_quit` notified nothing.\n\
+         Exit 25: one Neovim is left after `:q`, but it is not tab 1's: the close took a tab \
+         other than the selected one, whose Neovim sent it.\n\
+         Exit 27: `:qa` in the split second tab closed the WINDOW: `do_quit` notifies \
+         `close_window` for the `:qa` family.\n\
+         Exit 28: `:qa` did not leave exactly one live Neovim. Two means it closed a pane, or \
+         nothing, instead of the tab.\n\
+         Exit 29: one Neovim is left after `:qa`, but it is not tab 1's."
+    );
+
+    // Assertions 3 and 5, read back on this side too: each survivor is tab 1's Neovim.
+    for (path, quit) in [(&read_q, ":q"), (&read_qa, ":qa")] {
+        let after = read_readback(path, SMOKE).trim().to_string();
+        assert_eq!(
+            after, OWNQUIT_FIRST_FILE,
+            "{SMOKE}: after {quit} in the second tab, the Neovim left has {after:?} as its \
+             current buffer's tail, not {OWNQUIT_FIRST_FILE:?}. `Untitled.md`, an empty value \
+             or {OWNQUIT_SECOND_FILE:?} means the second tab survived and tab 1 was closed. The \
+             scenario exits on this, so reaching the assertion means the readback shape changed."
+        );
+    }
 }

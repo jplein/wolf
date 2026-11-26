@@ -476,9 +476,10 @@ impl PaletteInner {
     /// RECORDS its MRU key, CLOSES the palette, then hands the row's
     /// [`PaletteAction`] to the shell's handler. With ZERO rows it is a true no-op.
     ///
-    /// **That order is load-bearing.** A dispatched `CloseWindow` / `QuitApplication`
-    /// synchronously runs `window::wire_close`'s handler, which takes the core out and
-    /// tears the window down, so nothing may touch palette widgets afterwards. The
+    /// **That order is load-bearing.** A dispatched `CloseWindow` / `QuitApplication`, or a
+    /// `CloseTab` on the window's last tab, synchronously runs `window::wire_close`'s
+    /// handler, which takes the core out and tears the window down, so nothing may touch
+    /// palette widgets afterwards. The
     /// handler `Rc` is cloned OUT of its `RefCell` for the same reason: no borrow may
     /// be live across a call that can re-enter this widget.
     fn activate_selection(&self) {

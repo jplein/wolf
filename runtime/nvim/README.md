@@ -352,7 +352,7 @@ The durable dictionary is the global `'spellfile'` at `WOLF_SPELL_DIR/en.utf-8.a
 
 **Normal-mode `ZZ` and `ZQ` are mapped onto `do_quit`, as `:x` and `:q!`.** The native keys bypass the command-line abbreviations and quit Neovim on a tab's last pane, which is a crash that ends every wait in the tab with `1` ([§6](../../specs/cli-and-file-open.md#6-waiting)). `ZZ` writes only a modified buffer, as native `ZZ` does and unlike Wolf's `:x`, which always writes, so leaving an unchanged buffer never writes its file.
 
-**A quit that closes the tab ends the closing buffers' waits before it notifies `close_window`.** The front-end shuts the tab's core down on that command, which ends every wait still held with `1`, and the `0` must reach the command first ([mechanism](../../notes/runtime/nvim/init.lua.md#waits-end-before-close_window)).
+**A quit that closes the tab ends the closing buffers' waits before it notifies `close_window`.** The front-end shuts the tab's core down on that command, which ends every wait still held with `1`, and the `0` must reach the command first ([mechanism](../../notes/runtime/nvim/init.lua.md#waits-end-before-the-tab-closes)).
 
 **A hide asks core before it toasts.** A killed or interrupted command leaves its wait registered, and the toast must not name a file nobody waits for ([mechanism](../../notes/runtime/nvim/init.lua.md#a-hide-asks-core)).
 

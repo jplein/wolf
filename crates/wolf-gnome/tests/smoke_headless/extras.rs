@@ -855,7 +855,7 @@ const SB_EXITS: std::ops::RangeInclusive<i32> = 131..=133;
 ///
 /// | code | meaning |
 /// | --- | --- |
-/// | `131` | the app was still alive after `:qa` |
+/// | `131` | the app was still alive after `:WolfCloseWindow` |
 /// | `132` | the app exited non-zero |
 /// | `133` | no `wolf.sqlite` to freeze after the quit |
 const SB_BODY: &str = r#"
@@ -874,7 +874,8 @@ sleep "$TREE_SETTLE"
 grim "$SB_SHOT_1"
 
 click_tab "$TAB1_X" "$TAB_Y"
-wtype -- ":qa"
+# Close Window, since `:qa` closes only the selected tab of two.
+wtype -- ":WolfCloseWindow"
 wtype -k Return
 reap_app 131 132
 freeze_or_exit "$STATE_Q" 133
@@ -915,7 +916,7 @@ fn search_tab(project: &str, query: &str) -> Tab {
 /// One launch through [`POINTER_PREAMBLE`], over a planted window of two tabs on the project,
 /// both on their Search page, tab 0 selected. After the launch, a click on the header bar's
 /// Files toggle shows tab 0's Files page, with a capture of the sidebar band either side. A
-/// click on tab 1 selects it, `:qa` quits through the close path, and Q is frozen.
+/// click on tab 1 selects it, `:WolfCloseWindow` quits through the close path, and Q is frozen.
 ///
 /// The page changes by the toggle rather than by `:WolfSidebarShowProject`: a typed command
 /// drains on a render wake, and the record of the selected tab's page on later wakes could then
@@ -1002,8 +1003,8 @@ fn each_tab_keeps_its_sidebar_page_under_cage() {
     );
 
     // --- E18a and E18b: each tab saved its own page ---------------------------------------
-    let q_codes = "Exit 131: the app outlived `:qa`, so the keys after the tab click reached no \
-                   Neovim. 132: it exited non-zero. 133: it left no wolf.sqlite.";
+    let q_codes = "Exit 131: the app outlived `:WolfCloseWindow`, so the keys after the tab click \
+                   reached no Neovim. 132: it exited non-zero. 133: it left no wolf.sqlite.";
     require(SMOKE, status, &[&state_q], "Q", q_codes);
     let saved = frozen_window_state(&state_q, SMOKE, "Q, frozen after the quit");
     let window = only_window(&saved, SMOKE, "Q", &state_q);

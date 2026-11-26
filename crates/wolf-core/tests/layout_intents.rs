@@ -440,8 +440,8 @@ fn ex_q_closes_pane_when_multiple() {
 }
 
 /// Types the normal-mode `keys` with two panes open and asserts the pane count drops back to
-/// `base`: `keys` closed the current pane alone, rather than the whole window through
-/// `close_window`, which in this core-only test leaves the count at `base + 1`.
+/// `base`: `keys` closed the current pane alone, rather than the tab through `close_tab`,
+/// which in this core-only test leaves the count at `base + 1`.
 fn assert_normal_keys_close_one_of_two_panes(keys: &str) {
     let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
     let base = wait_for_initial_window(&core, &waiter);
@@ -464,7 +464,7 @@ fn assert_normal_keys_close_one_of_two_panes(keys: &str) {
         &waiter,
         &format!(
             "windows.len() to drop back by one after {keys}; staying at two panes means {keys} \
-             closed the whole window through close_window instead of the current pane"
+             closed the tab through close_tab instead of the current pane"
         ),
         || core.read_snapshot().windows.len() == base,
         |&ok| ok,
@@ -488,11 +488,10 @@ fn zq_closes_pane_when_multiple() {
 /// Typing `:qa<CR>` (the `cnoreabbrev` -> `WolfQuitAll` path) with multiple
 /// windows must NOT merely drop the pane count — unlike `:q`, which closes just the
 /// active pane (see `ex_q_closes_pane_when_multiple` above). `:qa` always takes the
-/// close-window branch, firing `close_window` for the front-end to close the WHOLE
-/// window, and in this core-only test nothing acts on that command, so the nvim
-/// pane count stays put. This is the NEGATIVE half of the differentiator; the
-/// POSITIVE close_window proof lives in
-/// `commands.rs::ex_qa_emits_close_window_when_multiple_panes`. Mirrors
+/// close-tab branch, notifying `close_tab` for the front-end to close the tab, and in
+/// this core-only test nothing acts on that command, so the nvim pane count stays put.
+/// This is the NEGATIVE half of the differentiator; the POSITIVE close_tab proof lives
+/// in `commands.rs::ex_qa_emits_close_tab_when_multiple_panes`. Mirrors
 /// `ex_q_closes_pane_when_multiple`'s setup and the SETTLE style of
 /// `ctrl_w_c_noop_on_last_window`.
 #[test]
@@ -511,7 +510,7 @@ fn ex_qa_does_not_merely_drop_pane_count() {
         |&ok| ok,
     );
 
-    // `:qa` reaches do_quit's always-close branch, which fires `close_window` (see commands.rs),
+    // `:qa` reaches do_quit's always-close branch, which notifies `close_tab` (see commands.rs),
     // not a pane close, so the nvim pane count must not drop back to `base`.
     ex_command(&core, "qa");
 
@@ -526,7 +525,7 @@ fn ex_qa_does_not_merely_drop_pane_count() {
         core.read_snapshot().windows.len(),
         base,
         "with multiple panes, :qa must NOT merely drop the pane count (it closes the whole \
-         window via close_window instead); the pane count should stay above the single-pane base"
+         tab via close_tab instead); the pane count should stay above the single-pane base"
     );
 
     core.shutdown().expect("shutdown should be Ok");

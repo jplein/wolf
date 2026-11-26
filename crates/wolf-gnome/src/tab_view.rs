@@ -883,6 +883,14 @@ impl TabsHandle {
         Some(opened)
     }
 
+    /// Closes `tab` through the `close-page` veto, as the bar's close button does: one tab
+    /// of several closes and its Neovim shuts down, and the last tab's close closes the
+    /// window. No core borrow may be held across this call, since either close takes a
+    /// core out with a `borrow_mut`.
+    pub fn close(&self, tab: &TabHandle) {
+        self.inner.view.close_page(tab.page());
+    }
+
     /// Selects `tab`'s page, which fires the selection callback as a click would.
     pub fn select(&self, tab: &TabHandle) {
         self.inner.view.set_selected_page(tab.page());

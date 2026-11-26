@@ -143,6 +143,9 @@ declare_commands! {
         /// (filling the whole pane area, every other pane hidden) and not. A
         /// front-end action: nothing of it reaches Neovim.
         ZoomPane,
+        /// Close the tab that queued it, and its window when that is the window's
+        /// only tab: what the `:q` and `:qa` families send.
+        CloseTab,
     }
 }
 
@@ -410,6 +413,13 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
         ex_command: "WolfZoomPane",
         title: "Zoom Pane",
         menu: MenuGroup::View,
+    },
+    CommandSpec {
+        command: Command::CloseTab,
+        id: "close_tab",
+        ex_command: "WolfCloseTab",
+        title: "Close Tab",
+        menu: MenuGroup::File,
     },
 ];
 

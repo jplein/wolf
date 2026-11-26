@@ -2,7 +2,7 @@
 //! action `wolf-gnome` performs for it.
 //!
 //! `wolf-core` queues every user-triggered command — a `:Wolf*` Ex-command, a
-//! `require('wolf').*()` Lua call, or the `close_window` that
+//! `require('wolf').*()` Lua call, or the `close_tab` that
 //! `runtime/nvim/init.lua`'s `:q`/`:qa` handler fires — and the GTK front-end
 //! drains that queue on each render wake. This module owns the decision of what
 //! each command means to the GTK shell; the widget work of carrying it out lives
@@ -83,6 +83,9 @@ pub enum UiAction {
     NewWindow,
     /// Close the application window (via `close-request`, never `destroy`).
     CloseWindow,
+    /// Close the selected tab, whose Neovim queued the command, through the tab bar's
+    /// `close-page` path, so the window closes with its last tab.
+    CloseTab,
     /// Minimize the application window.
     MinimizeWindow,
     /// Quit the application by closing every window cleanly.
@@ -192,6 +195,7 @@ pub fn ui_action_for(command: Command) -> UiAction {
         Command::SplitHorizontal => UiAction::SplitHorizontal,
         Command::SplitVertical => UiAction::SplitVertical,
         Command::ZoomPane => UiAction::ZoomPane,
+        Command::CloseTab => UiAction::CloseTab,
     }
 }
 
@@ -238,6 +242,7 @@ mod tests {
     const EXPECTED_DISPATCHED_IDS: &[&str] = &[
         "buffer_picker",
         "close_pane",
+        "close_tab",
         "close_window",
         "command_palette",
         "copy",
@@ -304,7 +309,7 @@ mod tests {
             want: Want::Exact(UiAction::NewWindow),
         },
         Case {
-            desc: "1 CloseWindow: the :qa path — closes the window",
+            desc: "1 CloseWindow: closes the window",
             command: Command::CloseWindow,
             want: Want::Exact(UiAction::CloseWindow),
         },
@@ -453,6 +458,11 @@ mod tests {
             desc: "30 ZoomPane: toggles the zoom of the selected tab's active pane",
             command: Command::ZoomPane,
             want: Want::Exact(UiAction::ZoomPane),
+        },
+        Case {
+            desc: "31 CloseTab: closes the selected tab, whose Neovim queued it, and the window on its last tab",
+            command: Command::CloseTab,
+            want: Want::Exact(UiAction::CloseTab),
         },
     ];
 
