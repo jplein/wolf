@@ -932,9 +932,9 @@ The real `wolf` binary, against a real `OpenListener` or a raw `UnixListener` th
 
 #### `wolf_wait.rs`
 
-`wolf --wait` end to end, [§6](../../../specs/cli-and-file-open.md#6-waiting): the real `wolf` over a real `OpenListener`, with a real core and Neovim behind it (`//crates/wolf-core:wolf_wait`: the real-nvim runfiles and env, plus `:wolf` as `WOLF_TEST_WOLF_BIN`, `no-sandbox`, `size = "medium"`).
+`wolf --wait` end to end, [§6](../../../specs/cli-and-file-open.md#6-waiting): the real `wolf` over a real `OpenListener`, core and Neovim (`//crates/wolf-core:wolf_wait`: the real-nvim runfiles and env, plus `:wolf` as `WOLF_TEST_WOLF_BIN`, `no-sandbox`, `size = "medium"`).
 
-**Covers** — exit `0` after `:q` on the waited split, `:wq`, `ZZ` or `ZQ` on the tab's last pane, `:bd` and `:bw`, and `:bd` beside the drawer, keeping the pane; exit `1` after `:cq` in the waited window, beside the drawer too, which keeps Neovim alive, while `:cq` elsewhere still quits Neovim; a hide by `:e other` still waiting, with the toast, and exit `0` once `:q` closes the tab; exit `1` when the tab closes, Neovim crashes or a stalled Neovim restarts, and for a path no buffer shows; a file already shown waited on its buffer; a hung-up command leaving no toast and other waits alone; and `git commit` with `wolf --wait` as its editor, committing the typed message, or nothing after `:cq`.
+**Covers** — exit `0` after `:q` on the waited split, `:wq`, `ZZ` or `ZQ` on the tab's last pane, `:bd` and `:bw`, and `:bd` beside the drawer, keeping the pane; exit `1` after `:cq` in the waited window, beside the drawer too, which keeps Neovim alive, while `:cq` elsewhere quits Neovim; a hide by `:e other` still waiting, with the toast, and exit `0` once `:q` closes the tab; exit `1` when the tab closes, by Close Tab too, when Neovim crashes or a stalled Neovim restarts, and for a path no buffer shows; a file already shown waited on its buffer; a hung-up command leaving no toast and other waits alone; and `git commit` with `wolf --wait` as its editor, committing the typed message, or nothing after `:cq`.
 
 **Gotchas**
 

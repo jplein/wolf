@@ -308,7 +308,7 @@ The other files below cover what a seam cannot reach: a real Neovim, a real wind
 
 The Close Tab smoke, one launch restoring a planted window of two tabs, each on a file of the project, with the second tab modified. A click on the background second tab's close button must select it, keep both Neovims and leave E37 in its `:messages`, and Close Tab from the palette must refuse the same way. After `:w` it must close the tab, leaving the first, and on the last tab end the app. Every observable is a Neovim count, a readback a Neovim writes about itself or the app's exit, never OCR.
 
-The close button's x is `CT_CLOSE_BUTTON_INSET_PX` left of the output's right edge, derived from libadwaita's stylesheet rather than measured, and a background tab shows its button only while hovered. At the base commit the click's red is exit 183, and 184 or 185 means the click missed the button: fix the inset, not the code.
+The close button's x is `CT_CLOSE_BUTTON_INSET_PX` left of the output's right edge, derived from libadwaita's stylesheet rather than measured, and a background tab shows its button only while hovered. Exit 184 or 185 can mean the click missed the close button, and then the inset is what to fix, not the code.
 
 #### `smoke_headless/compose.rs`
 
