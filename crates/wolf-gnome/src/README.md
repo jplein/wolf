@@ -852,7 +852,7 @@ Purpose: the pure, GTK-free rulebook for Save and Save As — whether a press wr
 
 **Decisions**
 
-- A named buffer is written, never prompted for, a never-written `Untitled N.md` included: `runtime/nvim/init.lua` has already chosen and claimed that name, which is on screen in the tab title. Only a buffer with no file name takes the dialog. An existence probe would make `Ctrl+Shift+S` disagree with a typed `:w`, and would leave the buffer unwritten whenever the dialog failed to present.
+- A named buffer is written, never prompted for, a never-written `Untitled N.md` included: `runtime/nvim/init.lua` has already chosen and claimed that name, which the pane's statusbar shows. Only a buffer with no file name takes the dialog. An existence probe would make `Ctrl+Shift+S` disagree with a typed `:w`, and would leave the buffer unwritten whenever the dialog failed to present.
 - The proposal opens in the buffer's own parent, falling back to the window's cwd, the empty state's home directory included, which no tab persists as its project. A dialog's folder is a starting point, not a claim that a directory is a project.
 - A chosen path is used verbatim, with no extension appended: rewriting it would mean the dialog confirmed an overwrite of a different file. `force` is `true` because that confirmation has already happened.
 
@@ -1024,42 +1024,45 @@ Purpose: the per-pane statusbar's rulebook, decidable from values.
 
 #### `tab_view.rs`
 
-Purpose: the GTK glue for native tabs, where every tab owns its `WolfCore`, wake drain, restart state, [`pane_view.rs`](#pane_viewrs) and [`persistence.rs`](#persistencers) handle. Its decisions are [`tabs_ui.rs`](#tabs_uirs)'s.
+Purpose: the GTK glue for native tabs, each owning its `WolfCore`, wake drain, restart state, [`pane_view.rs`](#pane_viewrs) and [`persistence.rs`](#persistencers) handle, carrying out [`tabs_ui.rs`](#tabs_uirs)'s decisions.
 
 **Public API**
 
-- `build(TabsParts) -> TabsHandle` — no page exists until `open_tab`.
-- `TabsHandle::open_tab(TabParts) -> Option<TabHandle>` — starts its core and selects it, or logs once. `replace(old, parts)` does so in `old`'s place; hold no core borrow across it.
+- `build(TabsParts) -> TabsHandle`, with no page until `open_tab`.
+- `TabsHandle::open_tab(TabParts) -> Option<TabHandle>` starts its core and selects it, or logs once. `replace(old, parts)` does so in `old`'s place; hold no core borrow across it.
 - `select`, `selected`, `selected_core`, `core_source`, `entries`, `len`, `focus_target`, `shutdown_all`, `view_widget`, `bar_widget`, `seed_recency`, `recency`, `drawer_opener`.
-- `connect_selected`, given the tab left; `connect_wake`; `connect_closing`, before a closing tab's shutdown.
+- `connect_selected`, given the tab left; `connect_wake`; `connect_closing`, before a tab's shutdown.
 - `sync_ui_focus(window_active)`, the `:checktime` trigger; `active_terminal()` and `sync_terminal_focus(window_active)` ([how](../../../notes/wolf-gnome/terminal-panes.md)).
-- `TabHandle`'s `core`, `liveness`, `restart`, `wake`, `refresh`, `capture_viewports`, `shutdown`, `set_empty`, `hide_empty_state`, `is_empty`, `wolf_tab_id`, `launch_cwd`, `live_directory`, `new_tab_sidebar` and sidebar accessors; `CoreSource` and `with_core`.
+- `TabHandle`'s `core`, `liveness`, `restart`, `wake`, `refresh`, `refresh_label`, `capture_viewports`, `shutdown`, `set_empty`, `hide_empty_state`, `is_empty`, `wolf_tab_id`, `launch_cwd`, `live_directory`, `new_tab_sidebar` and sidebar accessors; `CoreSource` and `with_core`.
 
 **Decisions**
 
-- A tab's wake channel exists before its core starts, so the startup flush's wake is queued, not lost. The core's [tab ID](../../../specs/cli-and-file-open.md#3-tab-ids) is set first, so no terminal session lacks it.
+- A tab's wake channel exists before its core starts, so the startup flush's wake is queued. The core's [tab ID](../../../specs/cli-and-file-open.md#3-tab-ids) is set first, so no terminal session lacks it.
 - Window-level widgets take a `CoreSource`, never a cell, stale after a switch, and try `drawer_opener`'s `FileOpener` before `InputEvent::Open`, which would edit in an active drawer ([why](../README.md#entry-point)).
-- `close-page` is a veto: every arm must answer `close_page_finish` and return `Propagation::Stop`, or the page never leaves. Closing the last page closes the window, so `replace` opens first, keeping `old` when that fails.
-- Both handlers and every drain hold only `Weak`s: a strong one leaks every tab's pane view.
+- `close-page` is a veto: every arm answers `close_page_finish` and returns `Propagation::Stop`, or the page stays. Closing the last page closes the window, so `replace` opens first, keeping `old` on failure.
+- Handlers and drains hold only `Weak`s: a strong one leaks every tab's pane view.
+- A tab is titled from its own Neovim's `live_cwd`, never the shell's read ([why](../../../notes/wolf-gnome-decisions.md#threading-and-the-wake)).
 
 **Gotchas**
 
-- `entries` is insertion order, not page order; pair each with `TabHandle::page_position` for the user's arrangement.
+- `entries` is in insertion order; `TabHandle::page_position` gives the user's arrangement.
 
 #### `tabs_ui.rs`
 
-Purpose: the pure, GTK-free rulebook for a window's native tabs: what closing one does, the string a tab draws, and which tab's Neovim holds the UI focus. [`tab_view.rs`](#tab_viewrs) carries the answers out.
+Purpose: the pure, widget-free rulebook for a window's native tabs: what closing one does, the title and tooltip a tab shows, and which tab's Neovim holds the UI focus. [`tab_view.rs`](#tab_viewrs) carries the answers out.
 
 **Public API**
 
 - `close_outcome(live_pages) -> TabClose` — `CloseTab` or `CloseWindow`; `live_pages` counts the page being closed.
-- `tab_title(empty, current_file) -> String` — the file's name, never a path; with no file, `title::WINDOW_TITLE_FALLBACK` for an empty tab, so tab and window agree no folder is open, and `TAB_TITLE_FALLBACK` for a folder tab.
+- `tab_label(empty, cwd, home) -> TabLabel` — the title is `title::window_title` of `cwd`, so the selected tab's equals its window's. An empty tab, or one whose cwd is not yet reported, is titled `title::WINDOW_TITLE_FALLBACK` with no tooltip, so libadwaita shows the title. Otherwise the tooltip is `cwd` in full, as Pango markup.
 - `TabId`, `FocusEdge`, `focused_tab(window_active, selected)` and `focus_edges(previous, next)` — the focus trigger.
 
 **Decisions**
 
 - `close_outcome` routes the last tab's close into the window's: a window with no tab holds a tab bar and no editor, with no way to reach one.
 - `focus_edges` is computed against the last focus sent, because Neovim fires `FocusGained` on every `set_ui_focus` with no de-duplication. An unchanged focus sends nothing, and a switch sends the loss before the gain, so two Neovims never both hold it.
+- The tooltip is escaped because `AdwTabPage:tooltip` is Pango markup: a `&` or `<` in a directory name would fail to parse rather than show.
+- The title is never shortened or measured in Wolf: libadwaita fades one too long for its tab.
 
 #### `terminal.rs`
 
@@ -1075,7 +1078,7 @@ Purpose: the root of the terminal-pane modules. A pane whose window shows a `wol
 
 #### `title.rs`
 
-Purpose: the pure window-title seam — the working directory, rendered, with the home prefix abbreviated.
+Purpose: the pure title seam of the window and of each tab — the working directory, rendered, with the home prefix abbreviated.
 
 **Public API**
 
