@@ -147,7 +147,7 @@ A window persists every tab, in tab order, and a launch restores each saved wind
 
 The GNOME counterpart to the macOS menu bar is a header-bar primary menu driven by the same `gio` action namespace as the accelerators, so menu, chords and drained commands cannot drift apart. The accelerator scheme is documented in [The accelerator namespace](wolf-gnome/the-accelerator-namespace.md).
 
-That header bar is also the unified toolbar: Back and Forward and the sidebar's Files and Search toggles at the start, the primary menu at the end, and the window title between them.
+That header bar is also the unified toolbar: Back and Forward and the sidebar's Files and Search toggles at the start, the primary menu at the end, and the window title between them. Under `gtk-titlebar-style: tabs`, the default, a window of two tabs or more draws its tab bar there in place of the title; `native` keeps the bar in a row of its own, and macOS ignores the key.
 
 The application-state store is read and written. `wolf-gnome` submits on every wake without a timer or debounce, which is affordable because `AppStateStore::submit` ignores an unchanged tree and the writer thread coalesces; the window state carries every open window and every tab of it in stacking order, and a launch restores each saved window's size, active tab and minimized flag, and each tab's directory, sidebar preference, page, query and toggles, pane layout, zoom, focus, drawer and share, and each pane's cursor, top line or preview scroll, mapping the windows backmost first, each after the one behind it.
 

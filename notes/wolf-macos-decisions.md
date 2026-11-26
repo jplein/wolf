@@ -298,6 +298,7 @@ The Mono face is the one cascaded because it is drawn unscaled, and every Mono g
 - A symbols-face icon draws unscaled, about one em wide, over part of the cell after it, rather than fitted to its own cell as Ghostty fits it.
 - In a terminal pane, the cursor and blinking text draw steady, and double, dotted and dashed underlines draw as the single straight line.
 - Appearance flows one way only: colorscheme to app chrome works, OS theme to Neovim theming does not.
+- `gtk-titlebar-style` is a configured key this front-end ignores, as the GNOME front-end ignores `macos-option-as-alt`: one config file is shared across both, and the key's name says which platform it is for.
 - A Neovim crash restart reopens the tab's open files into one pane, so its splits collapse, and the next commit records that. Restoring the pane topology across a restart would change the restart model.
 - Only what a pane shows persists: the window state carries buffer paths only as panes, so a file the user switched away from in its pane is not reopened at launch.
 - The toolbar's search segment seeds the search toggles from Neovim each time it shows the search panel, replacing restored or user-set toggles, while the sidebar commands do not seed. Seeding once would save a never-seeded panel's all-off toggles as if chosen, which needs a design of its own.

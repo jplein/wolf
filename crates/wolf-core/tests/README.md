@@ -299,6 +299,14 @@ Real Neovim (`//crates/wolf-core:file_search_rescan`: staged nvim runfiles, `WOL
 - The delete case opens its file via `InputEvent::Open` and polls `wait_for_mru_contains`, because a typed `:e` never records into the MRU and the resurrection guard would pass vacuously.
 - The burst case asserts only the converged set: the debounce may run one walk or several.
 
+#### `gtk_titlebar_style.rs`
+
+Headless (`//crates/wolf-core:gtk_titlebar_style`): `tempfile` dirs passed to `load_or_create`, no nvim and no environment.
+
+**Covers** — the `gtk-titlebar-style` key by table: absent and `tabs` parse to `Tabs`, `native` to `Native`, each keeping the file's font settings, and an invalid value falls the whole section back to the defaults and leaves the file byte-identical. An absent file gets a defaults file carrying `gtk-titlebar-style: tabs`, which re-reads as `Tabs`.
+
+**Gotchas** — Every row writes non-default font fields, so a row that fell back to the defaults cannot pass as a parsed one.
+
 #### `input_keys.rs`
 
 Real Neovim (`WOLF_NVIM_BIN`, `no-sandbox` target with staged nvim runfiles), though only the cursor/mode case uses it.

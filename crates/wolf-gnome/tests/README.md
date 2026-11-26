@@ -10,7 +10,7 @@ The devShell is not optional: it supplies GTK, exports `WOLF_NVIM_BIN` and `WOLF
 
 Rules that are decidable from their arguments are pinned in each seam's own `#[cfg(test)] mod tests`, which is the point of the seam split in [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md).
 
-Some seams' tables are files here instead: [`drawer_share.rs`](#drawer_sharers), [`gdk_key.rs`](#gdk_keyrs), [`terminal_seams.rs`](#terminal_seamsrs), [`other_pane_seam.rs`](#other_pane_seamrs), [`open_request.rs`](#open_requestrs), [`pane_zoom.rs`](#pane_zoomrs), [`pane_views.rs`](#pane_viewsrs), [`preview_root_style.rs`](#preview_root_stylers), [`sidebar_toggles.rs`](#sidebar_togglesrs), [`titlebar_background.rs`](#titlebar_backgroundrs), [`restore_caps.rs`](#restore_capsrs), [`app_state_seam.rs`](#app_state_seamrs), [`stacking.rs`](#stackingrs), [`tab_focus.rs`](#tab_focusrs) and [`tab_titles.rs`](#tab_titlesrs).
+Some seams' tables are files here instead: [`drawer_share.rs`](#drawer_sharers), [`gdk_key.rs`](#gdk_keyrs), [`terminal_seams.rs`](#terminal_seamsrs), [`other_pane_seam.rs`](#other_pane_seamrs), [`open_request.rs`](#open_requestrs), [`pane_zoom.rs`](#pane_zoomrs), [`pane_views.rs`](#pane_viewsrs), [`preview_root_style.rs`](#preview_root_stylers), [`sidebar_toggles.rs`](#sidebar_togglesrs), [`titlebar_background.rs`](#titlebar_backgroundrs), [`restore_caps.rs`](#restore_capsrs), [`app_state_seam.rs`](#app_state_seamrs), [`stacking.rs`](#stackingrs), [`tab_bar_slot.rs`](#tab_bar_slotrs), [`tab_focus.rs`](#tab_focusrs) and [`tab_titles.rs`](#tab_titlesrs).
 
 The other files below cover what a seam cannot reach: a real Neovim, a real window, the built binary together with the manifest that shaped it, and the store output `nix build .#wolf-gnome` installs — a different artifact from the checkout build, making different claims.
 
@@ -460,6 +460,14 @@ The titlebar smokes, one per Lighthouse background: the checkout binary over a s
 
 The dialog is the route to backdrop: `cage` activates every toplevel it maps and deactivates one only when another takes focus, so no launch starts inactive. A toplevel with a parent is centred at its own size, so the main window and both bars stay visible beside it. A precondition proves the dimming: the title's contrast over `WolfTitlebar` must reach a floor while focused, and be at most a share of it in backdrop.
 
+#### `smoke_headless/titlebar_tabs.rs`
+
+The `gtk-titlebar-style` smokes. The first launches on the shared seeded config, so it runs the default `tabs`. With one tab, the header band must read the window title and the probe click the one-tab pane origin. A second tab, `:cd`ed into a sibling directory, must put both tabs' titles in the header band, take no editor row, leave the header's shade row where it was by `TABS_HEADER_GROWTH_PX`, and paint the tabs in the grid's background; a probe click and a delta click in it must land.
+
+A middle-click on the second tab's header entry closes it, and the title, the header's height and typed input must all return. The second smoke pins `native`: with two tabs, the header must read the window title alone, the row below it both tabs' titles, and the editor lose rows. `titlebar_pins_parse_to_their_styles` is a compositor-free guard that the shared config and each pinned one parse to their style with the smoke font kept.
+
+The header band is cropped down to each capture's own shade row, measured rather than assumed, so a header that grew moves it.
+
 #### `smoke_headless/tree_reveal.rs`
 
 The sidebar launch-reveal smoke. One launch restores a tab with the tree sidebar beside an editor pane, focused, and a preview pane, both on a file below the fold, over a generated folder of about three hundred mixed-case root files, four subdirectories and the usual dot entries. Capture A must read the six rows directly above the current file and its own row; the scenario then creates a file, so the watcher's rescan rebuilds the tree, and capture B must read them again and the new row. The scenario sends no key and no pointer event, so nothing but the reveal scrolls the list.
@@ -519,6 +527,16 @@ Every observable is a Neovim readback of `winwidth` and `winheight` per recorded
 **Gotchas**
 
 - The terminal case requires `WOLF_NVIM_BIN` and `/bin/sh`. A failure beginning `premise:` means the pinned faces cannot tell the outcomes apart; it lists every failed premise with the distance table.
+
+#### `tab_bar_slot.rs`
+
+**Covers**
+
+- `tab_bar_slot::tab_bar_placement`'s table, TS1 to TS3: zero or one page is `BelowHeader` under either style, two pages or more are `InHeader` under `Tabs`, and `Native` is `BelowHeader` at every count.
+
+**Gotchas**
+
+- Pure: no display, no Neovim and no compositor. Whether the window applies the answer, and applies it again as tabs open and close, is [`smoke_headless/titlebar_tabs.rs`](#smoke_headlesstitlebar_tabsrs)'s question.
 
 #### `tab_focus.rs`
 
@@ -696,6 +714,21 @@ The directory is a sibling of the working directory rather than a child, for the
 
 **The seeded `appearance` is what makes every OCR page host-independent, and re-pinning it to `auto` would undo that.** Every smoke forces its appearance, so the resolved answer is the forced one whatever the desktop reads, and the chrome flip was exercised from both starting points: the full target is green on a host whose chrome starts dark and under a forced light start, with a probe confirming `is_dark` false before `set_color_scheme(ForceDark)` and true after. An `auto` pin would hand every OCR page back to whatever colour scheme the machine running them happens to prefer.
 
+**The seeded config carries no `gtk-titlebar-style`, so every smoke runs under the default `tabs` unless it pins `native`.** Under `tabs` a one-tab window is unchanged, and a window of two tabs or more keeps the one-tab pane origin, `PANE_ORIGIN_Y_EXPECTED`, which [`titlebar_tabs.rs`](#smoke_headlesstitlebar_tabsrs) checks. Under `native` a two-tab smoke's pane area starts at `OVERLAY_ORIGIN_Y_EXPECTED + TAB_BAR_HEIGHT_EXPECTED`.
+
+A smoke pins `native` through `main.rs`'s `titlebar_pinned_config_dir` when, with two tabs or more open, it clicks or reads the tab bar's row, or asserts a size or position that includes it, because `tabs` moves that row into the header bar. These pin it:
+
+- both `titlebar.rs` smokes, through `titlebar_smoke`;
+- `tab_bar.rs`'s `each_tab_is_titled_by_its_own_directory_under_cage`;
+- every `new_tab.rs` smoke, through `run_new_tab`;
+- `panes.rs`'s `native_tabs_open_switch_and_close_under_cage` and `a_file_saved_in_one_tab_reloads_in_another_on_switch_under_cage`;
+- `drawer_divider.rs`'s `drawer_divider_drag_resizes_and_is_remembered_under_cage` and `each_tab_keeps_its_drawer_share_across_a_relaunch_under_cage`;
+- `extras.rs`'s `pane_cursors_are_captured_and_restored_under_cage` and `each_tab_keeps_its_sidebar_page_under_cage`;
+- `terminal.rs`'s `neovim_panes_stay_visible_beside_terminals_under_cage`;
+- `titlebar_tabs.rs`'s `native_keeps_the_tab_bar_row_under_cage`, whose subject `native` is.
+
+The multi-tab smokes of `recovery.rs`, `restore.rs`, `file_open.rs` and `open_folder.rs` assert on readbacks and saved state alone, so they keep `tabs`.
+
 ## Pointer injection
 
 Real pointer events reach the GTK controllers through [`wolf-pointer-inject`](../../../tools/wolf-pointer-inject/README.md), this repo's own long-lived virtual-pointer client, built by `flake.nix`. Its README owns the reasons it must be long-lived, why the off-the-shelf tools cannot work, and its command grammar; do not restate them here.
@@ -822,6 +855,7 @@ Being scrupulous about this is the point of the section.
 - **A tab's tooltip reaches no pixel.** No smoke hovers a tab, so the tooltip's escape and an empty tab's lack of one are [`tab_titles.rs`](#tab_titlesrs)'s alone.
 - **Three things about a tab's title reach no pixel.** [`smoke_headless/tab_bar.rs`](#smoke_headlesstab_barrs) reads a directory's name, which `~/…` and an absolute path both contain, so the abbreviation is table-tested only. That a background `:cd` leaves the window title alone is unread, since the selected tab's entry draws the header's text. Nothing reads libadwaita's fade of a title too long for its tab.
 - **A tab leaving the empty state is retitled in the same wake, and nothing asserts it.** Without the settle's `refresh_label` call the tab would lag its window's title only until its next wake, which no smoke can hold off.
+- **The in-header tab bar's drags, its focus return and its build-time placement.** `cage` neither moves nor stacks windows, so no smoke drags a tab out of a window or in from another, reorders tabs inside the header, or drags the window by the header the tabs leave; those are person checks. No smoke puts focus inside the bar before it moves, so `TabBarSlot`'s focus return reaches no assertion. A window restored with two tabs or more places the bar in the header at build, and the restore smokes that do so read no header.
 - **The sidebar's release of a closing tab's core.** No smoke closes the tab whose core the tree's search or a running project search is on, so `TreeHandle::release_core`'s owed restart and `SearchPanelHandle::release_core`'s positive branch run in no test: the native-tabs smoke closes the second tab, while the tree's search started on the first.
 - **The crash overlay following a switch.** The crash smoke kills a background tab's Neovim and never selects it, so no test switches to a tab whose Neovim is dead or wedged.
 - **No smoke checks what the window's activation and deactivation edges do in a real Neovim.** `notify::is-active` drives them, and under `cage` a window turns active as it maps and resigns only when another toplevel maps, such as a dialog or a later window, so [`tab_focus.rs`](#tab_focusrs) covers the rule alone; a person must switch away from the window and back after another tab saved a file.

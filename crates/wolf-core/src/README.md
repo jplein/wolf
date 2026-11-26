@@ -135,12 +135,13 @@ Reads the user-preferences file `wolf-config.yaml` and resolves the per-platform
 - `load_or_create(dir) -> WolfConfig` — infallible; see the decisions below for what each degraded input yields.
 - `WolfConfig` — `line_height` is a percentage of the font size, not points. `default_config()` supplies a platform-specific font size.
 - `Appearance` (`Auto`/`Dark`/`Light`), `CONFIG_FILE_NAME`.
+- `GtkTitlebarStyle` (`Tabs`/`Native`, default `tabs`) — where the GTK front-end, its only reader, draws its tab bar ([`tab_bar_slot.rs`](../../wolf-gnome/src/README.md#tab_bar_slotrs)). Read once at launch.
 
 **Decisions**
 
 - The three font fields are required and the section deserializes all-or-nothing: a partial, malformed, or wrong-shape file falls back to the complete defaults rather than merging field by field, so a half-written config can never produce a half-applied one.
 - A user file that fails to parse is left byte-for-byte untouched — the write path fires only when the file is absent — so a broken hand-edit survives for its author to fix instead of being silently overwritten.
-- Keys added after the font fields (`appearance`, `macos-option-as-alt`) carry `#[serde(default)]` so a file predating them still parses and keeps its font settings; a present-but-invalid value still fails the whole section.
+- Keys added after the font fields (`appearance`, `macos-option-as-alt`, `gtk-titlebar-style`) carry `#[serde(default)]` so a file predating them still parses and keeps its font settings; a present-but-invalid value still fails the whole section.
 - `macos_option_as_alt` defaults to false, so Option composes accented characters rather than sending `<M-…>` mappings, mirroring Ghostty's default for the same key.
 
 #### `state.rs`

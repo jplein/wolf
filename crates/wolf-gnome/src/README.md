@@ -1022,6 +1022,23 @@ Purpose: the per-pane statusbar's rulebook, decidable from values.
 
 - `blend` is `pub(crate)` for a second consumer, [`scrollbar.rs`](#scrollbarrs)'s thumb colour. Reimplementing it there would give two colours on one scale two rounding rules, which is how they drift apart.
 
+#### `tab_bar_slot.rs`
+
+Purpose: where the window's tab bar sits, in a row below the header bar or inside it as its title widget, by `gtk-titlebar-style` and the view's page count. [Window structure](../../../notes/wolf-gnome/window-structure.md) owns the geometry each placement gives.
+
+**Public API**
+
+- `tab_bar_placement(style, pages) -> TabBarPlacement` — the pure seam: `InHeader` under `Tabs` from two pages, `BelowHeader` otherwise.
+- `TabBarSlot::install(style, header, content, tabs)` — `header` must already be a child of `content`. Hold the handle for the window's lifetime.
+- `TAB_BAR_CSS_CLASS` and `IN_HEADER_CSS`, the stylesheet that keeps the in-header bar at a tab's height.
+
+**Decisions**
+
+- `tabs` at one tab answers `BelowHeader`, not "nowhere": the autohidden row keeps one-tab geometry, and still shows while a tab is dragged, which is how a tab is dropped into a one-tab window.
+- The bar is the expanding title widget: libadwaita aligns its start box to the start, so a bar packed there gets only its natural width.
+- The move runs from an idle and only when the answer changed: `notify::n-pages` fires inside libadwaita's close and drop paths, where a reparent would unroot a tab mid-gesture.
+- The input is the view's `n_pages`, not `len`: a tab dragged to or from another window changes the view alone.
+
 #### `tab_view.rs`
 
 Purpose: the GTK glue for native tabs, each owning its `WolfCore`, wake drain, restart state, [`pane_view.rs`](#pane_viewrs) and [`persistence.rs`](#persistencers) handle, carrying out [`tabs_ui.rs`](#tabs_uirs)'s decisions.
@@ -1030,8 +1047,8 @@ Purpose: the GTK glue for native tabs, each owning its `WolfCore`, wake drain, r
 
 - `build(TabsParts) -> TabsHandle`, with no page until `open_tab`.
 - `TabsHandle::open_tab(TabParts) -> Option<TabHandle>` starts its core and selects it, or logs once. `replace(old, parts)` does so in `old`'s place; hold no core borrow across it.
-- `select`, `selected`, `selected_core`, `core_source`, `entries`, `len`, `focus_target`, `shutdown_all`, `view_widget`, `bar_widget`, `seed_recency`, `recency`, `drawer_opener`.
-- `connect_selected`, given the tab left; `connect_wake`; `connect_closing`, before a tab's shutdown.
+- `select`, `selected`, `selected_core`, `core_source`, `entries`, `len`, `n_pages`, `focus_target`, `shutdown_all`, `view_widget`, `bar_widget`, `seed_recency`, `recency`, `drawer_opener`.
+- `connect_selected`, given the tab left; `connect_wake`; `connect_closing`, before a tab's shutdown; `connect_n_pages`.
 - `sync_ui_focus(window_active)`, the `:checktime` trigger; `active_terminal()` and `sync_terminal_focus(window_active)` ([how](../../../notes/wolf-gnome/terminal-panes.md)).
 - `TabHandle`'s `core`, `liveness`, `restart`, `wake`, `refresh`, `refresh_label`, `capture_viewports`, `shutdown`, `set_empty`, `hide_empty_state`, `is_empty`, `wolf_tab_id`, `launch_cwd`, `live_directory`, `new_tab_sidebar` and sidebar accessors; `CoreSource` and `with_core`.
 
@@ -1040,7 +1057,7 @@ Purpose: the GTK glue for native tabs, each owning its `WolfCore`, wake drain, r
 - A tab's wake channel exists before its core starts, so the startup flush's wake is queued. The core's [tab ID](../../../specs/cli-and-file-open.md#3-tab-ids) is set first, so no terminal session lacks it.
 - Window-level widgets take a `CoreSource`, never a cell, stale after a switch, and try `drawer_opener`'s `FileOpener` before `InputEvent::Open`, which would edit in an active drawer ([why](../README.md#entry-point)).
 - `close-page` is a veto: every arm answers `close_page_finish` and returns `Propagation::Stop`, or the page stays. Closing the last page closes the window, so `replace` opens first, keeping `old` on failure.
-- Handlers and drains hold only `Weak`s: a strong one leaks every tab's pane view.
+- Handlers and drains hold only `Weak`s, or leak every tab's pane view.
 - A tab is titled from its own Neovim's `live_cwd`, never the shell's read ([why](../../../notes/wolf-gnome-decisions.md#threading-and-the-wake)).
 
 **Gotchas**

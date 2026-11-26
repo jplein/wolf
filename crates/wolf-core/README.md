@@ -44,7 +44,7 @@ Everything below is re-exported from the crate root as `wolf_core::…`. The own
 | Font licences      | `FontLicense`, `FONT_LICENSES`, `FONT_LICENSE_NOTICES`                                                                                        |
 | Library licences   | `LibraryLicense`, `LIBRARY_LICENSES`, `LIBRARY_LICENSE_NOTICES`                                                                               |
 | Liveness           | `Liveness`                                                                                                                                    |
-| Preferences        | `WolfConfig`, `load_or_create`, `preferences_dir`, `Appearance`                                                                               |
+| Preferences        | `WolfConfig`, `load_or_create`, `preferences_dir`, `Appearance`, `GtkTitlebarStyle`                                                           |
 | Persisted state    | `AppStateStore`, `PROJECT_STATE_LIMIT`, `state_dir`, `WindowCursor`                                                                           |
 | Logging            | `init_tracing`                                                                                                                                |
 
