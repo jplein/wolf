@@ -1,11 +1,12 @@
-//! Preview rendering smokes, read from raw pixels: fenced-code highlighting, the inline-code
-//! baseline grid and the file picker drawn over a live preview.
+//! Preview rendering smokes, read from raw pixels: fenced-code highlighting, the code block's
+//! background in each appearance, the inline-code baseline grid and the file picker drawn over a
+//! live preview.
 
-use super::config::APPEARANCE_FORCED_DARK;
+use super::config::{APPEARANCE_FORCED_DARK, APPEARANCE_FORCED_LIGHT};
 use super::preview::{
-    preview_theme_band_rows, preview_theme_pane_area, preview_theme_preview_columns,
-    preview_theme_scan_rows, PREVIEW_DARK_BG, PREVIEW_OTHER_PANE_QUERY, PREVIEW_QUERY,
-    PREVIEW_READBACK_PREFIX,
+    preview_theme_band_rows, preview_theme_editor_columns, preview_theme_pane_area,
+    preview_theme_preview_columns, preview_theme_scan_rows, PREVIEW_DARK_BG, PREVIEW_LIGHT_BG,
+    PREVIEW_OTHER_PANE_QUERY, PREVIEW_QUERY, PREVIEW_READBACK_PREFIX, PREVIEW_THEME_SCENARIO,
 };
 use super::*;
 
@@ -217,13 +218,18 @@ const CODEHL_LANGTREE_OK: &str = "OK";
 /// It is what LOCATES the two code blocks: a `pre` paints this colour across the
 /// document's whole content width, while the 24 px gap between two blocks is 100 %
 /// [`PREVIEW_DARK_BG`] and 0 % this, so the gap breaks a run cleanly.
-pub(crate) const CODEHL_PRE_BG: Rgb8 = (0x16, 0x16, 0x16);
+///
+/// The colour is the bundled Lighthouse colorscheme's dark `slightHighlightBG`, copied into the
+/// theme's fixed palette. It is re-typed, and never read through `Lighthouse::from_env`, because
+/// a Lighthouse bump does not change the preview's palette: reading it from the pin would move
+/// this expectation with a colour the preview does not follow.
+pub(crate) const CODEHL_PRE_BG: Rgb8 = (0x25, 0x25, 0x25);
 
 /// The least CHROMA a pixel must carry to count as highlighter ink.
 ///
 /// `chroma = max(r, g, b) - min(r, g, b)`, so a neutral pixel is 0 whatever its
 /// brightness. Every colour in an UNHIGHLIGHTED block is neutral — `#e6e6e6` ink on
-/// `#161616`, both r = g = b — and blending two neutral colours channel-independently
+/// `#252525`, both r = g = b — and blending two neutral colours channel-independently
 /// yields another neutral colour, so an unhighlighted block cannot produce chroma at
 /// ALL: the control block MEASURES 0 at every threshold down to `>= 1`.
 ///
@@ -1049,6 +1055,493 @@ fn codehl_chroma_thresholds_are_separated() {
          chromatic pixels in the highlighted block and 0 in the control, so restore the floor and \
          the ceiling to values that keep this ratio rather than widening it to admit them."
     );
+}
+
+// --- The code block's background in each configured appearance ---------------------------------
+
+/// The markdown file the code-background smoke opens and then previews.
+///
+/// Nothing in this smoke is OCR'd, so this name contributes no row to
+/// `RELAUNCH_FIXTURE_NAMES`, for the reason [`CODEHL_SOURCE_FILE`] states.
+const CODEBG_SOURCE_FILE: &str = "pvcodebg.md";
+
+/// The body of the one fenced block in [`codebg_source_body`]: four lines of plain words.
+///
+/// No info string goes on the fence, so no highlighter is on the path and every span inside
+/// the block is the plain render's. No tab and no markdown syntax, so each line's width is its
+/// character count at the monospace advance.
+///
+/// ## Why every line is between 32 and 44 characters
+///
+/// The lower bound is what lets the smoke see a background painted BEHIND the text. A line's
+/// inline box starts left of [`preview_theme_preview_columns`], so a colour painted on it is a
+/// strict majority of the sampled columns only when the line reaches well past their midpoint.
+/// A short line would leave such a colour a minority on every row, and the `pre` colour would
+/// still read as one unbroken run under the falsifier that removes `pre code`'s transparency.
+/// The same width puts ink across most of the sampled columns, which is why the smoke bridges
+/// short gaps between runs: see [`CODEBG_MAX_INK_GAP_ROWS`].
+///
+/// The upper bound keeps each line inside the `pre`'s content box. The `pre` has
+/// `overflow: auto`, so a longer line would add a horizontal scrollbar, whose track is not the
+/// `pre` colour, along the block's bottom edge.
+///
+/// Assertion 0 checks both bounds before anything launches.
+const CODEBG_FENCE_BODY: &str = "alfa bravo charlie delta echo foxtrot\n\
+                                 golf hotel india juliett kilo lima mike\n\
+                                 november oscar papa quebec romeo sierra\n\
+                                 tango uniform victor whiskey xray yankee";
+
+/// The fewest characters a line of [`CODEBG_FENCE_BODY`] may have. See its doc comment.
+const CODEBG_LINE_MIN_CHARS: usize = 32;
+
+/// The most characters a line of [`CODEBG_FENCE_BODY`] may have. See its doc comment.
+const CODEBG_LINE_MAX_CHARS: usize = 44;
+
+/// The tallest gap, in rows, that [`bridged_majority_runs`] closes between two majority runs of
+/// the `pre` colour. A quarter of the 24 px baseline unit.
+///
+/// The lower side of the margin is the text's own ink. Every fence line reaches past the sampled
+/// columns' midpoint (see [`CODEBG_FENCE_BODY`]), so on the densest stroke rows of a line, such
+/// as its x-height top, the glyphs can leave the `pre` colour a minority for a row or two even
+/// though the block is painted behind them. Without the bridge those rows split one block in two.
+///
+/// The upper side is what row 6c's falsifier opens. A background painted behind the lines covers
+/// each line's whole content area, most of its line box, so the gaps it leaves in the `pre`
+/// colour are many times this bridge, and closing ink gaps does not close them.
+///
+/// Widening the bridge towards a line box disarms row 6c. Each launch's `readings:` line prints
+/// the unbridged strips, so measure the gaps there before changing this.
+const CODEBG_MAX_INK_GAP_ROWS: usize = 6;
+
+/// The whole body of [`CODEBG_SOURCE_FILE`]: [`CODEHL_PARAGRAPH`], then the fence.
+///
+/// The leading paragraph is mandatory for the reason [`CODEHL_PARAGRAPH`] gives: `web_top` is
+/// the first row of pure body background, and a document that opened with the `pre` would
+/// have none above it. The same paragraph puts the block where the code-highlight smoke's first
+/// block lands, well clear of the scan's last row.
+fn codebg_source_body() -> String {
+    format!("{CODEHL_PARAGRAPH}\n\n```\n{CODEBG_FENCE_BODY}\n```")
+}
+
+/// Name suffix of run 1's config and state directory siblings.
+const CODEBG_DARK_SUFFIX: &str = "-codebg-dark";
+
+/// Name suffix of run 2's config and state directory siblings. Must differ from
+/// [`CODEBG_DARK_SUFFIX`].
+const CODEBG_LIGHT_SUFFIX: &str = "-codebg-light";
+
+/// Run 1's capture, under `XDG_RUNTIME_DIR` for the reason [`CODEHL_PNG_NAME`] gives.
+const CODEBG_DARK_PNG_NAME: &str = "wolf_gnome_code_bg_dark.png";
+
+/// Run 2's capture. See [`CODEBG_DARK_PNG_NAME`].
+const CODEBG_LIGHT_PNG_NAME: &str = "wolf_gnome_code_bg_light.png";
+
+/// Run 1's window-list readback. See [`CODEBG_DARK_PNG_NAME`].
+const CODEBG_DARK_WINS_NAME: &str = "wolf_gnome_code_bg_wins_1.txt";
+
+/// Run 2's window-list readback. See [`CODEBG_DARK_PNG_NAME`].
+const CODEBG_LIGHT_WINS_NAME: &str = "wolf_gnome_code_bg_wins_2.txt";
+
+/// The `background-color` `wolf_core`'s `markdown/themes/default.css` gives
+/// `body.wolf-markdown pre` in LIGHT, from its `@media (prefers-color-scheme: light)` block, as
+/// `(r, g, b)`. The dark one is [`CODEHL_PRE_BG`].
+///
+/// The bundled Lighthouse colorscheme's light `slightHighlightBG`, copied into the theme's fixed
+/// palette. Re-typed and never read from Lighthouse, for the reason [`CODEHL_PRE_BG`] gives.
+const CODEBG_LIGHT_PRE_BG: Rgb8 = (0xff, 0xff, 0xff);
+
+/// One launch's evidence, so the per-launch assertions read as one loop rather than two copies
+/// that can drift.
+///
+/// Named fields rather than a tuple, for the reason `ThemeLaunch`'s doc comment gives: a
+/// transposed `pre_bg` / `other_pre_bg` would turn assertion 6 into its own negation while
+/// still compiling.
+struct CodeBgLaunch<'a> {
+    /// How a failure names this launch, matching the scenario's own stderr labels.
+    label: &'a str,
+    /// The launch's decoded capture.
+    capture: &'a Capture,
+    /// The body background this launch's appearance should have produced.
+    body_bg: Rgb8,
+    /// The const name of `body_bg`, for the failure message.
+    body_bg_name: &'a str,
+    /// The `pre` background this launch's appearance should have produced.
+    pre_bg: Rgb8,
+    /// The const name of `pre_bg`, for the failure message.
+    pre_bg_name: &'a str,
+    /// The OTHER appearance's `pre` background.
+    other_pre_bg: Rgb8,
+    /// The const name of `other_pre_bg`, for the failure message.
+    other_pre_bg_name: &'a str,
+}
+
+/// The rendered preview's fenced code block is painted `#252525` under `appearance: dark` and
+/// `#ffffff` under `appearance: light`, behind every line of its text.
+///
+/// Both values are the bundled Lighthouse colorscheme's `slightHighlightBG`, copied into the
+/// preview theme's fixed palette. [`CODEHL_PRE_BG`] and [`CODEBG_LIGHT_PRE_BG`] state them as
+/// literals, so a Lighthouse bump moves neither expectation.
+///
+/// ## The pair is what discriminates
+///
+/// For the reason `preview_document_follows_the_configured_appearance_under_cage`'s doc comment
+/// gives under its own heading of that name: under `cage` the ambient scheme is host-determined,
+/// so either launch alone can be the weak half, and neither may be dropped as redundant.
+///
+/// ## It runs the appearance smoke's scenario verbatim
+///
+/// [`PREVIEW_THEME_SCENARIO`] is reused unchanged against this smoke's own fixture, so the two
+/// launches are that smoke's two launches, exit codes included. Its cage log therefore carries
+/// that scenario's "preview-appearance" labels: a line naming that smoke in this smoke's output
+/// is expected, not a sign the wrong test ran. Its fixture is not reused, because
+/// `PREVIEW_THEME_SOURCE_BODY` must stay one paragraph for that smoke's band arithmetic and for
+/// the packaged smoke that shares it.
+///
+/// ## The control, and the premise under it
+///
+/// Assertion 6 reads bridged majority-colour rows across the preview pane. Assertion 5 reads the
+/// same rows across the editor pane and requires no run of the launch's `pre` colour there. That is
+/// not a formality: orlando fills a fenced block's rows with Lighthouse's `slightHighlightBG`,
+/// so an editor running Lighthouse and orlando would draw the source's fence in exactly the
+/// colour asserted on. Under this harness the captive Neovim runs its default colorscheme, whose
+/// backgrounds are neither value; assertion 5 measures that premise rather than assuming it.
+///
+/// ## Assertions, classified
+///
+/// A precondition gets no revert: inventing one would manufacture a discriminator this smoke
+/// does not have. The table carries no measured counts: each launch prints its own on a
+/// `readings:` line.
+///
+/// | # | assertion | kind | falsifying edit |
+/// | --- | --- | --- | --- |
+/// | 0 | [`CODEBG_FENCE_BODY`] is four lines of [`CODEBG_LINE_MIN_CHARS`] to [`CODEBG_LINE_MAX_CHARS`] characters, with no tab | tripwire on the fixture | none in `src/`; a fixture edit that would disarm the falsifier of row 6c |
+/// | 1 | `status.success()` | precondition — the two-launch cage scenario ran to completion | none; do not invent one |
+/// | 2 | both PNGs present, each decoding at the pinned output size | precondition | none; do not invent one |
+/// | 3 | each launch's `tabpagebuflist()`, sorted, is the preview scratch plus the source | precondition — exactly two panes, the right one a preview | none; do not invent one |
+/// | 4 | `web_top`, the first row entirely the launch's body background across the preview columns, is locatable | precondition | none; do not invent one |
+/// | 5 | no bridged majority run of the launch's `pre` colour, of at least [`CODEHL_MIN_BLOCK_ROWS`] rows, in the editor pane | control, self-checking | none |
+/// | 6a | exactly one bridged majority run of it in the preview pane, run 1 (dark) | **discriminator** | in `wolf-core`'s `markdown/themes/default.css`, the dark `body.wolf-markdown pre` back to `#161616`; run 1 reads zero runs |
+/// | 6b | the same, run 2 (light) | **discriminator** | the light block's `body.wolf-markdown pre` back to `#eaeaea`; run 2 reads zero runs, run 1 passes |
+/// | 6c | the same, behind every line | **discriminator** | delete `background: transparent;` from `body.wolf-markdown pre code` in `wolf-core`'s `markdown/base.css`; the theme's inline `code` background behind each line splits run 1's block into strips shorter than [`CODEHL_MIN_BLOCK_ROWS`], separated by gaps taller than [`CODEBG_MAX_INK_GAP_ROWS`] |
+#[test]
+fn preview_code_block_background_follows_the_configured_appearance_under_cage() {
+    const SMOKE: &str =
+        "preview_code_block_background_follows_the_configured_appearance_under_cage";
+
+    // Assertion 0 (tripwire on the fixture): a line outside the bounds disarms row 6c silently.
+    let lines: Vec<&str> = CODEBG_FENCE_BODY.lines().collect();
+    assert_eq!(
+        lines.len(),
+        4,
+        "{SMOKE}: CODEBG_FENCE_BODY has {} lines, not 4: {lines:?}. The block's height is what \
+         keeps it clear of the scan's last row below a wrapped CODEHL_PARAGRAPH, and a block \
+         clipped there would still read as one run.",
+        lines.len()
+    );
+    for line in &lines {
+        let chars = line.chars().count();
+        assert!(
+            (CODEBG_LINE_MIN_CHARS..=CODEBG_LINE_MAX_CHARS).contains(&chars)
+                && !line.contains('\t'),
+            "{SMOKE}: the fence line {line:?} is {chars} characters, or carries a tab; every line \
+             must be {CODEBG_LINE_MIN_CHARS} to {CODEBG_LINE_MAX_CHARS} characters with no tab. \
+             Too short and a background painted behind the text is never a majority of the \
+             sampled columns, so assertion 6 stays green with `pre code`'s transparency gone. Too \
+             long and the `pre` grows a scrollbar. A tab's width is not its character count."
+        );
+    }
+
+    let runtime_dir = require_smoke_env();
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    let cwd = make_temp_cwd();
+    let body = codebg_source_body();
+    write_relaunch_fixtures(SMOKE, &cwd, &[(CODEBG_SOURCE_FILE, body.as_str())]);
+
+    // Both launches run at SMOKE_FONT_PT: the appearance is the one variable.
+    let config_dark = smoke_config_dir_at(
+        &cwd,
+        CODEBG_DARK_SUFFIX,
+        SMOKE_FONT_PT,
+        APPEARANCE_FORCED_DARK,
+        None,
+    );
+    let config_light = smoke_config_dir_at(
+        &cwd,
+        CODEBG_LIGHT_SUFFIX,
+        SMOKE_FONT_PT,
+        APPEARANCE_FORCED_LIGHT,
+        None,
+    );
+    let state_dark = smoke_state_dir_at(&cwd, CODEBG_DARK_SUFFIX);
+    let state_light = smoke_state_dir_at(&cwd, CODEBG_LIGHT_SUFFIX);
+
+    assert_ne!(
+        config_dark,
+        config_light,
+        "{SMOKE}: both runs were pointed at the SAME config directory {}, so they would read the \
+         same appearance and one of the two launches could never see its own `pre` colour. The \
+         two suffixes ({CODEBG_DARK_SUFFIX:?} and {CODEBG_LIGHT_SUFFIX:?}) must differ.",
+        config_dark.display()
+    );
+    assert_ne!(
+        state_dark,
+        state_light,
+        "{SMOKE}: both runs were pointed at the SAME state directory {}. Launch 1 quits with a \
+         preview pane open, so launch 2 would restore that two-pane layout, split a second time \
+         and put its preview where none of the sampled columns is aimed. See \
+         `smoke_state_dir_at`.",
+        state_dark.display()
+    );
+
+    let png_dark = runtime_dir.join(CODEBG_DARK_PNG_NAME);
+    let png_light = runtime_dir.join(CODEBG_LIGHT_PNG_NAME);
+    let wins_dark = runtime_dir.join(CODEBG_DARK_WINS_NAME);
+    let wins_light = runtime_dir.join(CODEBG_LIGHT_WINS_NAME);
+    for path in [&png_dark, &png_light, &wins_dark, &wins_light] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let mut cmd = cage_command(PREVIEW_THEME_SCENARIO, &cwd, &runtime_dir);
+    cmd.env("WOLF_BIN", bin)
+        .env("SRC_FILE", CODEBG_SOURCE_FILE)
+        .env("PREVIEW_OTHER_PANE_QUERY", PREVIEW_OTHER_PANE_QUERY)
+        .env("CONFIG_DIR_DARK", &config_dark)
+        .env("CONFIG_DIR_LIGHT", &config_light)
+        .env("STATE_DIR_DARK", &state_dark)
+        .env("STATE_DIR_LIGHT", &state_light)
+        .env("OUT_PNG_DARK", &png_dark)
+        .env("OUT_PNG_LIGHT", &png_light)
+        .env("WINS_DARK", &wins_dark)
+        .env("WINS_LIGHT", &wins_light);
+
+    let status = cmd
+        .status()
+        .expect("failed to spawn `cage` for the headless code-background scenario");
+
+    // --- Assertion 1 (precondition): the scenario ran to completion -----------
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage scenario, PREVIEW_THEME_SCENARIO run verbatim, exited unsuccessfully \
+         ({status}); its stderr labels this smoke's launches \"preview-appearance\". Exit 11: run \
+         1's app (`appearance: {APPEARANCE_FORCED_DARK}`) died before it was ready for input. \
+         Exit 12: run 1 was still alive after `:qa!`. Exit 13: run 1 exited non-zero. Exit 14: \
+         run 1's window-list readback never appeared at {}. Exit 15/16/17/18: the same four for \
+         run 2 (`appearance: {APPEARANCE_FORCED_LIGHT}`), whose readback is at {}. Any other \
+         status is `grim` or `wtype` failing under `set -eu`. This assertion says nothing about \
+         whether a preview opened or what it painted.",
+        wins_dark.display(),
+        wins_light.display()
+    );
+
+    // --- Assertion 2 (precondition): both captures decode at the pinned size --
+    assert_png_present(SMOKE, &png_dark);
+    assert_png_present(SMOKE, &png_light);
+    let dark = decode_capture(&png_dark, SMOKE, "run 1 (appearance: dark)");
+    let light = decode_capture(&png_light, SMOKE, "run 2 (appearance: light)");
+
+    // Assertion 3 (precondition): Neovim's own window buffer names, read before any pixel, since a
+    // pane that never became a preview fails assertion 6 for nothing.
+    let want_windows = {
+        let mut want = vec![
+            format!("{PREVIEW_READBACK_PREFIX}{CODEBG_SOURCE_FILE}"),
+            CODEBG_SOURCE_FILE.to_string(),
+        ];
+        want.sort();
+        want
+    };
+    for (label, path) in [
+        ("run 1 (appearance: dark)", &wins_dark),
+        ("run 2 (appearance: light)", &wins_light),
+    ] {
+        let got = read_window_buffer_names(path, SMOKE);
+        assert_eq!(
+            got, want_windows,
+            "{SMOKE}: after {label}'s Preview leg the captive Neovim's windows hold {got:?}, not \
+             {want_windows:?} (both sorted). A SINGLE entry naming {CODEBG_SOURCE_FILE:?} means \
+             no preview was bound: the palette dispatched nothing, or the \
+             {PREVIEW_OTHER_PANE_QUERY:?} query matched no row. A SINGLE entry naming the preview \
+             scratch means the in-place Preview ran, so there is no editor pane for assertion 5 \
+             and no right half for assertion 6. THREE entries mean it split twice. Every \
+             rectangle below assumes exactly two side-by-side panes."
+        );
+    }
+
+    // Asserts per launch, so a red run reports only the first failing one; the second capture is on
+    // disk regardless, so read it before concluding it was green.
+    for launch in [
+        CodeBgLaunch {
+            label: "run 1 (appearance: dark)",
+            capture: &dark,
+            body_bg: PREVIEW_DARK_BG,
+            body_bg_name: "PREVIEW_DARK_BG",
+            pre_bg: CODEHL_PRE_BG,
+            pre_bg_name: "CODEHL_PRE_BG",
+            other_pre_bg: CODEBG_LIGHT_PRE_BG,
+            other_pre_bg_name: "CODEBG_LIGHT_PRE_BG",
+        },
+        CodeBgLaunch {
+            label: "run 2 (appearance: light)",
+            capture: &light,
+            body_bg: PREVIEW_LIGHT_BG,
+            body_bg_name: "PREVIEW_LIGHT_BG",
+            pre_bg: CODEBG_LIGHT_PRE_BG,
+            pre_bg_name: "CODEBG_LIGHT_PRE_BG",
+            other_pre_bg: CODEHL_PRE_BG,
+            other_pre_bg_name: "CODEHL_PRE_BG",
+        },
+    ] {
+        assert_code_bg_launch(SMOKE, &launch);
+    }
+}
+
+/// Assertions 4, 5 and 6 for ONE launch of
+/// [`preview_code_block_background_follows_the_configured_appearance_under_cage`].
+///
+/// Split out so the two launches run the identical checks, for the reason
+/// `assert_preview_theme_launch` gives.
+fn assert_code_bg_launch(smoke: &str, launch: &CodeBgLaunch<'_>) {
+    let label = launch.label;
+    let capture = launch.capture;
+    let preview_columns = preview_theme_preview_columns();
+    let (preview_x0, preview_x1) = preview_columns;
+    let (editor_x0, editor_x1) = preview_theme_editor_columns();
+    let scan_rows = preview_theme_scan_rows();
+    let (_, band_y1) = preview_theme_band_rows();
+
+    // Assertion 4 (precondition): self-located from the pixels, so a moved web view moves every
+    // rectangle below with it.
+    let web_top = capture
+        .first_uniform_row(preview_columns, scan_rows, launch.body_bg)
+        .unwrap_or_else(|| {
+            panic!(
+                "{smoke}: {label}: no row between {} and {} is entirely {} = {:?} across columns \
+                 {preview_x0}..{preview_x1}, so the web view's top edge could not be located. \
+                 Three causes: the document is not rendering (an empty `render_preview`, or \
+                 `about:blank`); the other appearance applied, so the body is the other palette's \
+                 background; or the document's first block is not the leading paragraph, which \
+                 `codebg_source_body` puts there because a `pre` first leaves no pure background \
+                 above it.",
+                scan_rows.0, scan_rows.1, launch.body_bg_name, launch.body_bg
+            )
+        });
+
+    let block_scan = SampleRect {
+        x0: preview_x0,
+        x1: preview_x1,
+        y0: web_top,
+        y1: band_y1,
+    };
+    let control_scan = SampleRect {
+        x0: editor_x0,
+        x1: editor_x1,
+        ..block_scan
+    };
+    for (what, rect) in [("block scan", block_scan), ("control", control_scan)] {
+        assert!(
+            rect.x0 < rect.x1
+                && rect.y0 < rect.y1
+                && rect.x1 <= capture.width
+                && rect.y1 <= capture.height,
+            "{smoke}: {label}: the {what} rectangle {rect:?} is degenerate or falls outside the \
+             {}x{} capture. It spans from the located web view top ({web_top}) to \
+             `preview_theme_band_rows`'s last row, so the located top is below that row, or the \
+             derived columns have crossed.",
+            capture.width,
+            capture.height
+        );
+    }
+
+    let bridged = |rect: SampleRect, colour: Rgb8| {
+        bridged_majority_runs(
+            capture,
+            rect,
+            colour,
+            CODEBG_MAX_INK_GAP_ROWS,
+            CODEHL_MIN_BLOCK_ROWS,
+        )
+    };
+    let own = bridged(block_scan, launch.pre_bg);
+    let own_strips = majority_colour_runs(capture, block_scan, launch.pre_bg, 1);
+    let other = bridged(block_scan, launch.other_pre_bg);
+    let control = bridged(control_scan, launch.pre_bg);
+    eprintln!(
+        "{smoke} readings: {label}: web top {web_top}; own {} bridged runs {own:?}; own strips of \
+         any height, unbridged, {own_strips:?}; other {} bridged runs {other:?}; control bridged \
+         runs {control:?}",
+        launch.pre_bg_name, launch.other_pre_bg_name
+    );
+
+    // --- Assertion 5 (control, self-checking): the editor pane paints no block of this colour
+    assert!(
+        control.is_empty(),
+        "{smoke}: {label}: the EDITOR pane, columns {editor_x0}..{editor_x1} over rows \
+         {web_top}..{band_y1}, holds bridged majority runs of {} = {:?} of at least \
+         {CODEHL_MIN_BLOCK_ROWS} rows, gaps of up to CODEBG_MAX_INK_GAP_ROWS = \
+         {CODEBG_MAX_INK_GAP_ROWS} rows closed: {control:?}. So the captive Neovim paints the \
+         preview's `pre` colour itself, and a run in the preview pane no longer proves the theme \
+         painted it. The likely cause is the editor running Lighthouse with orlando, which fills \
+         a fenced block with the same `slightHighlightBG`; a single run spanning the whole scan \
+         instead means the panes are the wrong way round. Re-derive the fixture or the columns; \
+         do not drop this control.",
+        launch.pre_bg_name,
+        launch.pre_bg
+    );
+
+    // --- Assertion 6 (discriminator): one block of this palette's colour, behind every line
+    assert_eq!(
+        own.len(),
+        1,
+        "{smoke}: {label}: the PREVIEW pane, columns {preview_x0}..{preview_x1} over rows \
+         {web_top}..{band_y1}, holds {} bridged majority runs of {} = {:?} of at least \
+         {CODEHL_MIN_BLOCK_ROWS} rows, gaps of up to CODEBG_MAX_INK_GAP_ROWS = \
+         {CODEBG_MAX_INK_GAP_ROWS} rows closed, expected exactly 1: {own:?}. Over the same \
+         rectangle the other palette's {} = {:?} reads these bridged runs: {other:?}; and this \
+         palette's colour reads these unbridged runs of any height: {own_strips:?}. Read them \
+         in this order. (a) One run of the OTHER colour: the other palette's `pre` applied, so \
+         the configured appearance did not reach the document or this palette lost its `pre` \
+         rule. (b) Several own strips, separated by gaps taller than CODEBG_MAX_INK_GAP_ROWS, \
+         and no long run: the `pre` is this colour but something is painted behind each line \
+         of text, which is `base.css`'s `pre code` losing `background: transparent` or a \
+         highlight span gaining a background. (c) Nothing of either colour: `wolf-core`'s \
+         `markdown/themes/default.css` no longer gives `body.wolf-markdown pre` this colour, or \
+         no block rendered. (d) More than one long run: something else on the page paints this \
+         colour across the sampled width, or a line's ink starved more consecutive rows than \
+         the bridge closes, which shows as a gap of a few rows inside the block in the own \
+         strips. Re-measure those strips before widening CODEBG_MAX_INK_GAP_ROWS, because \
+         widening it towards a line box disarms the falsifier that removes `pre code`'s \
+         transparency.",
+        own.len(),
+        launch.pre_bg_name,
+        launch.pre_bg,
+        launch.other_pre_bg_name,
+        launch.other_pre_bg
+    );
+}
+
+/// Every run of majority-`colour` rows inside `rect`, as [`majority_colour_runs`] reads them,
+/// with each gap of at most `max_gap` rows merged into the run above it, and only then the runs
+/// shorter than `min_rows` discarded.
+///
+/// The merge comes before the height filter because two ink-split halves of one block are each
+/// a fragment of a real block: filtering first could drop a short half and leave the block read
+/// as shorter, or as missing. See [`CODEBG_MAX_INK_GAP_ROWS`] for the margin on `max_gap`.
+fn bridged_majority_runs(
+    capture: &Capture,
+    rect: SampleRect,
+    colour: Rgb8,
+    max_gap: usize,
+    min_rows: usize,
+) -> Vec<BlockRun> {
+    let mut runs: Vec<BlockRun> = Vec::new();
+    for run in majority_colour_runs(capture, rect, colour, 1) {
+        match runs.last_mut() {
+            Some(last) if run.y0 - last.y1 <= max_gap => last.y1 = run.y1,
+            _ => runs.push(run),
+        }
+    }
+    runs.retain(|run| run.rows() >= min_rows);
+    runs
 }
 
 // --- Row C: inline code grows no line box, and a heading has a baseline below -----

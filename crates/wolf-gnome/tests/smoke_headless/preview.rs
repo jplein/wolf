@@ -2341,7 +2341,7 @@ pub(crate) const PREVIEW_DARK_BG: (u8, u8, u8) = (0x1b, 0x1b, 0x1b);
 /// MEASURED the same way: `rgb(244, 244, 244)` under `ForceLight`, on a desktop that
 /// was reading DARK before the call — so the forced value OVERRIDES the ambient one
 /// rather than coinciding with it.
-const PREVIEW_LIGHT_BG: (u8, u8, u8) = (0xf4, 0xf4, 0xf4);
+pub(crate) const PREVIEW_LIGHT_BG: (u8, u8, u8) = (0xf4, 0xf4, 0xf4);
 
 /// How many rows below the top of the page's content assertion 6 counts ink in: the web
 /// view's own top edge plus the root padding `preview_width::root_style` gives the page.
@@ -2621,7 +2621,7 @@ pub(crate) fn preview_theme_preview_columns() -> (usize, usize) {
 /// `x0..x1`.
 ///
 /// Derived at the pinned output size: columns 331..686.
-fn preview_theme_editor_columns() -> (usize, usize) {
+pub(crate) fn preview_theme_editor_columns() -> (usize, usize) {
     let (area_x, _, area_w, _) = preview_theme_pane_area();
     let x0 = pixel_index(area_x + BAND_X_INSET_PX, "the control band's first column");
     let x1 = pixel_index(
@@ -2695,7 +2695,7 @@ struct ThemeLaunch<'a> {
 /// A `grim` failure has no code of its own: it aborts under `set -eu` and the cage
 /// status carries grim's own. That is deliberate — a capture that did not happen is
 /// not a preview finding, and assertion 2 names it anyway.
-const PREVIEW_THEME_SCENARIO: &str = r#"
+pub(crate) const PREVIEW_THEME_SCENARIO: &str = r#"
 set -eu
 
 # SETTLE is the settle between steps; see SCENARIO.

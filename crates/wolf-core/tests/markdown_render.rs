@@ -469,6 +469,60 @@ fn default_theme_carries_dark_and_light_palettes() {
     );
 }
 
+/// The fenced code block's background in each palette is the bundled Lighthouse colorscheme's
+/// `slightHighlightBG`, `#252525` dark and `#ffffff` light, copied into the theme's fixed palette,
+/// and `pre code` stays transparent so that colour shows behind every line.
+///
+/// The two values are literals on purpose: an expectation stated independently of the theme, and
+/// one a Lighthouse bump must not move, since the preview is not wired to the live colorscheme.
+///
+/// Each palette is read by splitting the theme at its `@media` block, the second way around the
+/// construct [`style_block`] names. A substring check cannot stand in for the light half's
+/// assertion: `#ffffff` is also the dark palette's heading colour.
+#[test]
+fn code_block_background_is_slight_highlight_in_both_palettes() {
+    let theme = theme_css(PreviewTheme::Default);
+    let media = "@media (prefers-color-scheme: light)";
+    let (dark, light_block) = theme.split_once(media).unwrap_or_else(|| {
+        panic!("the Default theme must carry a `{media}` block for its light palette: {theme}")
+    });
+    let open = light_block
+        .find('{')
+        .unwrap_or_else(|| panic!("the `{media}` block must open with a brace: {light_block}"));
+    let light = &light_block[open + 1..];
+
+    let dark_pre = rule_decls(dark, "pre");
+    assert_eq!(
+        dark_pre.get("background-color").map(String::as_str),
+        Some("#252525"),
+        "the dark palette's `body.wolf-markdown pre` must paint Lighthouse's dark \
+         `slightHighlightBG`, `#252525`. `#161616` is the colour this replaced; \
+         `None` means the rule or its `background-color` is gone from the part \
+         of the theme before the `@media` block. Found: {dark_pre:?}"
+    );
+
+    let light_pre = rule_decls(light, "pre");
+    assert_eq!(
+        light_pre.get("background-color").map(String::as_str),
+        Some("#ffffff"),
+        "the light palette's `body.wolf-markdown pre`, inside `{media}`, must paint \
+         Lighthouse's light `slightHighlightBG`, `#ffffff`. `#eaeaea` is the colour \
+         this replaced; `None` means the light block lost its `pre` rule, so light \
+         mode would inherit the dark `pre` colour. Found: {light_pre:?}"
+    );
+
+    let css = rendered_stylesheet();
+    let pre_code = rule_decls(&css, "body.wolf-markdown pre code");
+    assert_eq!(
+        pre_code.get("background").map(String::as_str),
+        Some("transparent"),
+        "base.css's `body.wolf-markdown pre code` must keep `background: transparent`. \
+         Without it the theme's inline `code` chip background (`#2b2b2b` dark, \
+         `#e8e8e8` light) paints behind each line's text, and the `pre` colour \
+         shows only in the padding and the gaps between lines. Found: {pre_code:?}"
+    );
+}
+
 // --- Baseline-grid assertions: base.css is `include_str!`'d verbatim, so these audit the
 // shipped stylesheet through the public `render_html` surface.
 
@@ -611,9 +665,12 @@ const COMPENSATION_ALLOWLIST: &[(&str, &str, i32)] = &[
 ///
 /// - every `base.css` rule is still read correctly (it all precedes the
 ///   `@media`), and
-/// - the `hr` theme assertions in
-///   [`hr_occupies_whole_baselines_and_is_painted_by_its_border`] must use
-///   plain substring checks against the whole document, NOT [`rule_decls`].
+/// - a theme rule is read one of two ways around it: the `hr` assertions in
+///   [`hr_occupies_whole_baselines_and_is_painted_by_its_border`] use plain
+///   substring checks against the whole document, NOT [`rule_decls`], and
+///   [`code_block_background_is_slight_highlight_in_both_palettes`] splits
+///   [`theme_css`] at the `@media` line and drops the block's own opening
+///   brace, so each half is flat and [`rule_decls`] reads it correctly.
 ///
 /// Do not grow these helpers into a general CSS parser; if a future stylesheet
 /// needs nesting, the tests should assert on something else instead.
