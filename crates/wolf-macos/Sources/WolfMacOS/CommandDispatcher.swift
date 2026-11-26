@@ -27,7 +27,8 @@ enum CommandDispatcher {
     case .newWindow:
       coordinator?.makeNewWindow(originatingCwd: originatingCwd)
     case .closeWindow:
-      window?.close()
+      // Asks every tab of the window's group, then closes the group with close(), unasked again.
+      if let window { coordinator?.closeWindow(window) }
     case .quitApplication:
       NSApp.terminate(nil)
     case .hideApplication:

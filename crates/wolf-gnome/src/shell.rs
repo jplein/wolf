@@ -92,8 +92,8 @@
 //! `drain_and_dispatch_commands` takes a SHORT `core.borrow()`, collects the
 //! commands into a `Vec`, and drops the borrow before dispatching any of them.
 //! `UiAction::CloseWindow` / `UiAction::QuitApplication` synchronously run
-//! `window::wire_close`'s `close-request` handler, which takes every tab's core out
-//! with a `borrow_mut()`. `UiAction::CloseTab` borrows its tab's core for the ask, then
+//! `window::wire_close`'s `close-request` handler, which first borrows each tab's core
+//! for its unsaved check and then takes every tab's core out with a `borrow_mut()`. `UiAction::CloseTab` borrows its tab's core for the ask, then
 //! may take it out, and on the window's last tab it runs the same handler. An
 //! outstanding `borrow()` there is a `RefCell` panic, not a warning.
 //!
@@ -2063,7 +2063,8 @@ impl AppShell {
 
     /// Closes the window through `close-request` so `window::wire_close` runs (picker,
     /// palette and buffer picker closed, the search panel's `rg` and the tree's
-    /// traversal cancelled, then `WolfCore::shutdown`).
+    /// traversal cancelled, then `WolfCore::shutdown`). That handler's unsaved check
+    /// may keep the window open, showing the first tab with unsaved changes.
     ///
     /// NEVER `destroy()`: that skips `close-request` entirely and leaks the nvim
     /// child. The `adw::ApplicationWindow` is owned by the application, so the app
@@ -2203,9 +2204,10 @@ impl AppShell {
         coordinator.open_new_window(&app);
     }
 
-    /// Quits through [`crate::coordinator::Coordinator::quit`], which commits the
-    /// whole tree once while every core is still alive and only then closes every
-    /// window — for the same clean-shutdown reason as [`AppShell::close_window`].
+    /// Quits through [`crate::coordinator::Coordinator::quit`], which refuses while a tab
+    /// holds unsaved changes, and otherwise commits the whole tree once while every core
+    /// is still alive and only then closes every window — for the same clean-shutdown
+    /// reason as [`AppShell::close_window`].
     ///
     /// Routing the drained `Command::QuitApplication` and the palette's Quit Wolf
     /// row through the coordinator is what makes them take the same funnel as the

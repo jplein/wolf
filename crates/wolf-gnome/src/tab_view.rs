@@ -43,7 +43,8 @@
 //! unconfirmed close of a live tab is refused and asks the tab's Neovim, after
 //! selecting the page, since commands drain from the selected tab only and its
 //! message must show; its drained `close_tab` confirms the tab and closes it. The last
-//! page's close is answered with a REFUSAL and routed into the window's own close —
+//! page's close is answered with a REFUSAL, confirms the tab, since its own check has
+//! passed, and is routed into the window's own close, whose check then skips it —
 //! see [`crate::tabs_ui::close_outcome`].
 //!
 //! ## Restore
@@ -72,7 +73,9 @@ use adw::prelude::*;
 use gtk::glib;
 
 use wolf_core::app_state::Tab;
-use wolf_core::{CloseTabAnswer, CoreConfig, Liveness, TerminalId, WakeFn, WolfConfig, WolfCore};
+use wolf_core::{
+    CloseTabAnswer, CoreConfig, Liveness, TerminalId, UnsavedAnswer, WakeFn, WolfConfig, WolfCore,
+};
 
 use crate::appearance;
 use crate::drawer::DrawerShare;
@@ -300,6 +303,31 @@ impl TabHandle {
             .as_ref()
             .map(WolfCore::request_close_tab);
         answer.unwrap_or(CloseTabAnswer::NoAnswer)
+    }
+
+    /// Asks this tab's Neovim, silently, whether it holds a modified buffer, through
+    /// [`WolfCore::request_unsaved`], blocking up to core's RPC timeout.
+    /// [`UnsavedAnswer::NoAnswer`] when the core is gone.
+    ///
+    /// The core is borrowed in its own statement, so no borrow outlives the ask.
+    #[must_use]
+    pub fn request_unsaved(&self) -> UnsavedAnswer {
+        let answer = self
+            .inner
+            .core
+            .borrow()
+            .as_ref()
+            .map(WolfCore::request_unsaved);
+        answer.unwrap_or(UnsavedAnswer::NoAnswer)
+    }
+
+    /// Has this tab's Neovim echo E37 or E162 for its first modified buffer, through
+    /// [`WolfCore::show_unsaved`]. A no-op when the core is gone.
+    pub fn show_unsaved(&self) {
+        let core = self.inner.core.borrow();
+        if let Some(core) = core.as_ref() {
+            let _ = core.show_unsaved();
+        }
     }
 
     /// This tab's restart state.
@@ -776,6 +804,10 @@ impl TabsInner {
             TabClose::CloseWindow => {
                 // Refused, so the page survives until the toplevel tears it down.
                 self.view.close_page_finish(page, false);
+                // Its check has passed, so the window's own check does not ask it again.
+                if let Some(entry) = self.entry_for(page) {
+                    entry.confirm_close();
+                }
                 // No core borrow is held: `close()` runs the `close-request` handler synchronously, and that
                 // takes every tab's core out with a `borrow_mut`.
                 match self
@@ -950,6 +982,38 @@ impl TabsHandle {
     /// Selects `tab`'s page, which fires the selection callback as a click would.
     pub fn select(&self, tab: &TabHandle) {
         self.inner.view.set_selected_page(tab.page());
+    }
+
+    /// The tabs in the bar's page order, which [`TabsHandle::entries`] is not.
+    #[must_use]
+    pub fn in_page_order(&self) -> Vec<TabHandle> {
+        let mut tabs = self.entries();
+        tabs.sort_by_key(TabHandle::page_position);
+        tabs
+    }
+
+    /// The tab Close Window shows: the first in page order whose Neovim holds a modified
+    /// buffer, through [`tabs_ui::window_close`], or `None` when the window may close.
+    /// Each tab is asked in turn, and none after the first unsaved one.
+    ///
+    /// No core borrow may be held across this call, since each ask borrows a tab's core.
+    #[must_use]
+    pub fn unsaved_tab(&self) -> Option<TabHandle> {
+        let tabs = self.in_page_order();
+        let answers = tabs.iter().map(|t| {
+            tabs_ui::tab_unsaved(t.close_confirmed(), t.liveness(), || t.request_unsaved())
+        });
+        match tabs_ui::window_close(answers) {
+            tabs_ui::WindowClose::Show(index) => tabs.get(index).cloned(),
+            tabs_ui::WindowClose::CloseAll => None,
+        }
+    }
+
+    /// Shows a refused Close Window's or Quit's `tab`: selects it first, so its E37 or
+    /// E162 shows in the tab it names, and then has its Neovim echo the message.
+    pub fn show_unsaved(&self, tab: &TabHandle) {
+        self.select(tab);
+        tab.show_unsaved();
     }
 
     /// Reseeds the tab recency with the selected tab first and the rest in page

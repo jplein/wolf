@@ -727,26 +727,39 @@ local function refusal_name(b)
 	return "[No Name]"
 end
 
--- Echoes Vim's E37 or E162 for the first modified buffer of this Neovim, the tab's, and returns
--- true; false, silently, with none. Neovim never marks a nofile or terminal buffer modified.
-function _G.wolf_refuse_unsaved()
-	local cur = vim.api.nvim_get_current_buf()
-	local order = { cur }
+-- The first modified buffer of this Neovim, the tab's: the current buffer, then the tabpage's
+-- windows, then every buffer, or nil. Neovim never marks a nofile or terminal buffer modified.
+local function first_unsaved()
+	local order = { vim.api.nvim_get_current_buf() }
 	for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
 		order[#order + 1] = vim.api.nvim_win_get_buf(w)
 	end
 	vim.list_extend(order, vim.api.nvim_list_bufs())
 	for _, b in ipairs(order) do
 		if vim.api.nvim_buf_is_valid(b) and vim.bo[b].modified then
-			local msg = "E37: No write since last change (add ! to override)"
-			if b ~= cur then
-				msg = string.format('E162: No write since last change for buffer "%s"', refusal_name(b))
-			end
-			vim.api.nvim_echo({ { msg, "ErrorMsg" } }, true, {})
-			return true
+			return b
 		end
 	end
-	return false
+	return nil
+end
+
+-- Echoes Vim's E37 or E162 for first_unsaved() and returns true; false, silently, with none.
+function _G.wolf_refuse_unsaved()
+	local b = first_unsaved()
+	if b == nil then
+		return false
+	end
+	local msg = "E37: No write since last change (add ! to override)"
+	if b ~= vim.api.nvim_get_current_buf() then
+		msg = string.format('E162: No write since last change for buffer "%s"', refusal_name(b))
+	end
+	vim.api.nvim_echo({ { msg, "ErrorMsg" } }, true, {})
+	return true
+end
+
+-- Close Window's and Quit's silent ask: whether this tab holds an unsaved buffer, echoing nothing.
+function _G.wolf_has_unsaved()
+	return first_unsaved() ~= nil
 end
 
 -- The buffer Neovim 0.12's do_buffer_ext shows in `win` when `:bd` deletes its buffer, or nil

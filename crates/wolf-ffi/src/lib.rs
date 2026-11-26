@@ -58,7 +58,7 @@ use wolf_core::{
     SearchMatch, SearchOptions, SearchSession, SplitOrientation, TabFiles, TabId, TerminalCell,
     TerminalCellWidth, TerminalCommand, TerminalCursor, TerminalCursorStyle, TerminalFrame,
     TerminalId, TerminalMouseEvent, TerminalMouseKind, TerminalScrollEvent, TerminalTarget,
-    TerminalUnderline, Toast, WakeFn, WinInfo, WolfCore,
+    TerminalUnderline, Toast, UnsavedAnswer, WakeFn, WinInfo, WolfCore,
 };
 
 // Re-export the bridge's transparent structs so rlib consumers (the Rust tests) can name them;
@@ -398,6 +398,20 @@ mod close_tab_answer {
     pub const CLOSING: u8 = 2;
 }
 
+/// The answer discriminants of [`WolfCoreHandle::request_unsaved`], mapped from
+/// [`wolf_core::UnsavedAnswer`].
+///
+/// The single source of truth shared with the Swift `UnsavedAnswer` in `WolfKeyMap`.
+/// A shut-down core answers [`NO_ANSWER`], which the front-end counts as clean.
+mod unsaved_answer {
+    /// The request failed or timed out, or the core is gone: counted as clean.
+    pub const NO_ANSWER: u8 = 0;
+    /// The tab holds a modified buffer, shown or hidden.
+    pub const UNSAVED: u8 = 1;
+    /// Nothing is unsaved.
+    pub const CLEAN: u8 = 2;
+}
+
 /// The `target` discriminants of [`WolfCoreHandle::open_terminal`] and
 /// [`WolfCoreHandle::bind_terminal`], mapped to [`wolf_core::TerminalTarget`].
 mod terminal_target {
@@ -703,6 +717,12 @@ mod ffi {
         // Close Tab's check in the tab's Neovim, as `mod close_tab_answer`. Blocks up to the RPC
         // timeout; NO_ANSWER on an error, a timeout or a shut-down core.
         fn request_close_tab(&self) -> u8;
+        // Close Window's and Quit's silent ask of the tab's Neovim, as `mod unsaved_answer`.
+        // Blocks up to the RPC timeout; NO_ANSWER on an error, a timeout or a shut-down core.
+        fn request_unsaved(&self) -> u8;
+        // Echoes E37 or E162 for the tab's first modified buffer: true when it echoed, false
+        // when nothing is unsaved, on an error or for a shut-down core. Blocks like the ask.
+        fn show_unsaved(&self) -> bool;
         // Opens `path` (an absolute filesystem path) in Neovim via
         // `InputEvent::Open`; the core's input pump records the MRU.
         fn open(&self, path: String);
@@ -3518,6 +3538,29 @@ impl WolfCoreHandle {
             Some(CloseTabAnswer::Refused) => close_tab_answer::REFUSED,
             Some(CloseTabAnswer::Closing) => close_tab_answer::CLOSING,
         }
+    }
+
+    /// Asks the tab's Neovim whether it holds a modified buffer, silently, through
+    /// [`WolfCore::request_unsaved`], answering with `mod unsaved_answer`.
+    ///
+    /// Blocks up to the core's RPC timeout. `NO_ANSWER`, which a shut-down core also
+    /// gives, is counted as clean by the caller.
+    #[must_use]
+    pub fn request_unsaved(&self) -> u8 {
+        let answer = self.core.borrow().as_ref().map(WolfCore::request_unsaved);
+        match answer {
+            None | Some(UnsavedAnswer::NoAnswer) => unsaved_answer::NO_ANSWER,
+            Some(UnsavedAnswer::Unsaved) => unsaved_answer::UNSAVED,
+            Some(UnsavedAnswer::Clean) => unsaved_answer::CLEAN,
+        }
+    }
+
+    /// Echoes E37 or E162 for the tab's first modified buffer, through
+    /// [`WolfCore::show_unsaved`]: `true` when it echoed, and `false` when nothing is
+    /// unsaved, on an error or once the core has been shut down.
+    pub fn show_unsaved(&self) -> bool {
+        let shown = self.core.borrow().as_ref().map(WolfCore::show_unsaved);
+        shown.unwrap_or(false)
     }
 
     /// Opens `path` (an absolute filesystem path) in Neovim via

@@ -81,6 +81,8 @@ use crate::open_request::{self, Route, TabRef};
 use crate::ready_seam::{self, Blocker, ReadyStep, WindowReadiness};
 use crate::stacking::StackingOrder;
 use crate::state_seam::{self, CloseCommit, RestorePlan};
+use crate::tab_view::TabHandle;
+use crate::tabs_ui;
 use crate::window::{self, WindowHandle, WindowParts};
 use crate::workspace;
 use crate::CellMetrics;
@@ -859,10 +861,22 @@ impl Coordinator {
         self.deregister(id);
     }
 
+    /// Whether [`Coordinator::quit`] has latched: its check passed and the windows are
+    /// closing, so a window's `close-request` does not ask its tabs again.
+    #[must_use]
+    pub fn is_quitting(&self) -> bool {
+        self.inner.shutting_down.get()
+    }
+
     /// Quits: commits the WHOLE tree once, while every core and every pane is
     /// still alive, and only then closes the windows.
     ///
-    /// Every step of the order is load-bearing. `shutting_down` is latched FIRST so
+    /// First it asks every tab of every window, the windows frontmost first and each
+    /// window's tabs in page order ([`tabs_ui::quit`]). When one holds unsaved changes,
+    /// that tab is selected and shows E37 or E162, its window is presented (best-effort),
+    /// and nothing quits: nothing is latched, committed or closed.
+    ///
+    /// Every step of the order after the check is load-bearing. `shutting_down` is latched first so
     /// each window's close handler answers [`CloseCommit::Skip`] and does not
     /// re-commit a tree that shrinks by one window per close. The open channel's
     /// listener goes next, so no `wolf` gets `Taken` from an app that is exiting. Every
@@ -884,6 +898,10 @@ impl Coordinator {
     /// Deliberately not `gio::Application::quit()`, which bypasses
     /// `close-request` and leaves every captive Neovim orphaned.
     pub fn quit(&self, app: &gtk::Application) {
+        if let Some((window, tab)) = self.unsaved_tab() {
+            window.show_unsaved(&tab);
+            return;
+        }
         self.inner.shutting_down.set(true);
         drop(self.inner.listener.borrow_mut().take());
         for handle in self.handles() {
@@ -960,6 +978,32 @@ impl Coordinator {
             .map(|handle| (handle.id(), handle.normal_size()))
             .collect();
         state_seam::active_size(&windows, &self.inner.stacking.borrow())
+    }
+
+    /// The tab a refused Quit shows: the first unsaved one, the windows in stacking
+    /// order and each window's tabs in page order, or `None` when the app may quit.
+    fn unsaved_tab(&self) -> Option<(WindowHandle, TabHandle)> {
+        let handles = self.handles();
+        let ids: Vec<WindowId> = handles.iter().map(WindowHandle::id).collect();
+        // Bound in its own statement, so no borrow is held across the asks.
+        let order = self.inner.stacking.borrow().order(&ids);
+        let windows: Vec<(WindowHandle, Vec<TabHandle>)> = order
+            .iter()
+            .filter_map(|id| handles.iter().find(|h| h.id() == *id))
+            .map(|h| (h.clone(), h.tabs_in_page_order()))
+            .collect();
+        let answers = windows.iter().map(|(_, tabs)| {
+            tabs.iter().map(|t| {
+                tabs_ui::tab_unsaved(t.close_confirmed(), t.liveness(), || t.request_unsaved())
+            })
+        });
+        match tabs_ui::quit(answers) {
+            tabs_ui::Quit::Show { window, tab } => {
+                let (handle, tabs) = windows.get(window)?;
+                Some((handle.clone(), tabs.get(tab)?.clone()))
+            }
+            tabs_ui::Quit::QuitAll => None,
+        }
     }
 
     /// Every live window's handle, cloned out so no `RefCell` borrow is held

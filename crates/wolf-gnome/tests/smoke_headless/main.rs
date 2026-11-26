@@ -157,6 +157,7 @@ use wolf_gnome::{preview_coalescer::PREVIEW_TRAILING_DELAY, CellMetrics, WINDOW_
 
 mod close_pane;
 mod close_tab;
+mod close_window;
 mod compose;
 mod config;
 mod drawer_divider;

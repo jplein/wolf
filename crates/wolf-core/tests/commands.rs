@@ -33,7 +33,8 @@ use common::{
     POLL_INTERVAL,
 };
 use wolf_core::{
-    CloseTabAnswer, Command, InputEvent, Key, Liveness, MenuGroup, WolfCore, COMMAND_SPECS,
+    CloseTabAnswer, Command, InputEvent, Key, Liveness, MenuGroup, UnsavedAnswer, WolfCore,
+    COMMAND_SPECS,
 };
 
 /// The outer/global grid id. Window content lives on grids `>= 2`; grid 1 is
@@ -1317,6 +1318,233 @@ fn request_close_tab_gives_no_answer_from_a_dead_neovim() {
 
     core.shutdown()
         .expect("shutdown should be Ok even after a crash");
+}
+
+/// Neovim's message history, `:messages`, on one line. Its probe runs after any request made
+/// before it, so an echo that request made is already in the history.
+fn messages(core: &WolfCore) -> String {
+    probe(
+        core,
+        &["substitute(execute('messages'), '\\n', ' | ', 'g')"],
+    )
+    .remove(0)
+}
+
+/// Asserts that `history`, read by [`messages`] after `what`, holds neither E37 nor E162.
+fn assert_no_refusal(history: &str, what: &str) {
+    assert!(
+        !history.contains("E37") && !history.contains("E162"),
+        "{what} must echo nothing; `:messages` reads {history:?}, so the silent ask echoed a \
+         refusal, which Close Window and Quit would show in every unsaved tab, background ones \
+         included"
+    );
+}
+
+/// Drains commands for [`SETTLE`] and asserts that none is `Command::CloseTab`.
+fn assert_no_close_tab(core: &WolfCore, waiter: &FlushWaiter, what: &str) {
+    settle_for(waiter, SETTLE);
+    let drained = core.drain_commands();
+    assert!(
+        !drained.contains(&Command::CloseTab),
+        "{what} must notify no close_tab; got {drained:?}, so the ask ran Close Tab's helper, \
+         and the tab would close on its drain before Close Window or Quit decided anything"
+    );
+}
+
+/// CW1. On an unmodified tab, `request_unsaved()` answers `Clean`, echoes nothing and notifies
+/// nothing: it only asks.
+#[test]
+fn request_unsaved_answers_clean_on_an_unmodified_tab() {
+    let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
+    wait_for_initial_window(&core, &waiter);
+
+    assert_eq!(
+        probe(&core, &["&modified"]),
+        ["0"],
+        "premise: a freshly opened file must be unmodified"
+    );
+    // Discard anything queued during setup so we observe only the request's (non-)effect.
+    let _ = core.drain_commands();
+
+    let answer = core.request_unsaved();
+    assert_eq!(
+        answer,
+        UnsavedAnswer::Clean,
+        "an unmodified tab must answer Clean; Unsaved means the check counted an unmodified \
+         buffer or the answer is mapped the wrong way round, and NoAnswer that the request \
+         failed or wolf_has_unsaved returned no boolean"
+    );
+    assert_no_refusal(&messages(&core), "request_unsaved() on an unmodified tab");
+    assert_no_close_tab(&core, &waiter, "request_unsaved() on an unmodified tab");
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// CW2. With the current buffer modified, `request_unsaved()` answers `Unsaved` and echoes
+/// nothing. The same tab's `request_close_tab()` then echoes E37, which shows that an echo made
+/// inside an RPC request reaches `:messages`, so the silence is the ask's own.
+#[test]
+fn request_unsaved_answers_unsaved_without_a_message() {
+    let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
+    wait_for_initial_window(&core, &waiter);
+
+    insert_text(&core, &waiter, "x");
+    assert_eq!(
+        probe(&core, &["&modified"]),
+        ["1"],
+        "premise: the typed text must leave the current buffer modified"
+    );
+    // Discard anything queued during setup so we observe only the request's (non-)effect.
+    let _ = core.drain_commands();
+
+    let answer = core.request_unsaved();
+    assert_eq!(
+        answer,
+        UnsavedAnswer::Unsaved,
+        "a modified current buffer must answer Unsaved; Clean means the check was skipped or \
+         found nothing, and NoAnswer that the request failed or returned no boolean"
+    );
+    assert_no_refusal(&messages(&core), "request_unsaved() on a modified buffer");
+    assert_no_close_tab(&core, &waiter, "request_unsaved() on a modified buffer");
+
+    assert_eq!(
+        core.request_close_tab(),
+        CloseTabAnswer::Refused,
+        "premise: Close Tab's check must refuse the same modified buffer"
+    );
+    let history = messages(&core);
+    assert!(
+        history.contains(E37),
+        "premise: the E37 that request_close_tab() echoes inside its RPC request must reach \
+         `:messages`, or the silence asserted above proves nothing; `:messages` reads {history:?}"
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// CW3. A modified buffer that no window shows makes `request_unsaved()` answer `Unsaved`: the
+/// ask covers the whole tab's Neovim, as `:qa` does.
+#[test]
+fn request_unsaved_counts_a_hidden_modified_buffer() {
+    let (core, waiter, file) = common::start_core_with_temp_md(DOC);
+    wait_for_initial_window(&core, &waiter);
+
+    let (_second, _second_name) = hide_a_modified_second_file(&core, &waiter, file.path());
+    assert_eq!(
+        probe(&core, &["&modified"]),
+        ["0"],
+        "premise: the current buffer must be unmodified, so only the hidden buffer can answer"
+    );
+    // Discard anything queued during setup so we observe only the request's (non-)effect.
+    let _ = core.drain_commands();
+
+    let answer = core.request_unsaved();
+    assert_eq!(
+        answer,
+        UnsavedAnswer::Unsaved,
+        "a hidden modified buffer must answer Unsaved; Clean means the ask looked at the current \
+         buffer or the tab's windows only, and NoAnswer that the request failed"
+    );
+    assert_no_refusal(
+        &messages(&core),
+        "request_unsaved() beside a hidden modified buffer",
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// CW4. A Neovim killed under the core cannot answer, so `request_unsaved()` answers
+/// `NoAnswer`, which the front-ends count as clean.
+#[test]
+fn request_unsaved_gives_no_answer_from_a_dead_neovim() {
+    let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
+    wait_for_initial_window(&core, &waiter);
+
+    ex_command(&core, "lua (vim.uv or vim.loop).kill(vim.fn.getpid(), 9)");
+    poll_until(
+        &waiter,
+        "premise: liveness() to become Dead after Neovim's SIGKILL of itself",
+        || core.liveness(),
+        |liveness| *liveness == Liveness::Dead,
+    );
+
+    let answer = core.request_unsaved();
+    assert_eq!(
+        answer,
+        UnsavedAnswer::NoAnswer,
+        "a dead Neovim must give NoAnswer; Clean means a failed request is mistaken for an answer, \
+         and Unsaved that it reads as unsaved, which would keep a crashed tab's window and the \
+         app from ever closing"
+    );
+
+    core.shutdown()
+        .expect("shutdown should be Ok even after a crash");
+}
+
+/// CW5. With the current buffer modified, `show_unsaved()` answers `true` and the tab shows E37
+/// alone, and nothing notifies `close_tab`.
+#[test]
+fn show_unsaved_shows_e37_and_notifies_nothing() {
+    let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
+    wait_for_initial_window(&core, &waiter);
+
+    insert_text(&core, &waiter, "x");
+    assert_eq!(
+        probe(&core, &["&modified"]),
+        ["1"],
+        "premise: the typed text must leave the current buffer modified"
+    );
+    // Discard anything queued during setup so we observe only the request's (non-)effect.
+    let _ = core.drain_commands();
+
+    assert!(
+        core.show_unsaved(),
+        "show_unsaved() on a modified buffer must answer true; false means it found nothing \
+         unsaved or its request failed"
+    );
+    let (toast, drained) = refused(
+        &core,
+        &waiter,
+        "show_unsaved() (true with no toast means it ran the silent ask rather than the echoing \
+         one)",
+        E37,
+    );
+    assert!(
+        !toast.contains("E162"),
+        "a refusal for the current buffer must be E37 alone; the toast reads {toast:?}, so the \
+         current buffer was reported as another buffer"
+    );
+    assert!(
+        !drained.contains(&Command::CloseTab),
+        "show_unsaved() must notify no close_tab; got {drained:?}, so it ran Close Tab's helper"
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// CW6. On an unmodified tab, `show_unsaved()` answers `false` and echoes nothing.
+#[test]
+fn show_unsaved_on_an_unmodified_tab_shows_nothing() {
+    let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
+    wait_for_initial_window(&core, &waiter);
+
+    assert_eq!(
+        probe(&core, &["&modified"]),
+        ["0"],
+        "premise: a freshly opened file must be unmodified"
+    );
+    // Discard anything queued during setup so we observe only the request's (non-)effect.
+    let _ = core.drain_commands();
+
+    assert!(
+        !core.show_unsaved(),
+        "show_unsaved() on an unmodified tab must answer false; true means it answers true for \
+         any reply, so a buffer written between the two phases would still keep the tab open"
+    );
+    assert_no_refusal(&messages(&core), "show_unsaved() on an unmodified tab");
+    assert_no_close_tab(&core, &waiter, "show_unsaved() on an unmodified tab");
+
+    core.shutdown().expect("shutdown should be Ok");
 }
 
 // Pure registry tests: they start no core, so they pin `COMMAND_SPECS` and `Command::from_id`

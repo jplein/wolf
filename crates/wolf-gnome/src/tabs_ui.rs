@@ -30,6 +30,15 @@
 //! one that gives no answer, closes unchecked: a wedged tab must stay closable, and its
 //! swap files keep its edits recoverable.
 //!
+//! ## Closing a window and quitting ask every tab
+//!
+//! Close Window and Quit ask each tab they would close, silently, through
+//! [`tab_unsaved`]; [`window_close`] and [`quit`] then pick the first unsaved tab to
+//! show, or close everything. A dead, stalled or gone core, or one that gives no answer,
+//! counts as clean, as for Close Tab. A tab whose own close is already confirmed counts
+//! as clean unasked, since its check has passed. Only the tab shown is then asked to
+//! echo E37 or E162, once it is selected, so the message shows in the tab it names.
+//!
 //! ## The focus trigger
 //!
 //! [`focused_tab`] and [`focus_edges`] decide which tab's Neovim is told it gained
@@ -40,7 +49,7 @@
 
 use std::path::Path;
 
-use wolf_core::{CloseTabAnswer, Liveness};
+use wolf_core::{CloseTabAnswer, Liveness, UnsavedAnswer};
 
 /// What closing one tab's page does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,6 +116,100 @@ pub fn close_page_now(
         CloseTabAnswer::Refused | CloseTabAnswer::Closing => false,
         CloseTabAnswer::NoAnswer => true,
     }
+}
+
+/// One tab's answer to Close Window's and Quit's ask.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabUnsaved {
+    /// The tab's Neovim holds a modified buffer: the close is refused.
+    Unsaved,
+    /// Nothing is unsaved, or the tab's close is already confirmed.
+    Clean,
+    /// The tab's Neovim is dead, stalled, gone or gave no answer: counted as clean.
+    Unreachable,
+}
+
+/// What Close Window does once every tab of the window has answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowClose {
+    /// Close every tab, and the window with them.
+    CloseAll,
+    /// Close nothing, and show the tab at this page index.
+    Show(usize),
+}
+
+/// What Quit does once every tab of every window has answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Quit {
+    /// Quit: commit the session and shut every Neovim down.
+    QuitAll,
+    /// Quit nothing, and show tab `tab` of window `window`, both indices of the order given.
+    Show {
+        /// The window's index in the order given to [`quit`].
+        window: usize,
+        /// The tab's page index within that window.
+        tab: usize,
+    },
+}
+
+/// One tab's answer for Close Window and Quit, given whether its own close is already
+/// `confirmed` and its core's `liveness` (`None` with no core).
+///
+/// A confirmed tab is [`TabUnsaved::Clean`] and a core that is not
+/// [`Liveness::Alive`] is [`TabUnsaved::Unreachable`], neither asked. Otherwise `ask`
+/// runs once, and its [`UnsavedAnswer::NoAnswer`] is [`TabUnsaved::Unreachable`].
+#[must_use]
+pub fn tab_unsaved(
+    confirmed: bool,
+    liveness: Option<Liveness>,
+    ask: impl FnOnce() -> UnsavedAnswer,
+) -> TabUnsaved {
+    if confirmed {
+        return TabUnsaved::Clean;
+    }
+    match liveness {
+        Some(Liveness::Alive) => {}
+        Some(Liveness::NotResponding | Liveness::Dead) | None => return TabUnsaved::Unreachable,
+    }
+    match ask() {
+        UnsavedAnswer::Unsaved => TabUnsaved::Unsaved,
+        UnsavedAnswer::Clean => TabUnsaved::Clean,
+        UnsavedAnswer::NoAnswer => TabUnsaved::Unreachable,
+    }
+}
+
+/// Close Window's decision over the window's tabs, in page order:
+/// [`WindowClose::Show`] for the first [`TabUnsaved::Unsaved`], else
+/// [`WindowClose::CloseAll`].
+///
+/// `tabs` is pulled lazily and not past the first unsaved tab, so no tab after it is
+/// asked and a wedged one there costs no RPC timeout.
+#[must_use]
+pub fn window_close(tabs: impl IntoIterator<Item = TabUnsaved>) -> WindowClose {
+    tabs.into_iter()
+        .position(|tab| tab == TabUnsaved::Unsaved)
+        .map_or(WindowClose::CloseAll, WindowClose::Show)
+}
+
+/// Quit's decision over every window's tabs, the windows in the order given (frontmost
+/// first) and each window's tabs in page order: [`Quit::Show`] for the first window
+/// whose [`window_close`] shows a tab, else [`Quit::QuitAll`].
+///
+/// Pulls no window after the one shown.
+#[must_use]
+pub fn quit<W>(windows: W) -> Quit
+where
+    W: IntoIterator,
+    W::Item: IntoIterator<Item = TabUnsaved>,
+{
+    windows
+        .into_iter()
+        .enumerate()
+        .find_map(|(window, tabs)| match window_close(tabs) {
+            WindowClose::Show(tab) => Some(Quit::Show { window, tab }),
+            WindowClose::CloseAll => None,
+        })
+        .unwrap_or(Quit::QuitAll)
 }
 
 /// The tab whose Neovim holds the UI focus: the `selected` tab while the window

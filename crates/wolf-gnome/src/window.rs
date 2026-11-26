@@ -460,6 +460,19 @@ impl WindowHandle {
         self.inner.tabs.selected()
     }
 
+    /// This window's tabs in the bar's page order ([`TabsHandle::in_page_order`]).
+    #[must_use]
+    pub fn tabs_in_page_order(&self) -> Vec<TabHandle> {
+        self.inner.tabs.in_page_order()
+    }
+
+    /// Shows a refused Quit's `tab` ([`TabsHandle::show_unsaved`]) and presents this
+    /// window, as best-effort as [`WindowHandle::present`].
+    pub fn show_unsaved(&self, tab: &TabHandle) {
+        self.inner.tabs.show_unsaved(tab);
+        self.present();
+    }
+
     /// Open Folder's focus, and a request's activation: selects `tab` and raises this window
     /// ([`WindowHandle::raise`]). Answers the tab, `None` when no tab of this window is `tab`.
     pub fn focus_tab(&self, tab: TabId) -> Option<TabHandle> {
@@ -1161,14 +1174,19 @@ struct CloseParts<'a> {
     id: WindowId,
 }
 
-/// Installs the close handler: tell the coordinator, then shut every tab's core
-/// down cleanly ([`TabsHandle::shutdown_all`]).
+/// Installs the close handler: ask every tab for unsaved changes, tell the
+/// coordinator, then shut every tab's core down cleanly ([`TabsHandle::shutdown_all`]).
 ///
-/// **The `coordinator.on_window_closing(id)` call is the FIRST statement in the
-/// handler, and that ordering is load-bearing.** It must run while the cores and
+/// The check comes first ([`TabsHandle::unsaved_tab`]). When a tab holds unsaved
+/// changes, it is shown and the close is refused before anything is committed or
+/// taken; it is skipped while the coordinator quits, since [`Coordinator::quit`] has
+/// already asked every window. It only borrows each tab's core.
+///
+/// **The `coordinator.on_window_closing(id)` call is the first thing after that
+/// check, and that ordering is load-bearing.** It must run while the cores and
 /// the panes are still alive: a subtree gathered after a core is taken out sees no
 /// core, `state_seam::may_snapshot` refuses it, and the session is silently not
-/// saved. Moving it below any of the three statements that follow
+/// saved. Moving it below any of the statements that follow
 /// would leave the relaunch smokes
 /// (`pane_layout_survives_relaunch_under_cage`,
 /// `single_pane_file_survives_relaunch_under_cage`) with an empty saved window state.
@@ -1199,9 +1217,17 @@ fn wire_close(parts: CloseParts<'_>) {
     let weak = parts.coordinator;
     let id = parts.id;
     parts.window.connect_close_request(move |_window| {
-        // First, while cores and panes live: synchronous gather, commit and flush, releasing every core
+        let coordinator = coordinator::upgrade(&weak);
+        // A quit has already asked every window's tabs before it latched.
+        if !coordinator.as_ref().is_some_and(Coordinator::is_quitting) {
+            if let Some(tab) = tabs.unsaved_tab() {
+                tabs.show_unsaved(&tab);
+                return glib::Propagation::Stop;
+            }
+        }
+        // Next, while cores and panes live: synchronous gather, commit and flush, releasing every core
         // borrow so the takes in `shutdown_all` below cannot panic.
-        if let Some(coordinator) = coordinator::upgrade(&weak) {
+        if let Some(coordinator) = coordinator {
             coordinator.on_window_closing(id);
         }
         // Close these first so background work drops before the core shuts down: `FileSearch`es cancel,

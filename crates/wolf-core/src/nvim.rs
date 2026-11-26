@@ -563,12 +563,43 @@ impl NvimProcess {
     pub fn close_tab(
         &self,
     ) -> impl std::future::Future<Output = Result<bool, NvimError>> + Send + 'static {
+        self.bool_helper("wolf_close_tab")
+    }
+
+    /// Runs Close Window's and Quit's silent ask, the `_G.wolf_has_unsaved` helper
+    /// (defined in `runtime/nvim/init.lua`) — see
+    /// [`crate::api::WolfCore::request_unsaved`]. Yields whether the tab holds a modified
+    /// buffer, echoing nothing. A non-boolean result is an [`NvimError::Rpc`].
+    pub fn has_unsaved(
+        &self,
+    ) -> impl std::future::Future<Output = Result<bool, NvimError>> + Send + 'static {
+        self.bool_helper("wolf_has_unsaved")
+    }
+
+    /// Runs the `_G.wolf_refuse_unsaved` helper (defined in `runtime/nvim/init.lua`) —
+    /// see [`crate::api::WolfCore::show_unsaved`]. Yields `true` once it has echoed E37
+    /// or E162, and `false` when nothing is unsaved. A non-boolean result is an
+    /// [`NvimError::Rpc`].
+    pub fn refuse_unsaved(
+        &self,
+    ) -> impl std::future::Future<Output = Result<bool, NvimError>> + Send + 'static {
+        self.bool_helper("wolf_refuse_unsaved")
+    }
+
+    /// Runs `return <helper>()` over `nvim_exec_lua` and reads its boolean answer.
+    fn bool_helper(
+        &self,
+        helper: &'static str,
+    ) -> impl std::future::Future<Output = Result<bool, NvimError>> + Send + 'static {
         let nvim = self.nvim.clone();
         async move {
             let value = nvim
                 .call(
                     "nvim_exec_lua",
-                    vec![Value::from("return wolf_close_tab()"), Value::Array(vec![])],
+                    vec![
+                        Value::from(format!("return {helper}()")),
+                        Value::Array(vec![]),
+                    ],
                 )
                 .await
                 .map_err(|e| NvimError::Rpc(e.to_string()))?
@@ -576,7 +607,7 @@ impl NvimProcess {
 
             value
                 .as_bool()
-                .ok_or_else(|| NvimError::Rpc(format!("wolf_close_tab returned {value}")))
+                .ok_or_else(|| NvimError::Rpc(format!("{helper} returned {value}")))
         }
     }
 

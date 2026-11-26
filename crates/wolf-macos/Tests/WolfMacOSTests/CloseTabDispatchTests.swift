@@ -1,4 +1,4 @@
-// Checks that Close Tab asks its window first and that Close Window closes without asking.
+// Checks that Close Tab asks its window first and that Close Window closes without performClose.
 
 import AppKit
 import WolfKeyMap
@@ -47,8 +47,9 @@ private final class RecordingWindow: NSWindow {
 
 /// `CommandDispatcher.dispatch` for `.closeTab` and `.closeWindow`. Close Tab goes through
 /// `performClose(_:)`, so `windowShouldClose(_:)` asks the tab's Neovim, or lets a drained
-/// `close_tab` through; Close Window calls `close()`, which no `windowShouldClose` refuses.
-/// It needs no core and no screen.
+/// `close_tab` through. Close Window hands the window to `AppDelegate.closeWindow(_:)`, which
+/// asks the tabs' Neovims itself and then closes the tab group with `close()`, which no
+/// `windowShouldClose` refuses. It needs no core and no screen.
 @MainActor
 final class CloseTabDispatchTests: XCTestCase {
   /// D1a and D1b.
@@ -66,17 +67,23 @@ final class CloseTabDispatchTests: XCTestCase {
         + " the arm does nothing; more than one call means it asks twice")
   }
 
-  /// D2a.
+  /// CW18. A bare `AppDelegate` owns no live controller, so no tab is asked and every tab
+  /// counts as clean: Close Window must still close the window. Premise: a window never shown
+  /// has a `tabGroup` that lists it, or none, so its group is the window alone either way.
   func testCloseWindowClosesWithoutAsking() {
     let window = RecordingWindow.make()
+    let coordinator = AppDelegate()
     XCTAssertEqual(window.calls, [], "premise: a built window must have recorded no call")
 
     CommandDispatcher.dispatch(
-      .closeWindow, window: window, coordinator: nil, originatingCwd: "", controller: nil)
+      .closeWindow, window: window, coordinator: coordinator, originatingCwd: "",
+      controller: nil)
 
     XCTAssertEqual(
       window.calls, [.close],
-      ".closeWindow must close its window once, without asking: [performClose] means"
-        + " windowShouldClose would refuse it on a modified tab; [] means the arm does nothing")
+      ".closeWindow must close its window once, without performClose: [performClose] means"
+        + " windowShouldClose would ask again after Close Window's own check; [] means the arm"
+        + " or AppDelegate.closeWindow(_:) closed nothing for a window no live controller owns,"
+        + " so an unasked tab counts as unsaved; two calls mean the group was closed twice")
   }
 }

@@ -1011,20 +1011,67 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
 
   // MARK: - NSWindowDelegate
 
-  /// The should-close path of the tab's close button, the red close button and Close Tab,
-  /// decided by `CloseTabSeam`. An unconfirmed close of a live tab answers no and asks the
-  /// tab's Neovim, after raising the tab so its refusal shows; its drained `close_tab` then
-  /// closes the window. A drained `close_tab` or a confirmed termination closes at once.
+  /// The should-close path of the tab's close button, the red close button and Close Tab. A
+  /// drained `close_tab` or a confirmed termination closes at once. A window of a tab group with
+  /// several windows answers no and files the request with the coordinator's `CloseScopeSeam`,
+  /// which tells the red button, sent to every window of the group, from one tab's close. A
+  /// one-tab window takes Close Tab's check here, decided by `CloseTabSeam`.
   func windowShouldClose(_ sender: NSWindow) -> Bool {
+    if closeConfirmed || coordinator?.isTerminating == true {
+      return true
+    }
+    let group = sender.tabGroup?.windows ?? [sender]
+    if group.count > 1, let coordinator {
+      coordinator.requestCloseScope(sender, group: group)
+      return false
+    }
+    return closeTabCheck()
+  }
+
+  /// Close Tab's check through `CloseTabSeam`: an unconfirmed close of a live tab answers no
+  /// and asks the tab's Neovim, after raising the tab so its refusal shows; its drained
+  /// `close_tab` then closes the window.
+  private func closeTabCheck() -> Bool {
     let handle = self.handle
-    let liveness = handle.map { NvimLiveness(rawValue: $0.liveness()) ?? .alive } ?? .dead
     return CloseTabSeam.shouldClose(
-      confirmed: closeConfirmed || coordinator?.isTerminating == true, liveness: liveness,
+      confirmed: closeConfirmed || coordinator?.isTerminating == true, liveness: liveness(),
       ask: {
         raise()
         guard let handle else { return .noAnswer }
         return CloseTabAnswer(rawValue: handle.request_close_tab()) ?? .noAnswer
       })
+  }
+
+  /// `CloseScopeSeam`'s `.tab` decision, one tab's own close in a group of several: Close Tab's
+  /// check, and the window closes, confirmed, when it lets the close through.
+  func closeTabChecked() {
+    guard !isTornDown, let window, closeTabCheck() else { return }
+    closeConfirmed = true
+    window.close()
+  }
+
+  /// This tab's answer to Close Window's and Quit's silent ask (`WindowCloseSeam.tabUnsaved`).
+  /// A gone handle or an unknown discriminant is `.noAnswer`.
+  func unsavedAnswer() -> TabUnsaved {
+    let handle = self.handle
+    return WindowCloseSeam.tabUnsaved(
+      liveness: liveness(),
+      ask: {
+        guard let handle else { return .noAnswer }
+        return UnsavedAnswer(rawValue: handle.request_unsaved()) ?? .noAnswer
+      })
+  }
+
+  /// Shows a refused Close Window's or Quit's tab: raises it, which selects it and activates
+  /// the app, and only then has its Neovim echo E37 or E162, so the message shows in this tab.
+  func showUnsaved() {
+    raise()
+    _ = handle?.show_unsaved()
+  }
+
+  /// The tab's Neovim liveness, `.dead` once the handle is gone.
+  private func liveness() -> NvimLiveness {
+    handle.map { NvimLiveness(rawValue: $0.liveness()) ?? .alive } ?? .dead
   }
 
   func windowWillClose(_ notification: Notification) {

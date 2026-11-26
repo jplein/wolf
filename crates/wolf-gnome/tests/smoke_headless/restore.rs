@@ -1230,9 +1230,10 @@ pub(crate) const TWOWIN_NEW_WINDOW_QUERY: &str = "new window";
 /// The first line is the smoke's no-inheritance evidence: a window opened by New
 /// Window starts at `$HOME` with no project and must not inherit the invoking
 /// window's directory. The second is what keeps that evidence attributable — window
-/// A has [`TWOWIN_A_ZOOMED_FILE`] current and a new window has an unnamed buffer
-/// whatever directory it was given, so a readback naming one of A's files says the
-/// keystrokes reached the WRONG window and gets an exit code of its own.
+/// A has [`TWOWIN_A_ZOOMED_FILE`] current and a new window's buffer is `Untitled.md`,
+/// none of A's files, whatever directory it was given, so a readback naming one of
+/// A's files says the keystrokes reached the WRONG window and gets an exit code of
+/// its own.
 pub(crate) const TWOWIN_READBACK_B_NAME: &str = "wtwo_bcwd.txt";
 
 /// Name of the file the FOCUSED restored window's Neovim writes after the
@@ -1441,8 +1442,8 @@ sleep "$RESTORE_SETTLE"
 # It reads bufname('%') as well as getcwd(), and that second value is not
 # decoration: it is what separates "the new window inherited a project" from "these
 # keystrokes never reached the new window at all". Window A has its zoomed file
-# current; a window opened by New Window has an unnamed buffer whatever cwd it was
-# given, whatever its ordinal. So a readback naming one of A's files can only have
+# current; a window opened by New Window has Untitled.md, none of A's files, whatever cwd
+# it was given, whatever its ordinal. So a readback naming one of A's files can only have
 # come from window A, and it gets its own exit code rather than being reported as
 # an inheritance that did not happen.
 rm -f "$TWOWIN_B_CWD"

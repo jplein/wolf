@@ -99,7 +99,9 @@ pub mod tab_id;
 pub mod terminal;
 pub mod tree;
 
-pub use api::{CloseTabAnswer, CoreConfig, CoreError, SnapshotReadGuard, WindowCursor, WolfCore};
+pub use api::{
+    CloseTabAnswer, CoreConfig, CoreError, SnapshotReadGuard, UnsavedAnswer, WindowCursor, WolfCore,
+};
 pub use app_state_store::{AppStateStore, PROJECT_STATE_LIMIT};
 pub use browser_preview::BrowserPreview;
 pub use buffer_picker::{rank_buffers, BufInfo, BufferRow};

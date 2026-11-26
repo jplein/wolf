@@ -9,6 +9,8 @@
 //!   * opaque `FfiCommand` with a `kind() -> u8` accessor
 //!   * `wolf_ffi_command_kind(id: String) -> u8`, the bridge's lookup of an id's kind
 //!   * `WolfCoreHandle::request_close_tab() -> u8`, Close Tab's check
+//!   * `WolfCoreHandle::request_unsaved() -> u8` and `show_unsaved() -> bool`, the silent ask
+//!     and the echo of Close Window's and Quit's check
 //!
 //! The `//crates/wolf-ffi:commands` `rust_test` target runs this file under Bazel.
 //!
@@ -22,7 +24,9 @@
 //!
 //! `WolfCoreHandle::request_close_tab() -> u8` answers with `mod close_tab_answer`'s
 //! discriminants: CLOSING on an unmodified tab, REFUSED on a modified one, and
-//! NO_ANSWER once the core is gone.
+//! NO_ANSWER once the core is gone. `request_unsaved() -> u8` answers with `mod
+//! unsaved_answer`'s: CLEAN, UNSAVED, and NO_ANSWER once the core is gone, when
+//! `show_unsaved()` answers `false`.
 //!
 //! Typing every command is safe: each Ex face `rpcnotify`s its id, `close_tab`'s once
 //! its check passes (`_G.wolf_setup_commands` in `runtime/nvim/init.lua`), core only
@@ -262,6 +266,94 @@ fn request_close_tab_crosses_the_bridge() {
         answer, 0,
         "a shut-down core must answer 0 (NO_ANSWER), so the front-end closes the tab unchecked; \
          2 or 1 means the bridge invents an answer for a gone core"
+    );
+    drop(tmp);
+}
+
+/// The buffer text the unsaved-ask bridge test writes, built in Neovim from two halves as
+/// [`EDIT_MARKER`] is.
+const UNSAVED_MARKER: &str = "wolfunsavededit";
+
+/// CW7. `request_unsaved()` crosses the bridge as `mod unsaved_answer`'s discriminants: `2`
+/// (`CLEAN`) on an unmodified tab, `1` (`UNSAVED`) once the buffer is modified, and `0`
+/// (`NO_ANSWER`) once the core is gone. `show_unsaved()` answers `false`, `true`, then `false`
+/// for the same three. The values are literal here, because the Swift `UnsavedAnswer` mirrors
+/// them by value.
+#[test]
+fn request_unsaved_and_show_unsaved_cross_the_bridge() {
+    let Some(nvim_bin) = common::nvim_bin_or_skip() else {
+        return;
+    };
+    std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
+
+    let init_lua = common::init_lua_path();
+    let tmp = tempfile::tempdir().expect("failed to create temp cwd directory");
+    let handle = wolf_ffi_start(
+        init_lua.to_string_lossy().into_owned(),
+        tmp.path().to_string_lossy().into_owned(),
+        common::DEFAULT_COLS,
+        common::DEFAULT_ROWS,
+    )
+    .expect("wolf_ffi_start should return a handle (is WOLF_NVIM_BIN a valid nvim?)");
+
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    while handle.read_frame().cols() == 0 && Instant::now() < deadline {
+        sleep(POLL_INTERVAL);
+    }
+    assert!(
+        handle.read_frame().cols() > 0,
+        "core should attach and report a non-empty active frame within {FLUSH_TIMEOUT:?}"
+    );
+
+    let answer = handle.request_unsaved();
+    assert_eq!(
+        answer, 2,
+        "an unmodified tab must answer 2 (CLEAN); 1 means UNSAVED and CLEAN trade values or the \
+         ask counted an unmodified buffer, and 0 that the request failed"
+    );
+    assert!(
+        !handle.show_unsaved(),
+        "show_unsaved() on an unmodified tab must answer false; true means the bridge or core \
+         answers true whatever Neovim found"
+    );
+
+    send_ex_command(&handle, ":call setline(1, 'wolfunsaved' . 'edit')");
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    let mut shown = frame_text(&handle);
+    while !shown.contains(UNSAVED_MARKER) && Instant::now() < deadline {
+        sleep(POLL_INTERVAL);
+        shown = frame_text(&handle);
+    }
+    assert!(
+        shown.contains(UNSAVED_MARKER),
+        "premise: the typed setline must show {UNSAVED_MARKER:?} in the frame within \
+         {FLUSH_TIMEOUT:?}, so the buffer is modified before the request; the frame reads \
+         {shown:?}"
+    );
+
+    let answer = handle.request_unsaved();
+    assert_eq!(
+        answer, 1,
+        "a modified buffer must answer 1 (UNSAVED); 2 means UNSAVED and CLEAN trade values or \
+         the ask was skipped, and 0 that the request failed"
+    );
+    assert!(
+        handle.show_unsaved(),
+        "show_unsaved() on a modified buffer must answer true; false means it found nothing \
+         unsaved or its request failed"
+    );
+
+    handle.shutdown();
+    let answer = handle.request_unsaved();
+    assert_eq!(
+        answer, 0,
+        "a shut-down core must answer 0 (NO_ANSWER), so the front-end counts the tab clean; 2 or \
+         1 means the bridge invents an answer for a gone core"
+    );
+    assert!(
+        !handle.show_unsaved(),
+        "show_unsaved() on a shut-down core must answer false; true means the bridge claims an \
+         echo that no Neovim made"
     );
     drop(tmp);
 }

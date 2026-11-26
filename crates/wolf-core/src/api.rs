@@ -134,6 +134,19 @@ pub enum CloseTabAnswer {
     Closing,
 }
 
+/// What the tab's Neovim answers [`WolfCore::request_unsaved`], Close Window's and
+/// Quit's silent ask.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnsavedAnswer {
+    /// The request failed, timed out or got no boolean back. The front-ends count the tab
+    /// as clean, since a wedged tab must never keep its window or the app open.
+    NoAnswer,
+    /// The tab holds a modified buffer, shown or hidden.
+    Unsaved,
+    /// Nothing is unsaved.
+    Clean,
+}
+
 /// The live core: tokio runtime + captive Neovim + shared snapshot.
 pub struct WolfCore {
     runtime: Runtime,
@@ -814,6 +827,46 @@ impl WolfCore {
                 CloseTabAnswer::NoAnswer
             }
         }
+    }
+
+    /// Asks the tab's Neovim whether it holds a modified buffer, through the silent
+    /// `wolf_has_unsaved` helper (see [`crate::nvim::NvimProcess::has_unsaved`]).
+    ///
+    /// Close Window and Quit ask every tab this way and then show one, through
+    /// [`show_unsaved`](Self::show_unsaved), once it is selected: an echo here would show in
+    /// every unsaved tab, background ones included. Blocks through
+    /// [`block_on_rpc`](Self::block_on_rpc); an error, a timeout or a non-boolean is
+    /// [`UnsavedAnswer::NoAnswer`], logged.
+    #[must_use]
+    pub fn request_unsaved(&self) -> UnsavedAnswer {
+        let asked = {
+            let nvim = self.nvim.borrow();
+            self.block_on_rpc("has_unsaved", nvim.has_unsaved())
+        };
+        match asked {
+            Ok(true) => UnsavedAnswer::Unsaved,
+            Ok(false) => UnsavedAnswer::Clean,
+            Err(e) => {
+                tracing::warn!("request_unsaved failed: {e}");
+                UnsavedAnswer::NoAnswer
+            }
+        }
+    }
+
+    /// Echoes E37 or E162 for the tab's first modified buffer, through the
+    /// `wolf_refuse_unsaved` helper (see [`crate::nvim::NvimProcess::refuse_unsaved`]).
+    ///
+    /// `true` when it echoed; `false` when nothing is unsaved, or on an error, logged. It
+    /// notifies nothing and ends no `wolf --wait`.
+    pub fn show_unsaved(&self) -> bool {
+        let shown = {
+            let nvim = self.nvim.borrow();
+            self.block_on_rpc("refuse_unsaved", nvim.refuse_unsaved())
+        };
+        shown.unwrap_or_else(|e| {
+            tracing::warn!("show_unsaved failed: {e}");
+            false
+        })
     }
 
     /// Navigates from the active PREVIEW pane back to its source file in place —

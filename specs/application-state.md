@@ -1,6 +1,6 @@
 # Application state
 
-What Wolf remembers between launches, where it keeps it, and how it decides what to save and what to restore. This spec owns the state database, the state model, the save and restore rules, the rule that every tab runs its own Neovim, and how a new window is sized and placed. The core↔front-end contract these rules travel over is in [architecture.md](architecture.md).
+What Wolf remembers between launches, where it keeps it, and how it decides what to save and what to restore. This spec owns the state database, the state model, the save and restore rules, the rule that every tab runs its own Neovim, how a new window is sized and placed, and what closing a window and quitting do when a tab has unsaved changes. The core↔front-end contract these rules travel over is in [architecture.md](architecture.md).
 
 ## 1. Storage
 
@@ -133,7 +133,7 @@ The window state is written whenever its tree changes, through a writer that thr
 
 ### Cursor and scroll capture
 
-Cursor, `top_line` and preview `scroll` change constantly, so they are captured at fixed moments rather than on every change: when focus moves to another pane, when a tab is switched away from, when a window closes, and at quit. A write carries the most recently captured values. At quit, every tab is captured before any Neovim exits, then the final write happens, then the Neovims shut down. A crash loses the movement since the last capture.
+Cursor, `top_line` and preview `scroll` change constantly, so they are captured at fixed moments rather than on every change: when focus moves to another pane, when a tab is switched away from, when a window closes, and at quit. A write carries the most recently captured values. At quit, once its check passes (§9), every tab is captured before any Neovim exits, then the final write happens, then the Neovims shut down. A crash loses the movement since the last capture.
 
 ### One transaction per write
 
@@ -193,3 +193,11 @@ Two tabs can edit the same file, and the captive `runtime/nvim/init.lua` makes t
 - `autoread` is on, and each tab's Neovim runs `:checktime` when the tab gains focus, the app becoming active included, so a file one tab saves reloads in another that has no unsaved changes.
 
 Unsaved changes in both tabs remain an ordinary Neovim write conflict, which Neovim reports to whichever tab saves second.
+
+## 9. Closing a window and quitting
+
+Close Window and the window's own close button close every tab of the window, and the window with them. Quit closes every window, and on macOS a logout or shutdown asks Wolf to quit.
+
+Each first asks every tab it would close whether its Neovim holds a modified buffer, shown or hidden, as `:qa` checks. If one does, nothing closes: the first such tab is selected, its window is raised, and it shows Neovim's E37 or E162. Close Window takes the first in tab order, and Quit takes windows in the stacking order of §3, frontmost first, then tabs in tab order. A refused Quit also cancels a macOS logout or shutdown.
+
+A tab whose Neovim has crashed, is restarting or gives no answer within core's RPC timeout counts as having nothing unsaved. A wedged tab never keeps its window or the app open, and its swap files keep its edits recoverable ([architecture.md](architecture.md#8-the-captive-neovim-is-hermetic-pinned-and-markdown-only)).

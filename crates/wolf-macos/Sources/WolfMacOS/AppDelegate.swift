@@ -462,6 +462,74 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     true
   }
 
+  /// Quit's check, which a logout or shutdown also reaches: every tab of every window is asked,
+  /// windows frontmost first and tabs in tab order (`WindowCloseSeam.quit`). The first unsaved
+  /// tab is raised and shows E37 or E162, and the quit is cancelled. Otherwise it terminates,
+  /// and `applicationWillTerminate` commits the session.
+  func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    let groups = liveGroups()
+    let ordered = stacking.order(groups.map { $0.members.map(\.tabId) }).map { groups[$0] }
+    let answers = ordered.lazy.map { group in group.members.lazy.map { $0.unsavedAnswer() } }
+    switch WindowCloseSeam.quit(answers) {
+    case .show(let window, let tab):
+      ordered[window].members[tab].showUnsaved()
+      return .terminateCancel
+    case .quit:
+      return .terminateNow
+    }
+  }
+
+  /// Close Window: asks every tab of `window`'s tab group (`WindowCloseSeam.closeWindow`), and
+  /// shows the first unsaved one, closing nothing, or closes the whole group.
+  func closeWindow(_ window: NSWindow) {
+    closeGroup(Self.group(of: window))
+  }
+
+  /// Files `window`'s should-close request with `closeScopes`, `group` being its tab group.
+  func requestCloseScope(_ window: NSWindow, group: [NSWindow]) {
+    closeScopes.request(window, group: group)
+  }
+
+  /// Tells the red close button of a tab group, which AppKit sends to every window of the
+  /// group, from one tab's close, once `WindowCloseSeam.closeScopeSettle` has passed.
+  private lazy var closeScopes = CloseScopeSeam<NSWindow>(
+    schedule: { end in
+      DispatchQueue.main.asyncAfter(
+        deadline: .now() + WindowCloseSeam.closeScopeSettle, execute: end)
+    },
+    decide: { [weak self] decision in
+      guard let self else { return }
+      switch decision {
+      case .window(let group):
+        self.closeGroup(group)
+      case .tab(let window):
+        self.controllers.first { !$0.isTornDown && $0.owns(window) }?.closeTabChecked()
+      }
+    })
+
+  /// `window`'s tab group's windows in tab order, or `window` alone when the group lists it not.
+  private static func group(of window: NSWindow) -> [NSWindow] {
+    guard let windows = window.tabGroup?.windows, windows.contains(window) else {
+      return [window]
+    }
+    return windows
+  }
+
+  /// Close Window's check over `group`, then its close. Every window closes with `close()`,
+  /// which asks no `windowShouldClose`, in one loop, so `closeBurst` commits the tree read at
+  /// the first close: the last window keeps every tab, and one of several drops its tabs.
+  private func closeGroup(_ group: [NSWindow]) {
+    let members = group.compactMap { window in
+      controllers.first { !$0.isTornDown && $0.owns(window) }
+    }
+    switch WindowCloseSeam.closeWindow(members.lazy.map { $0.unsavedAnswer() }) {
+    case .show(let tab):
+      members[tab].showUnsaved()
+    case .closeAll:
+      for window in group { window.close() }
+    }
+  }
+
   func applicationWillTerminate(_ notification: Notification) {
     isTerminating = true
 
