@@ -25,7 +25,8 @@ public enum CommandKind: CaseIterable {
   case openFile
   /// Open a native dialog to change the working directory to a folder.
   case openFolder
-  /// Close the current split (the pane), not the buffer.
+  /// Close the current split (the pane), not the buffer; on the tab's last pane, close the
+  /// tab as `:q` does there.
   case closePane
   /// Open a new empty buffer in the current window.
   case newBuffer

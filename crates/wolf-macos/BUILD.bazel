@@ -307,6 +307,7 @@ swift_test(
 swift_test(
     name = "WolfMacOSTests",
     srcs = [
+        "Tests/WolfMacOSTests/ClosePaneMenuTests.swift",
         "Tests/WolfMacOSTests/CloseTabDispatchTests.swift",
         "Tests/WolfMacOSTests/CloseTabMenuTests.swift",
         "Tests/WolfMacOSTests/ExtrasRestoreTests.swift",

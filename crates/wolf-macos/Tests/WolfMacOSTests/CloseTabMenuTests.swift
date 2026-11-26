@@ -7,7 +7,7 @@ import XCTest
 @testable import WolfMacOS
 
 /// `AppMenu.install(target:)` over a bare `AppDelegate`, as `InstallCommandMenuTests` builds it:
-/// the File menu carries Close Tab between Close and Close Window, with no shortcut, and it
+/// the File menu carries Close Tab between Close Pane and Close Window, with no shortcut, and it
 /// dispatches `close_tab` through `handleCommandMenuItem(_:)`. No item is fired here; what the
 /// dispatch does is `CloseTabDispatchTests`'.
 @MainActor
@@ -31,9 +31,10 @@ final class CloseTabMenuTests: XCTestCase {
       return
     }
     XCTAssertTrue(
-      closeTab > 0 && titles[closeTab - 1] == "Close"
+      closeTab > 0 && titles[closeTab - 1] == "Close Pane"
         && titles.indices.contains(closeTab + 1) && titles[closeTab + 1] == "Close Window",
-      "Close Tab must sit directly between Close and Close Window; the File menu holds \(titles)")
+      "Close Tab must sit directly between Close Pane and Close Window; the File menu holds"
+        + " \(titles)")
 
     let item = fileMenu.items[closeTab]
     XCTAssertTrue(

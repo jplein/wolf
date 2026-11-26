@@ -180,7 +180,8 @@ mod command_kind {
     pub const OPEN_FILE: u8 = 6;
     /// Open a native dialog to change the working directory to a folder.
     pub const OPEN_FOLDER: u8 = 7;
-    /// Close the current split (the pane), not the buffer.
+    /// Close the current split (the pane), not the buffer; on the tab's last pane, close the
+    /// tab as `:q` does there.
     pub const CLOSE_PANE: u8 = 8;
     /// Open a new empty buffer in the current window.
     pub const NEW_BUFFER: u8 = 9;
@@ -711,8 +712,8 @@ mod ffi {
         // `:set background=dark|light` via `InputEvent::SetBackground`. The macOS front-end pushes
         // the resolved appearance at launch and live in `auto` mode. A no-op when the core is gone.
         fn set_background(&self, dark: bool);
-        // Closes the current split (the pane) via `InputEvent::ClosePane`, which refuses the
-        // tab's last pane.
+        // Close Pane via `InputEvent::ClosePane`: closes the current split, or on the tab's last
+        // pane closes the tab as `:q` does there.
         fn close_pane(&self);
         // Splits the active pane, stacked (`:split`) or side by side (`:vsplit`), through
         // `WolfCore::split_pane`; Neovim's current window decides the new pane's kind.
@@ -3553,8 +3554,9 @@ impl WolfCoreHandle {
         }
     }
 
-    /// Closes the current split (the pane) via [`InputEvent::ClosePane`], which refuses the
-    /// tab's last pane. A no-op once the core has been shut down.
+    /// Close Pane: closes the current split (the pane) via [`InputEvent::ClosePane`]. On the
+    /// tab's last pane, the drawer not counting, it takes `:q`'s path, which refuses unsaved
+    /// changes or notifies `close_tab`. A no-op once the core has been shut down.
     pub fn close_pane(&self) {
         if let Some(core) = self.core.borrow().as_ref() {
             core.send_input(InputEvent::ClosePane);

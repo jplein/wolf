@@ -1,23 +1,24 @@
 //! Integration test for `WolfCoreHandle::close_pane()`: the FFI method
-//! backing the macOS "Close" command, which runs `init.lua`'s `wolf_do_close` to
-//! drop the CURRENT split (NOT the buffer — that is `:bdelete`, exercised
+//! backing the macOS "Close Pane" command, which runs `init.lua`'s `wolf_close_pane`
+//! to drop the CURRENT split (NOT the buffer — that is `:bdelete`, exercised
 //! elsewhere).
 //!
 //! This drives the RUST half against a REAL, hermetic Neovim — NO mocks, per the
 //! project testing policy. It is the sibling of `panes.rs` (same staging /
 //! SKIP-when-unset machinery, reusing `tests/common/mod.rs`, and the same
 //! `windows()` live-grid polling pattern). The method is backed by
-//! `wolf_core::InputEvent::ClosePane` -> `wolf_do_close()` over `nvim_exec_lua`,
+//! `wolf_core::InputEvent::ClosePane` -> `wolf_close_pane()` over `nvim_exec_lua`,
 //! and the `//crates/wolf-ffi:close_pane` `rust_test` target runs this file under
 //! Bazel.
 //!
 //! ## Why the FFI method, NOT typed `:close`
 //!
-//! A typed `:close<CR>` reaches the same `wolf_do_close` through the captive
-//! `init.lua`'s command-line abbreviation, so typing it would prove nothing about
-//! the method. This test drives `handle.close_pane()` DIRECTLY (only the setup
-//! `:vsplit` is typed — that path emits a layout intent and is deterministic
-//! headless, exactly as in `panes.rs`).
+//! A typed `:close<CR>` reaches `wolf_do_close` through the captive `init.lua`'s
+//! command-line abbreviation, while the method reaches `wolf_close_pane`, so typing
+//! it would test another helper and prove nothing about the method. This test
+//! drives `handle.close_pane()` DIRECTLY (only the setup `:vsplit` is typed — that
+//! path emits a layout intent and is deterministic headless, exactly as in
+//! `panes.rs`).
 //!
 //! ## SKIP-when-unset policy
 //!
@@ -187,8 +188,8 @@ fn close_pane_drops_one_split() {
         "after :vsplit there should be exactly two live editor window grids (got {after_split})"
     );
 
-    // --- 4. close_pane() -> wolf_do_close() over RPC; poll back to one live grid.
-    // Call the method, not a typed `:close<CR>`, which reaches the same function by abbreviation.
+    // --- 4. close_pane() -> wolf_close_pane() over RPC; poll back to one live grid.
+    // Call the method, not a typed `:close<CR>`, whose abbreviation reaches wolf_do_close instead.
     handle.close_pane();
 
     let deadline = Instant::now() + FLUSH_TIMEOUT;

@@ -85,7 +85,7 @@ Splitting a terminal pane, with `<C-w>s` or `<C-w>v`, splits the placeholder win
 
 The front-end focuses a terminal pane like any other and sends `FocusWin` for its placeholder, which keeps Neovim's current window, `active_win` and every current-window command consistent.
 
-`<C-w>c` or `<C-w>q` in the pane, Close Pane, or `:close` from elsewhere closes the placeholder window, and the last window is refused as `wolf_do_close` refuses it. Core observes the close through `win_close`, and the buffer's wipe hangs up the session.
+`<C-w>c` or `<C-w>q` in the pane, or `:close` from elsewhere, closes the placeholder window, and the tab's last pane is refused as `wolf_do_close` refuses it. Close Pane closes the window the same way, except on the tab's last pane, where it closes the tab as `:q` does there ([command-lifecycle.md](command-lifecycle.md#5-invocation--drain)), and the tab's shutdown hangs up its sessions. Core observes the close through `win_close`, and the buffer's wipe hangs up the session.
 
 Terminal panes default to full width, and the existing full-width command toggles it. The front-end sizes the session from the pane's framed content area. A session shown in more than one pane is sized by the most recently focused of its panes, and the others paint it clipped or padded.
 

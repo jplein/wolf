@@ -76,7 +76,8 @@ declare_commands! {
         OpenFile,
         /// Open a native dialog to change the working directory to a folder.
         OpenFolder,
-        /// Close the current split (the pane), not the buffer.
+        /// Close the current split (the pane), not the buffer; on the tab's last pane, close
+        /// the tab as `:q` does there.
         ClosePane,
         /// Open a new empty buffer in the current window.
         NewBuffer,
@@ -258,7 +259,7 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
         command: Command::ClosePane,
         id: "close_pane",
         ex_command: "WolfClosePane",
-        title: "Close",
+        title: "Close Pane",
         menu: MenuGroup::File,
     },
     CommandSpec {

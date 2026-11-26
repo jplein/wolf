@@ -32,7 +32,9 @@ use common::{
     ch, key, poll_until, probe_values, settle_for, type_str, FlushWaiter, FLUSH_TIMEOUT,
     POLL_INTERVAL,
 };
-use wolf_core::{CloseTabAnswer, Command, Key, Liveness, MenuGroup, WolfCore, COMMAND_SPECS};
+use wolf_core::{
+    CloseTabAnswer, Command, InputEvent, Key, Liveness, MenuGroup, WolfCore, COMMAND_SPECS,
+};
 
 /// The outer/global grid id. Window content lives on grids `>= 2`; grid 1 is
 /// never a window grid in these scenarios.
@@ -1176,6 +1178,120 @@ fn close_tab_faces_check_before_they_notify() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
+/// Close Pane on a split closes that split as `<C-w>c` does and asks the front-end for nothing,
+/// since a pane that can close never takes the last pane's `:q` path.
+#[test]
+fn close_pane_closes_a_split_and_notifies_nothing() {
+    let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
+    wait_for_initial_window(&core, &waiter);
+
+    ex_command(&core, "vsplit");
+    assert_eq!(
+        probe(&core, &["winnr('$')"]),
+        ["2"],
+        "premise: a typed `:vsplit` must leave the tab two windows"
+    );
+    // Discard anything queued during setup so we observe only Close Pane's (non-)effect.
+    let _ = core.drain_commands();
+
+    core.send_input(InputEvent::ClosePane);
+    poll_until(
+        &waiter,
+        "Close Pane on one of two splits to leave one window; two means it closed nothing",
+        || probe(&core, &["winnr('$')"]).remove(0),
+        |count| count == "1",
+    );
+    settle_for(&waiter, SETTLE);
+    let drained = core.drain_commands();
+    assert!(
+        !drained.contains(&Command::CloseTab),
+        "Close Pane on a split must close only that split and notify nothing; got {drained:?}. \
+         CloseTab means the closable pane also asked the front-end to close the whole tab."
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// Close Pane on the tab's only, unmodified pane takes `:q`'s path there and notifies
+/// `close_tab`, rather than refusing the last pane as `<C-w>c` does.
+#[test]
+fn close_pane_on_the_last_pane_notifies_close_tab() {
+    let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
+    wait_for_initial_window(&core, &waiter);
+    assert!(
+        core.drain_commands().is_empty(),
+        "a freshly attached core must have NO queued commands before Close Pane"
+    );
+
+    core.send_input(InputEvent::ClosePane);
+    expect_close_tab(
+        &core,
+        "InputEvent::ClosePane on the sole, unmodified pane (a timeout also means it still runs \
+         wolf_do_close, which refuses the last pane silently)",
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// Close Pane on the tab's last pane, its buffer modified, is refused with E37 as `:q` is, and
+/// notifies nothing.
+#[test]
+fn close_pane_refuses_a_modified_current_buffer_with_e37() {
+    let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
+    wait_for_initial_window(&core, &waiter);
+
+    insert_text(&core, &waiter, "x");
+    // Discard anything queued during setup so we observe only Close Pane's (non-)effect.
+    let _ = core.drain_commands();
+
+    core.send_input(InputEvent::ClosePane);
+    let (toast, drained) = refused(&core, &waiter, "Close Pane on the last pane", E37);
+    assert!(
+        !toast.contains("E162"),
+        "a refusal for the current buffer must be E37 alone; the toast reads {toast:?}, so the \
+         current buffer was reported as another buffer"
+    );
+    assert!(
+        drained.is_empty(),
+        "Close Pane on a MODIFIED last pane must be refused and notify nothing; got {drained:?}. \
+         CloseTab means the close skipped the check, as a forced quit does."
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// Close Pane on the tab's last pane is refused with E162 while a buffer no window shows is
+/// modified: its check covers the whole tab's Neovim, as `:q`'s does.
+#[test]
+fn close_pane_refuses_a_hidden_modified_buffer_with_e162() {
+    let (core, waiter, file) = common::start_core_with_temp_md(DOC);
+    wait_for_initial_window(&core, &waiter);
+
+    let (_second, second_name) = hide_a_modified_second_file(&core, &waiter, file.path());
+    // Discard anything queued during setup so we observe only Close Pane's (non-)effect.
+    let _ = core.drain_commands();
+
+    core.send_input(InputEvent::ClosePane);
+    let (toast, drained) = refused(
+        &core,
+        &waiter,
+        "Close Pane on the last pane",
+        &e162(&second_name),
+    );
+    assert!(
+        !toast.contains("E37"),
+        "the current buffer is unmodified, so the refusal must be E162 alone; the toast reads \
+         {toast:?}"
+    );
+    assert!(
+        drained.is_empty(),
+        "Close Pane beside a hidden modified buffer must be refused and notify nothing; got \
+         {drained:?}. CloseTab means the check looked at the current buffer only."
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
 /// A Neovim killed under the core cannot answer, so `request_close_tab()` answers `NoAnswer`,
 /// on which the front-end closes the tab unchecked.
 #[test]
@@ -1275,6 +1391,20 @@ fn close_tab_is_registered_in_the_file_group() {
         "Command::CloseTab's registry row must read (id, ex_command, title, menu) as shown; \
          another id means init.lua's wolf_command \"close_tab\" names no command, and another \
          title or menu shows the command misnamed or misplaced"
+    );
+}
+
+/// `close_pane`, the command Cmd-W and Ctrl+Shift+W run, is registered under File as "Close
+/// Pane", with its `:WolfClosePane` face.
+#[test]
+fn close_pane_is_registered_in_the_file_group() {
+    let spec = Command::ClosePane.spec();
+    assert_eq!(
+        (spec.id, spec.ex_command, spec.title, spec.menu),
+        ("close_pane", "WolfClosePane", "Close Pane", MenuGroup::File),
+        "Command::ClosePane's registry row must read (id, ex_command, title, menu) as shown; \
+         \"Close\" means the menus and the palette still show the old title, and another id or \
+         ex_command means the front-ends' and Neovim's names for it no longer match"
     );
 }
 

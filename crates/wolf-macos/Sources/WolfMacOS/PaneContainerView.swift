@@ -785,21 +785,12 @@ final class PaneContainerView: NSView {
     needsDisplay = true
   }
 
-  /// Whether Close Pane may close the active pane: true for the drawer, or when the tree has
-  /// more than one leaf. The drawer is outside `tree` but is never its tabpage's last window;
-  /// the tree's last leaf is refused even beside the drawer, as `wolf_do_close` refuses the
-  /// tab's last pane, so the menu item is disabled where the close would do nothing.
-  var canClosePane: Bool {
-    // Spelled out: with no drawer, `activePane == drawerPaneId` is `nil == nil`, true.
-    (drawerPaneId != nil && activePane == drawerPaneId) || tree.leaves().count > 1
-  }
-
-  /// Close Pane: closes the active pane through `close_pane`, or does nothing when
-  /// `canClosePane` is false. It focuses the active pane's window first, on core's ordered
-  /// input channel, so the close acts on the pane the gate read even while a focus move is
-  /// still in flight.
+  /// Close Pane: closes the active pane through `close_pane`. On the tree's last leaf, even
+  /// beside the drawer, core closes the tab as `:q` does there or refuses unsaved changes, so
+  /// the view drops no close itself. It focuses the active pane's window first, on core's
+  /// ordered input channel, so the close acts on the pane the view shows active even while a
+  /// focus move is still in flight.
   func closeActivePane() {
-    guard canClosePane else { return }
     let win = activeWin
     if win != 0 {
       handle.focus_win(win)

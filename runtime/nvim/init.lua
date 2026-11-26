@@ -955,6 +955,15 @@ function _G.wolf_setup_layout(chan)
 		vim.rpcnotify(chan, "wolf_command", "close_tab")
 		return true
 	end
+	-- Close Pane: a pane closable() lets go closes as <C-w>c closes it; the tab's last pane takes
+	-- :q's path, so it refuses unsaved changes or ends the waits with 0 and notifies close_tab.
+	_G.wolf_close_pane = function()
+		if closable(0) then
+			do_close()
+		else
+			do_quit({})
+		end
+	end
 	_G.wolf_do_focus = do_focus
 	_G.wolf_emit_drawer = emit_drawer
 

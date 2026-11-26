@@ -1077,14 +1077,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   ///    showing that panel) and ALWAYS return `true`, since choosing either
   ///    while the sidebar is hidden reveals it.
   ///
-  /// For tagged Wolf commands it then enables the Close (`.closePane`) command
-  /// only when the key window's `canClosePane` holds (its active pane is the
-  /// drawer, or a split that is not the tree's last leaf), disables the Copy
-  /// (`.copy`) command unless the key window has something to copy from
-  /// EITHER source — its active pane is a preview holding a non-empty
-  /// selection, or the window is in visual mode — and disables the Preview
-  /// (`.preview`) command unless the key window's active buffer is Markdown.
-  /// Every other item stays enabled.
+  /// For tagged Wolf commands it then disables the Copy (`.copy`) command
+  /// unless the key window has something to copy from EITHER source — its
+  /// active pane is a preview holding a non-empty selection, or the window is
+  /// in visual mode — and disables the Preview (`.preview`) command unless the
+  /// key window's active buffer is Markdown. Every other item stays enabled.
   func validateMenuItem(_ item: NSMenuItem) -> Bool {
     // History items carry no `command_kind` tag, so validate them before the guard. Keep the
     // `?? controllers.first` fallback: without it Back/Forward grey out when no Wolf window is key.
@@ -1117,8 +1114,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     let kind = CommandKind(ffi: UInt8(truncatingIfNeeded: item.tag))
     let keyController = controllers.first { $0.owns(effectiveKeyWindow) }
     switch kind {
-    case .closePane:
-      return keyController?.canClosePane ?? false
     case .copy:
       // Both Copy sources, via the decision `copy()` also uses; `isVisualMode` alone would grey the
       // item out over a live preview selection.

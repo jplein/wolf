@@ -223,7 +223,7 @@ enum AppMenu {
     menu.addItem(.separator())
     menu.addItem(
       commandItem(
-        title: "Close", tag: Tag.closePane, keyEquivalent: "w", target: target))
+        title: "Close Pane", tag: Tag.closePane, keyEquivalent: "w", target: target))
     menu.addItem(
       commandItem(
         title: "Close Tab", tag: Tag.closeTab, keyEquivalent: "", target: target))

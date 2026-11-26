@@ -58,8 +58,8 @@ final class PreviewKeyEquivalentTests: XCTestCase {
         + " resends it to the menu. The chain was \(sent.chain)")
   }
 
-  /// With the preview's web view first responder, ⌘W reaches Close and ⌘P reaches Command
-  /// Palette….
+  /// With the preview's web view first responder, ⌘W reaches Close Pane and ⌘P reaches
+  /// Command Palette….
   ///
   /// WebKit's web-process step is modelled, since no WebContent process runs under the gate:
   /// the page leaves the chord unhandled, so `noop:` goes up the web view's real responder
@@ -74,11 +74,10 @@ final class PreviewKeyEquivalentTests: XCTestCase {
     defer { menu.finish() }
     let container = fixture.container
     let window = fixture.window
-    guard container.canClosePane, container.paneCount == 2, container.activePaneIsPreview else {
+    guard container.paneCount == 2, container.activePaneIsPreview else {
       XCTFail(
-        "premise: two panes with the preview active, so Close applies: canClosePane"
-          + " \(container.canClosePane), \(container.paneCount) pane(s), preview active"
-          + " \(container.activePaneIsPreview)")
+        "premise: two panes with the preview active, so Close Pane closes the preview:"
+          + " \(container.paneCount) pane(s), preview active \(container.activePaneIsPreview)")
       return
     }
     let legs = [(RecordedMenu.cmdW, menu.close), (RecordedMenu.cmdP, menu.palette)]
@@ -181,8 +180,8 @@ private struct Chord {
 /// to a recorder, and the key events a keyboard sends for its chords.
 ///
 /// `AppMenu.install` builds the menu over a bare `AppDelegate`, which finds no window
-/// controller, so its validation would disable Close. The recorder enables everything instead.
-/// Validation is a separate lead, read through `canClosePane`.
+/// controller, so its validation would disable the items that read one. The recorder enables
+/// everything instead. Close Pane's validation is `ClosePaneMenuTests`'.
 @MainActor
 private final class RecordedMenu {
   static let cmdW = Chord(key: "w", modifiers: .command)
@@ -210,10 +209,10 @@ private final class RecordedMenu {
     }
     if let main = NSApp.mainMenu { collect(main) }
     let byTitle = { (title: String) in built.first { $0.title == title } }
-    guard let close = byTitle("Close"), let palette = byTitle("Command Palette…") else {
+    guard let close = byTitle("Close Pane"), let palette = byTitle("Command Palette…") else {
       XCTFail(
-        "premise: AppMenu.install must build Close and Command Palette… with key equivalents:"
-          + " built \(built.map(\.title))", file: file, line: line)
+        "premise: AppMenu.install must build Close Pane and Command Palette… with key"
+          + " equivalents: built \(built.map(\.title))", file: file, line: line)
       NSApp.mainMenu = nil
       return nil
     }

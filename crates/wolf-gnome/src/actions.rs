@@ -500,7 +500,7 @@ pub const MENU_SECTIONS: &[MenuSection] = &[
     MenuSection {
         items: &[
             MenuItemSpec {
-                label: "Close",
+                label: "Close Pane",
                 action: "win.close-pane",
             },
             MenuItemSpec {

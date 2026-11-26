@@ -65,8 +65,37 @@ const CT_CODES: &str = "Exit 180: the launch did not restore exactly two Neovims
      Exit 189: leg D: Close Tab on the last tab did not end the app within the wait, or the \
      app exited non-zero; the cage log says which.";
 
+/// Shell helpers that read a Neovim's state back through files, for [`CLOSE_TAB_BODY`] and
+/// `close_pane::CLOSE_PANE_BODY`. They call `nvim_ex` and `wait_file`, so they follow
+/// [`EXTRAS_HELPERS`].
+///
+/// Every messages readback starts with the line `msgs`, so an empty history still writes a file
+/// and is told apart from a command that never ran.
+pub(crate) const READBACK_HELPERS: &str = r#"
+# $1 is the readback, $2 its expected content and $3 the exit code when it differs or is missing.
+expect_read() {
+    wait_file "$1" || exit "$3"
+    _got=$(cat "$1")
+    if [ "$_got" != "$2" ]; then
+        echo "wolf-gnome smoke: $1 reads '$_got', not '$2'." >&2
+        exit "$3"
+    fi
+}
+
+# $1 is the messages readback and $2 the exit code when it holds no E37.
+expect_e37() {
+    nvim_ex "call writefile(['msgs'] + split(execute('messages'), '\n'), '$1')"
+    wait_file "$1" || exit "$2"
+    if ! grep -q 'E37' "$1"; then
+        echo "wolf-gnome smoke: $1 holds no E37:" >&2
+        cat "$1" >&2
+        exit "$2"
+    fi
+}
+"#;
+
 /// Body of [`close_tab_asks_the_tabs_neovim_under_cage`], appended to [`POINTER_PREAMBLE`],
-/// [`EXTRAS_HELPERS`] and `recovery::with_nvim_pid_helper`'s helper.
+/// [`EXTRAS_HELPERS`], [`READBACK_HELPERS`] and `recovery::with_nvim_pid_helper`'s helper.
 ///
 /// 1. Two restored Neovims, then the restore's and the bar's settles.
 /// 2. A click on tab 2's entry, `o` and Escape, and readback S2 from tab 2; a click on tab 1's
@@ -78,31 +107,7 @@ const CT_CODES: &str = "Exit 180: the launch did not restore exactly two Neovims
 /// 5. Leg C: `:w`, then Close Tab from the palette; one Neovim, a live app and readback C from
 ///    tab 1.
 /// 6. Leg D: Close Tab from the palette in tab 1, and the app's exit.
-///
-/// Every messages readback starts with the line `ctmsgs`, so an empty history still writes a
-/// file and is told apart from a command that never ran.
 const CLOSE_TAB_BODY: &str = r#"
-# $1 is the readback, $2 its expected content and $3 the exit code when it differs or is missing.
-expect_read() {
-    wait_file "$1" || exit "$3"
-    _got=$(cat "$1")
-    if [ "$_got" != "$2" ]; then
-        echo "wolf-gnome close-tab smoke: $1 reads '$_got', not '$2'." >&2
-        exit "$3"
-    fi
-}
-
-# $1 is the messages readback and $2 the exit code when it holds no E37.
-expect_e37() {
-    nvim_ex "call writefile(['ctmsgs'] + split(execute('messages'), '\n'), '$1')"
-    wait_file "$1" || exit "$2"
-    if ! grep -q 'E37' "$1"; then
-        echo "wolf-gnome close-tab smoke: $1 holds no E37:" >&2
-        cat "$1" >&2
-        exit "$2"
-    fi
-}
-
 close_tab_from_palette() {
     wtype -M ctrl -M shift -k p -m shift -m ctrl
     sleep "$SETTLE"
@@ -272,7 +277,9 @@ fn close_tab_asks_the_tabs_neovim_under_cage() {
     let (tab0_x, tab1_x, tab_y) = (two_tab_x(0), two_tab_x(1), tab_bar_y());
     let close_x = close_button_x();
 
-    let body = with_nvim_pid_helper(&format!("{EXTRAS_HELPERS}\n{CLOSE_TAB_BODY}"));
+    let body = with_nvim_pid_helper(&format!(
+        "{EXTRAS_HELPERS}\n{READBACK_HELPERS}\n{CLOSE_TAB_BODY}"
+    ));
     let status = pointer_command(&body, &cwd, &runtime_dir, &out_png)
         .env(
             "WOLF_CONFIG_DIR",

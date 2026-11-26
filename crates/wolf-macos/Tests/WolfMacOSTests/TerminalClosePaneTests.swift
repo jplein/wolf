@@ -1,4 +1,4 @@
-// Close Pane's gate and action on a terminal split, the drawer and the last editor pane.
+// Close Pane's action on a terminal split, the drawer, and the tab's last pane.
 
 import AppKit
 import WolfKeyMap
@@ -6,13 +6,16 @@ import XCTest
 
 @testable import WolfMacOS
 
-/// File > Close reaches `PaneContainerView.canClosePane` through `validateMenuItem` and
-/// `closeActivePane()` through `WolfWindowController.closePane()`. Neither the menu nor a key
-/// window renders here, so each test drives those two members over a real core and Neovim.
+/// File > Close Pane reaches `closeActivePane()` through `WolfWindowController.closePane()`.
+/// Neither the menu nor a key window renders here, so each test drives that member over a real
+/// core and Neovim. The item's validation is `ClosePaneMenuTests`'.
+///
+/// On the tab's last pane core asks the front-end to close the tab, a `close_tab` command. No
+/// fixture drains commands, since `onRenderWake()` drains intents only, so a test sees every
+/// command core queued.
 ///
 /// A failure prefixed `focus:` is Neovim's current window not being the pane's placeholder, a
-/// focus that never reached Neovim through `focus_win`; one prefixed `gate:` is Close disabled
-/// by `validateMenuItem`.
+/// focus that never reached Neovim through `focus_win`.
 @MainActor
 final class TerminalClosePaneTests: XCTestCase {
 
@@ -40,6 +43,18 @@ final class TerminalClosePaneTests: XCTestCase {
         + " \(fixture.terminalViews.map { ($0.session, $0.frame) }), active terminal"
         + " \(String(describing: container.activeTerminal))")
     return opened ? session : 0
+  }
+
+  /// Wakes the fixture until a drained command decodes to `.closeTab`; whether one did, and
+  /// every command kind drained, decoded or not.
+  private func drainCloseTab(_ fixture: TerminalViewFixture) -> (Bool, [String]) {
+    var drained: [String] = []
+    let asked = fixture.wake {
+      let kinds = fixture.handle.drain_commands().map { $0.kind() }
+      drained += kinds.map { CommandKind(ffi: $0).map { "\($0)" } ?? "raw \($0)" }
+      return kinds.contains { CommandKind(ffi: $0) == .closeTab }
+    }
+    return (asked, drained)
   }
 
   /// Close Pane on a focused terminal split closes its placeholder window, removes the pane
@@ -91,11 +106,6 @@ final class TerminalClosePaneTests: XCTestCase {
       "focus: with the terminal pane active in the view, Neovim's current window must be"
         + " its placeholder \(terminalWin), but it is \(handle.active_win()). The focus move"
         + " never sent focus_win, so :close would close another window")
-    XCTAssertTrue(
-      container.canClosePane,
-      "gate: with two leaves and the terminal pane active, Close must be enabled;"
-        + " canClosePane is false, so validateMenuItem disables File > Close and ⌘W falls"
-        + " through to the pty")
 
     container.closeActivePane()
     let closed = fixture.wake {
@@ -142,11 +152,6 @@ final class TerminalClosePaneTests: XCTestCase {
       "focus: with the drawer active in the view, Neovim's current window must be the"
         + " drawer's \(drawerWin), but it is \(handle.active_win()) (the editor is \(editorWin))."
         + " The drawer's focus never sent focus_win, so :close would close another window")
-    XCTAssertTrue(
-      container.canClosePane,
-      "gate: with the drawer focused, Close must be enabled although the tree holds"
-        + " \(container.paneCount) leaf; canClosePane is false, so validateMenuItem disables"
-        + " File > Close and ⌘W falls through to the drawer's pty")
 
     container.closeActivePane()
     let closed = fixture.wake {
@@ -182,10 +187,37 @@ final class TerminalClosePaneTests: XCTestCase {
         + " close ended the drawer's shell and the toggle started a new one")
   }
 
-  /// Close Pane is refused on a terminal pane that is the tree's only leaf.
-  func testCloseIsRefusedOnALoneTerminalPane() {
+  /// Close Pane on the tree's only editor leaf asks to close the tab, as `:q` does there, and
+  /// closes no window itself: the front-end's close of the tab does.
+  func testCloseOnTheOnlyEditorPaneAsksToCloseTheTab() {
     guard let fixture = TerminalViewFixture() else { return }
     defer { fixture.shutdown() }
+    let container = fixture.container
+    let editorWin = fixture.handle.active_win()
+    XCTAssertEqual(container.paneCount, 1, "premise: the fixture's tab must hold one pane")
+    _ = fixture.handle.drain_commands()
+
+    container.closeActivePane()
+    let (asked, drained) = drainCloseTab(fixture)
+    XCTAssertTrue(
+      asked,
+      "closeActivePane() on the only editor pane must reach core's close and drain close_tab;"
+        + " drained \(drained). Nothing means the view dropped the close of the last pane"
+        + " before it reached core, or core refused it as <C-w>c refuses the last window")
+    XCTAssertTrue(
+      windows(fixture).contains(editorWin),
+      "the editor window \(editorWin) must stay until the front-end closes the tab; Neovim"
+        + " reports \(windows(fixture))")
+    XCTAssertEqual(
+      container.paneCount, 1, "asking to close the tab must leave the tree's one editor leaf")
+  }
+
+  /// Close Pane on a terminal pane that is the tree's only leaf asks to close the tab, and
+  /// leaves its session to the tab's shutdown.
+  func testCloseOnALoneTerminalPaneAsksToCloseTheTab() {
+    guard let fixture = TerminalViewFixture() else { return }
+    defer { fixture.shutdown() }
+    let handle = fixture.handle
     let container = fixture.container
 
     let session = fixture.live.openTerminal("exec /bin/sh")
@@ -200,17 +232,25 @@ final class TerminalClosePaneTests: XCTestCase {
       "premise: the only pane must show session \(session), active: \(container.paneCount)"
         + " pane(s), active terminal \(String(describing: container.activeTerminal))")
     guard opened else { return }
+    _ = handle.drain_commands()
 
-    XCTAssertFalse(
-      container.canClosePane,
-      "a terminal pane that is the tree's last leaf must refuse Close, as wolf_do_close refuses"
-        + " the last window; canClosePane is true, so File > Close would be enabled on it")
+    container.closeActivePane()
+    let (asked, drained) = drainCloseTab(fixture)
+    XCTAssertTrue(
+      asked,
+      "closeActivePane() on a lone terminal pane must drain close_tab; drained \(drained)."
+        + " Nothing means the view dropped the close of the tree's last leaf, or core refused"
+        + " it as wolf_terminal_close refuses the last pane")
+    XCTAssertTrue(
+      Array(handle.live_terminals()).contains(session),
+      "asking to close the tab must leave session \(session) live until the tab shuts down:"
+        + " live \(Array(handle.live_terminals())). Gone means the pane closed as a split and"
+        + " hung it up")
   }
 
-  /// Close Pane is refused on the tree's last editor leaf while the drawer is open beside
-  /// it, as `wolf_do_close` refuses the tab's last pane, where the drawer does not count, so
-  /// a close made anyway keeps the editor.
-  func testCloseIsRefusedOnTheLastEditorPaneBesideTheDrawer() {
+  /// Close Pane on the tree's last editor leaf, with the drawer open beside it, asks to close
+  /// the tab, since the drawer is no pane of the tab, and closes neither window itself.
+  func testCloseOnTheLastEditorPaneBesideTheDrawerAsksToCloseTheTab() {
     guard let fixture = TerminalViewFixture() else { return }
     defer { fixture.shutdown() }
     let handle = fixture.handle
@@ -219,6 +259,7 @@ final class TerminalClosePaneTests: XCTestCase {
 
     let session = openDrawer(fixture)
     guard session != 0 else { return }
+    let drawerWin = fixture.window(showing: session)
     fixture.terminalChord("k", to: session)
     let up = fixture.wake { container.activeTerminal == nil && handle.active_win() == editorWin }
     XCTAssertTrue(
@@ -227,35 +268,22 @@ final class TerminalClosePaneTests: XCTestCase {
         + " \(handle.active_win()), active terminal"
         + " \(String(describing: container.activeTerminal))")
     guard up else { return }
+    _ = handle.drain_commands()
 
-    XCTAssertFalse(
-      container.canClosePane,
-      "the tree's last editor leaf must refuse Close while the drawer is open:"
-        + " wolf_do_close refuses the tab's last pane, the drawer not counting, so Close would"
-        + " do nothing; canClosePane is true, so File > Close would be enabled on it")
-
-    // The toggles queue behind the close: from the editor the first focuses the drawer, the
-    // second closes it. With the editor closed, neither can close the last window.
     container.closeActivePane()
-    handle.toggle_terminal()
-    handle.toggle_terminal()
-    let hidden = fixture.wake {
-      fixture.view(showing: session) == nil && fixture.window(showing: session) == 0
-    }
+    let (asked, drained) = drainCloseTab(fixture)
     XCTAssertTrue(
-      hidden,
-      "the two toggles after closeActivePane() must focus and then hide the drawer: window"
-        + " \(fixture.window(showing: session)) still shows session \(session), Neovim reports"
-        + " \(windows(fixture)). A drawer that stays means closeActivePane() closed the editor"
-        + " despite the refused gate, leaving the drawer as the last window, or the second"
-        + " toggle, made from the focused drawer, did not close it")
-    guard hidden else { return }
+      asked,
+      "closeActivePane() on the last editor leaf beside the drawer must drain close_tab;"
+        + " drained \(drained). Nothing means the view dropped the close, or core counted the"
+        + " drawer as a pane and closed the editor as a split")
     XCTAssertTrue(
-      windows(fixture).contains(editorWin),
-      "the editor window \(editorWin) must survive a refused Close; Neovim reports"
-        + " \(windows(fixture))")
+      windows(fixture).contains(editorWin) && windows(fixture).contains(drawerWin),
+      "the editor window \(editorWin) and the drawer's \(drawerWin) must stay until the"
+        + " front-end closes the tab; Neovim reports \(windows(fixture)). The editor gone means"
+        + " it was closed as a split beside the drawer")
     XCTAssertEqual(
-      container.paneCount, 1, "a refused Close must leave the tree's one editor leaf")
+      container.paneCount, 1, "asking to close the tab must leave the tree's one editor leaf")
   }
 
   /// While Neovim's current window lags the view's active pane, as during a focus move in
@@ -272,9 +300,9 @@ final class TerminalClosePaneTests: XCTestCase {
 
     // No wake between the two: the view's active pane stays the drawer, Neovim's is the editor.
     handle.focus_win(editorWin)
-    XCTAssertTrue(
-      container.canClosePane,
-      "premise: with the drawer still the view's active pane, Close must be enabled")
+    XCTAssertEqual(
+      container.activeTerminal, session,
+      "premise: with no wake since focus_win, the view's active pane must still be the drawer")
     container.closeActivePane()
 
     let closed = fixture.wake {

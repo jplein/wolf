@@ -345,7 +345,7 @@ mod tests {
             want: Want::Exact(UiAction::OpenFolderDialog),
         },
         Case {
-            desc: "8 ClosePane: the :q path — closes the focused pane",
+            desc: "8 ClosePane: closes the focused pane, or the tab on its last pane",
             command: Command::ClosePane,
             want: Want::Exact(UiAction::ClosePane),
         },

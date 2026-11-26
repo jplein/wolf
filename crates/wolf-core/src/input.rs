@@ -282,8 +282,10 @@ pub enum InputEvent {
         /// The nvim tabpage handle to close.
         handle: i64,
     },
-    /// Close the current split, i.e. the pane (delegated to the init.lua `wolf_do_close`
-    /// helper, which refuses the tab's last pane; the terminal drawer does not count).
+    /// Close Pane: close the current split, i.e. the pane (delegated to the init.lua
+    /// `wolf_close_pane` helper). The drawer, or a pane that is not the tab's last, closes as
+    /// `<C-w>c` closes it; the tab's last pane, the drawer not counting, takes `:q`'s path,
+    /// which refuses unsaved changes or notifies `close_tab`.
     ClosePane,
     /// Split the current window (delegated to the init.lua `wolf_split_pane` helper). The
     /// helper decides by the current window: a terminal placeholder asks core's terminal
@@ -907,13 +909,14 @@ async fn new_untitled(nvim: &mut impl Rpc) -> Result<(), Box<CallError>> {
     Ok(())
 }
 
-/// Closes the current window via the init.lua `wolf_do_close` helper, invoked over
-/// `nvim_exec_lua`, so Close Pane refuses what a typed `:close` refuses.
+/// Closes the current window via the init.lua `wolf_close_pane` helper, invoked over
+/// `nvim_exec_lua`. A pane that is not the tab's last, or the drawer, closes; the tab's last
+/// pane takes `:q`'s path, which refuses unsaved changes or notifies `close_tab`.
 async fn close_pane(nvim: &mut impl Rpc) -> Result<(), Box<CallError>> {
     let _ = nvim
         .request(
             "nvim_exec_lua",
-            vec![Value::from("wolf_do_close()"), Value::Array(vec![])],
+            vec![Value::from("wolf_close_pane()"), Value::Array(vec![])],
         )
         .await?;
     Ok(())

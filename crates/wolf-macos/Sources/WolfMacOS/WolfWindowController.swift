@@ -586,7 +586,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
   }
 
   /// Closes this window's active pane, a split or the drawer, through
-  /// `PaneContainerView.closeActivePane()`, which refuses what `canClosePane` refuses.
+  /// `PaneContainerView.closeActivePane()`.
   func closePane() {
     paneContainer?.closeActivePane()
   }
@@ -784,10 +784,6 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating,
   func owns(_ candidate: NSWindow?) -> Bool {
     window === candidate
   }
-
-  /// Whether Close Pane may close this window's active pane
-  /// (`PaneContainerView.canClosePane`). Read by the coordinator's menu validation.
-  var canClosePane: Bool { paneContainer?.canClosePane ?? false }
 
   /// The tab this view contributes to a state commit (`AppDelegate.snapshotNow`):
   /// its live state when `SessionSeam` can read all of it, otherwise the tab it last

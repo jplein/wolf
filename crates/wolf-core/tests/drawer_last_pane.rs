@@ -1,7 +1,7 @@
 //! Integration tests of the tab's last pane beside the terminal drawer: `:bd`, `:bd %`, `:bw`,
-//! the quit family, the close chords, `InputEvent::ClosePane` and core's terminal router, each
-//! run on the tab's only editor window while the drawer is open, and `:bd` with the drawer
-//! closed. A differential case checks that the buffer `:bd` shows beside the drawer is the one
+//! the quit family and `InputEvent::ClosePane`, which close the tab there, the close chords and
+//! `:close`, which are refused there, and core's terminal router, each run on the tab's only
+//! pane while the drawer is open, and `:bd` with the drawer closed. A differential case checks that the buffer `:bd` shows beside the drawer is the one
 //! Neovim's own `:bd` picks from the jumplist with the drawer closed. A real, hermetic Neovim
 //! holds the windows, and a real `/bin/sh` runs in the drawer's pty.
 //!
@@ -814,11 +814,14 @@ fn ctrl_w_q_beside_the_drawer_is_refused() {
     close_refused_beside_the_drawer("normal-mode `<C-w>q`", |core| nvim_chord(core, 'q'));
 }
 
-/// C18: `InputEvent::ClosePane` with the last pane current beside the drawer is refused.
+/// C18: `InputEvent::ClosePane` on the last pane beside the drawer closes the tab, as `:q` does.
 #[test]
-fn close_pane_on_the_last_pane_beside_the_drawer_is_refused() {
-    close_refused_beside_the_drawer("InputEvent::ClosePane", |core| {
-        core.send_input(InputEvent::ClosePane)
+fn close_pane_on_the_last_pane_beside_the_drawer_closes_the_tab() {
+    quit_beside_the_drawer(Quit {
+        name: "InputEvent::ClosePane",
+        modify: false,
+        writes: false,
+        send: |core| core.send_input(InputEvent::ClosePane),
     });
 }
 
@@ -913,6 +916,46 @@ fn ctrl_w_c_on_a_lone_terminal_pane_beside_the_drawer_is_refused() {
          must be refused: (the pane's session, live sessions). No session in the window, and \
          {session:?} gone from the live ones, means wolf_terminal_close counted the drawer and \
          closed the last pane, wiping its placeholder."
+    );
+    f.shutdown();
+}
+
+/// C29: `InputEvent::ClosePane` on a terminal pane that is the tab's only pane beside the
+/// drawer asks the front-end to close the tab, and leaves both sessions to the tab's shutdown.
+#[test]
+fn close_pane_on_a_lone_terminal_pane_beside_the_drawer_closes_the_tab() {
+    let f = Fixture::start();
+    let pane = f.current_win();
+    send_ex(&f.core, "terminal");
+    let session = poll_until(
+        &f.waiter,
+        "a typed `:terminal` to bind a session in the only window (premise)",
+        || common::win_terminal(&f.core, pane),
+        Option::is_some,
+    )
+    .expect("poll_until returned only once the window carried a session");
+    let (drawer, drawer_id) = f.open_drawer_beside(pane);
+    assert_ne!(
+        drawer_id, session,
+        "premise: the drawer must run a session of its own, not the pane's {session:?}"
+    );
+    let _ = f.core.drain_commands();
+
+    f.core.send_input(InputEvent::ClosePane);
+    let drained = close_tab_drains(&f.core, &f.waiter, FLUSH_TIMEOUT);
+    let mut live = f.core.live_terminals();
+    live.sort();
+    let mut want = vec![session, drawer_id];
+    want.sort();
+    assert_eq!(
+        (drained, common::win_terminal(&f.core, pane), live),
+        (true, Some(session), want),
+        "ClosePane in the terminal pane {pane}, the tab's only pane beside the drawer {drawer}, \
+         must drain Command::CloseTab and leave the pane and both sessions to the front-end's \
+         close of the tab: (CloseTab, the pane's session, live sessions). (false, None, without \
+         {session:?}) means the drawer was counted as a pane and the terminal pane closed as a \
+         split; (false, Some, both) means the close was refused, as wolf_terminal_close refuses \
+         the last pane."
     );
     f.shutdown();
 }

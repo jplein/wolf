@@ -1260,3 +1260,29 @@ fn close_tab_through_its_check_exits_1() {
          window or a deleted buffer.",
     );
 }
+
+/// W22: Close Pane on the tab's only window closes the buffer's last window, so it ends the wait
+/// with `0` before the front-end closes the tab, as `:q` there does.
+#[test]
+fn close_pane_on_the_last_pane_exits_0() {
+    let case = new_case();
+    let file = case.write("msgtwentytwo.md", "# twenty-two\n");
+    let (core, _waiter) = case.start_core();
+    let mut wolf = case.spawn_wait("msgtwentytwo.md");
+    case.open_waited(&core, &mut wolf);
+    let (shown, _, _) = case.current(&core);
+    assert_eq!(
+        shown,
+        file.display().to_string(),
+        "premise: msgtwentytwo.md must be current"
+    );
+
+    core.send_input(InputEvent::ClosePane);
+    shut_down_on_close_tab(core, "Close Pane");
+    wolf.assert_exits(
+        0,
+        "Close Pane on the tab's last pane, then the tab's shutdown",
+        "1 means the shutdown ended the wait first: Close Pane took Close Tab's route, which \
+         ends no wait, rather than the :q path, which ends each with 0 before close_tab.",
+    );
+}
