@@ -54,7 +54,7 @@ Rebinds Neovim's window chords and the `:split`/`:close`/`:quit` Ex-command fami
 - `{ action = "focus_dir", dir = "left"|"right"|"up"|"down", from }` — a pure intent. nvim does not move focus.
 - `{ action = "drawer_open", win }` — emitted by `wolf_toggle_terminal` through the exposed `_G.wolf_emit_drawer`.
 
-It also notifies **`wolf_active_win`** with `nvim_get_current_win()` on `WinEnter`, and **`wolf_command`** with `close_window` when a quit reaches the tab's last pane. The tab's last pane is its tabpage's last window but the drawer, which no pane tree holds. Closing a pane emits no intent: the shell observes the `win_close` redraw event. Exposes `_G.wolf_do_split`, `wolf_do_close`, `wolf_do_quit`, `wolf_do_focus`, and `wolf_emit_drawer`, which the `cnoreabbrev` overrides invoke from the command line.
+It also notifies **`wolf_active_win`** with `nvim_get_current_win()` on `WinEnter`, and **`wolf_command`** with `close_tab` when a quit closes the tab ([which quits](#decisions)). The tab's last pane is its tabpage's last window but the drawer, which no pane tree holds. Closing a pane emits no intent: the shell observes the `win_close` redraw event. Exposes `_G.wolf_do_split`, `wolf_do_close`, `wolf_do_quit`, `wolf_do_focus`, and `wolf_emit_drawer`, which the `cnoreabbrev` overrides invoke from the command line.
 
 `_G.wolf_split_pane(orient)` is the split commands' entry. In a terminal placeholder it notifies **`wolf_terminal_split`** with the session id and `orient`, because core starts the new session; anywhere else it is `wolf_do_split`.
 
@@ -167,6 +167,14 @@ Resolves the stable handle to its current tabpage number and runs `<n>tabclose` 
 #### `wolf_tab_cwd(handle)`
 
 Returns the tab-local working directory of the tabpage named by its stable handle, or `""` for a stale handle. No core caller: `cwd_for_tabpage` reads the `wolf_tab_cwds` snapshot map instead, because a per-tab blocking RPC turned a wedged nvim into a sequence of timeouts.
+
+#### `wolf_refuse_unsaved()`
+
+Whether closing the tab must be refused for unsaved changes. At the first modified buffer of this Neovim, which is the tab's ([§8](../../specs/application-state.md#8-one-neovim-per-tab)), it echoes Vim's refusal as an `ErrorMsg` and returns `true`; with none it echoes nothing and returns `false`. `do_quit` calls it unless forced, and no core caller exists.
+
+The search runs over the current buffer, then the current tabpage's windows, then every buffer, which is the order of Neovim's `check_changed_any`. The current buffer gives `E37: No write since last change (add ! to override)`, and any other `E162: No write since last change for buffer "<name>"`. `<name>` is the one Vim gives: `[Quickfix List]` or `[Location List]` for a quickfix buffer, else the buffer's name, else `[Prompt]`, `[Scratch]` for an `acwrite` buffer, or `[No Name]`. Unlike native `:qa`, it does not show the refused buffer, because a refusal changes nothing.
+
+**Every buffer whose `'modified'` is on counts, whatever its `'buftype'`.** Neovim never marks a `nofile`, `nowrite` or `terminal` buffer modified, so preview scratches, terminal placeholders and `:terminal` buffers never count. A buftype filter would also pass over a modified help, quickfix or prompt buffer, which Neovim's own `:qa` refuses on.
 
 #### `wolf_switch_buffer(win, buf)`
 
@@ -348,11 +356,13 @@ The durable dictionary is the global `'spellfile'` at `WOLF_SPELL_DIR/en.utf-8.a
 
 **Split, close, and focus are deliberately asymmetric.** A split performs the real window operation and also reports an intent, so the shell learns the orientation and handles. A close performs a guarded `nvim_win_close` that refuses the tab's last pane and reports nothing, because the shell already observes `win_close`. A focus move performs nothing and is a pure intent, because the shell resolves the neighbour in its own layout.
 
-**The `:q` family routes through internal user commands, not registry commands.** A write variant that fails aborts the quit, matching native `:wq`. A plain `:q` on the last pane with a modified buffer is refused with a native-style E37 echo; `:q!` overrides. The `:qa` family passes `all = true`, which skips the pane-count check so the whole window closes regardless of how many panes are open, with the modified guard still scoped to the current buffer.
+**The `:q` family routes through internal user commands, not registry commands.** A write variant that fails aborts the quit, matching native `:wq`. On the tab's last pane, `:q`, `:wq`, `:x` and `ZZ` close the tab only once [`wolf_refuse_unsaved`](#wolf_refuse_unsaved) finds nothing unsaved, and `:q!` closes it unchecked. The `:qa` family passes `all = true`, which skips the pane count, so it closes the tab whatever the number of panes: `:qa` checks, `:qa!` does not, and `:wqa` and `:xa` first run `:wall`, whose failure aborts.
+
+The check covers every buffer of the tab, hidden ones included, because the tab's Neovim and all its buffers end when the tab closes. A refusal names the buffer and changes nothing. No quit notifies `close_window`, so no quit closes another tab.
 
 **Normal-mode `ZZ` and `ZQ` are mapped onto `do_quit`, as `:x` and `:q!`.** The native keys bypass the command-line abbreviations and quit Neovim on a tab's last pane, which is a crash that ends every wait in the tab with `1` ([§6](../../specs/cli-and-file-open.md#6-waiting)). `ZZ` writes only a modified buffer, as native `ZZ` does and unlike Wolf's `:x`, which always writes, so leaving an unchanged buffer never writes its file.
 
-**A quit that closes the tab ends the closing buffers' waits before it notifies `close_window`.** The front-end shuts the tab's core down on that command, which ends every wait still held with `1`, and the `0` must reach the command first ([mechanism](../../notes/runtime/nvim/init.lua.md#waits-end-before-the-tab-closes)).
+**A quit that closes the tab ends the waits of every buffer of the tab before it notifies `close_tab`.** The front-end shuts the tab's core down on that command, which ends every wait still held with `1`, and the `0` must reach the command first ([mechanism](../../notes/runtime/nvim/init.lua.md#waits-end-before-the-tab-closes)).
 
 **A hide asks core before it toasts.** A killed or interrupted command leaves its wait registered, and the toast must not name a file nobody waits for ([mechanism](../../notes/runtime/nvim/init.lua.md#a-hide-asks-core)).
 
@@ -360,7 +370,7 @@ The durable dictionary is the global `'spellfile'` at `WOLF_SPELL_DIR/en.utf-8.a
 
 **`:bd` and `:bw` are intercepted, because beside the drawer they would close the tab's last pane.** Neovim keeps a window showing the deleted buffer only when it is the tabpage's last non-floating window, and the drawer never lets a pane be that, so the tree would be left empty with the drawer current. When the current tabpage holds the drawer, the current window is not it, and every window but the drawer shows a buffer the command deletes, `do_bdelete` first shows in the current window the buffer Neovim would pick there, or a new empty one. The pick is `bdelete_replacement`, a port of Neovim 0.12's `do_buffer_ext`. Then, and in every other case, Neovim's own command runs, so other windows close as Neovim closes them and a `wolf --wait` on the buffer still ends with `0`.
 
-A target counts as deleted only with `!` or when it is unmodified, so a refused `:bd` of a modified buffer switches nothing. Once the window is switched, Neovim's command names each target by the buffer number resolved before the switch, because `%`, `#` or no argument would by then name other buffers, and `:bd %` would delete the replacement. An error from Neovim's command is echoed as its `E…` message, as `do_quit` echoes E37, since a Lua user command would otherwise print a traceback. `:WolfCquit` deletes through the same helper.
+A target counts as deleted only with `!` or when it is unmodified, so a refused `:bd` of a modified buffer switches nothing. Once the window is switched, Neovim's command names each target by the buffer number resolved before the switch, because `%`, `#` or no argument would by then name other buffers, and `:bd %` would delete the replacement. An error from Neovim's command is echoed as its `E…` message, as `wolf_refuse_unsaved` echoes E37 and E162, since a Lua user command would otherwise print a traceback. `:WolfCquit` deletes through the same helper.
 
 **There are deliberately no `q!`, `wq!`, or `qa!` abbreviations.** `!` is not a keyword character, so such an abbreviation would be dead. Typing `:q!` fires the bare-`q` abbreviation and the `!` rides through to `:WolfQuit!`, whose callback reads `o.bang`. `a` is a keyword character, so `:qa` forms a distinct word that never collides with bare `q`.
 

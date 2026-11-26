@@ -171,7 +171,8 @@ Real Neovim (`//crates/wolf-core:commands`: staged nvim runfiles, `WOLF_NVIM_BIN
 
 **Covers**
 
-- The Neovim-to-shell command channel: the `:Wolf<Pascal>` Ex face and the `require('wolf').<snake>()` Lua face both enqueue the matching `Command`; the `:q`/`:q!`/`:wq`/`:qa`/`:qa!`/`:wqa` overrides and their modified-buffer refusals; `ZZ` and `ZQ` on the last pane closing the window with Neovim alive, `ZZ` writing only a modified buffer and `ZQ` nothing; and the registry invariants (`from_id` round-trip, unique ids and ex-commands, the `Wolf` prefix, menu groups).
+- The Neovim-to-shell command channel: the `:Wolf<Pascal>` Ex face and the `require('wolf').<snake>()` Lua face both enqueue the matching `Command`; the `:q`/`:q!`/`:wq`/`:qa`/`:qa!`/`:wqa` overrides draining `CloseTab`; `ZZ` and `ZQ` on the last pane closing the tab with Neovim alive, `ZZ` writing only a modified buffer and `ZQ` nothing; and the registry invariants (`from_id` round-trip, unique ids and ex-commands, the `Wolf` prefix, menu groups, `close_tab` in File).
+- The quits' tab-wide refusals, E37 for the current buffer and E162 for a hidden one or one in another pane, `:wq` included; a modified buffer of any buftype refusing, named as Vim names an unnamed, prompt, `acwrite`, quickfix or location-list buffer; `:wqa` writing every modified buffer, and `:wqa!` aborting on a failed write; and the sweep that no quit command notifies `CloseWindow`.
 
 **Gotchas**
 
@@ -222,7 +223,7 @@ Real Neovim and the default shell, pinned to `/bin/sh`, in the drawer's pty (`//
 
 - `:bd` and `:bw` in the only editor window keeping it, current, on the file shown before, or on a new unnamed listed buffer when no other is listed; `:bd %` deleting the shown buffer, not the replacement; the replacement being Neovim's own jumplist pick with the drawer closed; two windows on the buffer keeping one; a modified buffer refused with `E89` in the toast and nothing switched.
 - With the drawer closed, `:bd` keeping the window on the earlier file, and `:bd <n>` deleting only that hidden buffer.
-- `:q`, `:wq`, `:x`, `ZZ` and `ZQ` draining `CloseWindow` with the editor window open; `:close`, `<C-w>c`, `<C-w>q` and `InputEvent::ClosePane` refused.
+- `:q`, `:wq`, `:x`, `ZZ` and `ZQ` draining `CloseTab` with the editor window open; `:close`, `<C-w>c`, `<C-w>q` and `InputEvent::ClosePane` refused.
 - `<C-w>q` from the drawer's session and `ClosePane` on the drawer closing only the drawer, its session live; `<C-w>c` refused in a lone terminal pane beside the drawer.
 
 **Gotchas** — The refused closes wait `NEGATIVE_SETTLE` for a close that must not happen; widen it if it flakes. The module doc lists the component premises each case measures.
@@ -455,7 +456,7 @@ Real Neovim (`WOLF_NVIM_BIN`, `no-sandbox` target with staged nvim runfiles).
 
 **Gotchas**
 
-- A typed `:qa!` cannot stand in for the SIGKILL: `init.lua`'s abbreviation makes it a window close ([`commands.rs`](#commandsrs)).
+- A typed `:qa!` cannot stand in for the SIGKILL: `init.lua`'s abbreviation makes it a tab close ([`commands.rs`](#commandsrs)).
 - The two pump cases call no `block_on_rpc` method, probes included: one would detect and clear the stall itself, so both polls would pass without the pump.
 - The stall cases set the process-global `WOLF_RPC_TIMEOUT_MS` and wedge nvim with a finite `vim.uv.sleep`; teardown force-kills the wedged child, so widen (never tighten) the wedge if a case flakes.
 - It polls with its local `poll_without_draining`, not `poll_until`, because each case asserts the transition's wake afterward with `wait_for_wake`, and a drain would consume it.
@@ -470,7 +471,7 @@ Real Neovim (`WOLF_NVIM_BIN`, `no-sandbox` target with staged nvim runfiles).
 - A scripted Neovim terminal is in neither half of the mirror ([why](../../../runtime/nvim/README.md#wolf_setup_open_fileschan)).
 - Typing queued before the handle swap never reaches the fresh nvim; a queued resize does.
 - The reset: no window, command line, intent or history of the dead nvim survives, and `seq` never goes back.
-- Evidence, green on base: four death modes are each seen and restarted on one core, a death releases a waiting call, and a restart leaves a sibling core alone. Its `qa!` is scripted, because a typed `:qa!` closes a window ([`commands.rs`](#commandsrs)).
+- Evidence, green on base: four death modes are each seen and restarted on one core, a death releases a waiting call, and a restart leaves a sibling core alone. Its `qa!` is scripted, because a typed `:qa!` closes the tab ([`commands.rs`](#commandsrs)).
 
 **Gotchas**
 
@@ -932,10 +933,10 @@ The real `wolf` binary, against a real `OpenListener` or a raw `UnixListener` th
 
 `wolf --wait` end to end, [§6](../../../specs/cli-and-file-open.md#6-waiting): the real `wolf` over a real `OpenListener`, with a real core and Neovim behind it (`//crates/wolf-core:wolf_wait`: the real-nvim runfiles and env, plus `:wolf` as `WOLF_TEST_WOLF_BIN`, `no-sandbox`, `size = "medium"`).
 
-**Covers** — exit `0` after `:q` on the waited split, `:wq`, `ZZ` or `ZQ` on the tab's last pane, `:bd` and `:bw`, and `:bd` beside the drawer, keeping the pane; exit `1` after `:cq` in the waited window, beside the drawer too, which keeps Neovim alive, while `:cq` elsewhere still quits Neovim; a hide by `:e other` still waiting, with the toast; exit `1` when the tab closes, Neovim crashes or a stalled Neovim restarts, and for a path no buffer shows; a file already shown waited on its buffer; a hung-up command leaving no toast and other waits alone; and `git commit` with `wolf --wait` as its editor, committing the typed message, or nothing after `:cq`.
+**Covers** — exit `0` after `:q` on the waited split, `:wq`, `ZZ` or `ZQ` on the tab's last pane, `:bd` and `:bw`, and `:bd` beside the drawer, keeping the pane; exit `1` after `:cq` in the waited window, beside the drawer too, which keeps Neovim alive, while `:cq` elsewhere still quits Neovim; a hide by `:e other` still waiting, with the toast, and exit `0` once `:q` closes the tab; exit `1` when the tab closes, Neovim crashes or a stalled Neovim restarts, and for a path no buffer shows; a file already shown waited on its buffer; a hung-up command leaving no toast and other waits alone; and `git commit` with `wolf --wait` as its editor, committing the typed message, or nothing after `:cq`.
 
 **Gotchas**
 
-- Each test is the front-end: it drains the wait with `drain_taken`, sends `InputEvent::Open`, then `wait_on`. A case that closes the last pane shuts the core down as soon as `CloseWindow` drains, as a front-end would, so the `0` must arrive first.
+- Each test is the front-end: it drains the wait with `drain_taken`, sends `InputEvent::Open`, then `wait_on`. A case that closes the last pane shuts the core down as soon as `CloseTab` drains, so the `0` must arrive first.
 - It enters a kept, canonical base dir and runs a copy of `wolf` at `bin/wolf`, for `wolf_command.rs`' reasons. Each state dir is relative to it.
 - The `git` cases run `git` from `PATH`, the system's on macOS and the dev shell's on Linux, with no system or global config.

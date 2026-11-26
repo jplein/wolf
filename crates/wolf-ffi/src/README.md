@@ -362,6 +362,7 @@ These `u8` values are the ABI: Swift decodes raw integers, so the numbers are co
 | 28    | `SPLIT_HORIZONTAL`      | Split the active pane into two stacked panes, as `:split`.                                      |
 | 29    | `SPLIT_VERTICAL`        | Split the active pane into two side-by-side panes, as `:vsplit`.                                |
 | 30    | `ZOOM_PANE`             | Toggle the active pane between zoomed, over the whole pane area, and not; a native-only action. |
+| 31    | `CLOSE_TAB`             | Close the tab that queued it, and its window on its last tab.                                   |
 
 #### `bin/gen_bindings.rs`
 

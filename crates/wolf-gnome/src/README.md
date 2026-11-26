@@ -1045,8 +1045,8 @@ Purpose: the GTK glue for native tabs, each owning its `WolfCore`, wake drain, r
 
 **Public API**
 
-- `build(TabsParts) -> TabsHandle`, with no page until `open_tab`.
-- `TabsHandle::open_tab(TabParts) -> Option<TabHandle>` starts its core and selects it, or logs once. `replace(old, parts)` does so in `old`'s place; hold no core borrow across it.
+- `build(TabsParts) -> TabsHandle`, empty until `open_tab`.
+- `TabsHandle::open_tab(TabParts) -> Option<TabHandle>` starts its core and selects it, or logs once. `replace(old, parts)` does so in `old`'s place; hold no core borrow across it or `close(tab)`.
 - `select`, `selected`, `selected_core`, `core_source`, `entries`, `len`, `n_pages`, `focus_target`, `shutdown_all`, `view_widget`, `bar_widget`, `seed_recency`, `recency`, `drawer_opener`.
 - `connect_selected`, given the tab left; `connect_wake`; `connect_closing`, before a tab's shutdown; `connect_n_pages`.
 - `sync_ui_focus(window_active)`, the `:checktime` trigger; `active_terminal()` and `sync_terminal_focus(window_active)` ([how](../../../notes/wolf-gnome/terminal-panes.md)).

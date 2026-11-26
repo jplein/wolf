@@ -8,7 +8,7 @@ A few read something else. [`PreviewKeyEquivalentTests.swift`](#previewkeyequiva
 bazel test //crates/wolf-macos:WolfMacOSTests
 ```
 
-[`PreviewMarginTests.swift`](#previewmargintestsswift) samples no pixels either: it reads a preview web view's frame, its recorded root style and AppKit's hit test.
+[`PreviewMarginTests.swift`](#previewmargintestsswift) samples no pixels either: it reads a preview web view's frame, its recorded root style and AppKit's hit test. [`CloseTabDispatchTests.swift`](#closetabdispatchtestsswift) reads the close calls a dispatch makes on a window, with no core.
 
 **Adding a file means editing `srcs`.** As for [`WolfKeyMapTests`](../WolfKeyMapTests/README.md), the target's `srcs` is a hand-maintained list, not a glob, so a file missing from it never compiles and never runs. Helpers such as `OffscreenRenderer.swift` are listed too.
 
@@ -145,7 +145,7 @@ Purpose: The vendored Lighthouse's expected colours, for the tests that render u
 
 **Gotchas**
 
-- The palette rows, `CommandDispatcher` and `WolfWindowController.splitPane(_:)` reach no test here: AppKit routes no event offscreen. The [app-launch smoke](../../../../build.md#the-app-launch-smoke) drives `:WolfSplitVertical` through the last two.
+- The palette rows, `CommandDispatcher`'s split arms and `WolfWindowController.splitPane(_:)` reach no test here: AppKit routes no event offscreen. The [app-launch smoke](../../../../build.md#the-app-launch-smoke) drives `:WolfSplitVertical` through the last two.
 - The front-end drops a `Split` from the drawer anyway, so the drawer test's witness is the live session count, after a `focus_win` queued behind both splits has landed.
 - The lag test sends `focus_win` with no wake before the split, as [`TerminalClosePaneTests.swift`](#terminalclosepanetestsswift) does.
 
@@ -213,11 +213,11 @@ A split, a close and the shell exiting each unzoom, and so does Toggle Terminal,
 
 **Gotchas**
 
-- The palette, `CommandDispatcher` and `WolfWindowController` reach no test, so `toggleZoom()` and `toggleTerminal()` are called directly; the [app-launch smoke](../../../../build.md#the-app-launch-smoke) covers the last two.
+- The palette, the `CommandDispatcher` arms and `WolfWindowController` reach no test, so `toggleZoom()` and `toggleTerminal()` are called directly; the [app-launch smoke](../../../../build.md#the-app-launch-smoke) covers the last two.
 - A hidden pane's sizes are compared after a settle: a wrong resize lands a round trip later.
 - A move that must change nothing and a restored zoom are sampled at every wake: Neovim reporting another pane a round trip later unzooms the view.
 - The save and restore test writes `LiveCore`'s `WOLF_STATE_DIR`, as [`SessionRestoreTests.swift`](#sessionrestoretestsswift) does; each submit replaces the whole window state.
-- The drags while zoomed land in the zoomed pane and reach Neovim as clicks.
+- Drags while zoomed land in the zoomed pane and reach Neovim as clicks.
 
 #### `SessionRestoreTests.swift`
 
@@ -275,6 +275,14 @@ A `wolf --wait` popped into `Request(owning:)` exits `0` at `:q` in its pane.
 **Decisions**
 
 - A recording `NSWindow` subclass stands in for `cascadeTopLeft(from:)`, with unequal offsets so a swapped axis shows. The worker has no screen, and AppKit's own call then squeezes the window to 1 pt wide and pins its top-left at (0, 0). AppKit's own offset and its clamping to a real screen are a person check.
+
+#### `CloseTabDispatchTests.swift`
+
+**Covers** — `CommandDispatcher.dispatch(.closeTab, …)`, the arm a drained `close_tab` reaches, closing its window once with `close()` and never calling `performClose(_:)`, so no `windowShouldClose` asks again after the quit's own check.
+
+**Decisions**
+
+- A recording `NSWindow` subclass stands in for both calls. Its `performClose(_:)` records and goes no further, because AppKit's would call `close()` itself, and a dispatch that asks first would then look like one that closes.
 
 #### `TerminalDrawerTests.swift`
 
@@ -387,7 +395,7 @@ Purpose: Checks the toolbar's sidebar control in a production `MainWindow`, neve
 
 **Gotchas**
 
-- `WolfWindowController` cannot be built offscreen: its `build()` needs a started `TabCore`, and orders its window front. The tests enter at the `MainWindow` members it forwards to, so the forwarders and the `CommandDispatcher` arms are compile-verified only.
+- `WolfWindowController` cannot be built offscreen: its `build()` needs a started `TabCore`, and orders its window front. The tests enter at the `MainWindow` members it forwards to, so the forwarders and the `CommandDispatcher` arms but `.closeTab`'s are compile-verified only.
 - A click is `selectedSegment` set, then `sendAction`, as a `.selectOne` click does.
 - Selection is read with `isSelected(forSegment:)`, because `selectedSegment` keeps its old value after a segment is deselected.
 - Search seeding and field focus touch private `SearchView` state, so they are manual-smoke.

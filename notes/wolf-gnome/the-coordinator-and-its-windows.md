@@ -10,7 +10,7 @@ The config is read once so two windows cannot disagree about the font mid-sessio
 
 Each window contributes a `Window` entry and its tab recency through `WindowHandle::cached_window`, and the coordinator orders the entries by the stacking order through `state_seam::window_state` and submits them. A tab whose snapshot gate is shut contributes what it last cached rather than vanishing, and **an empty contribution set commits nothing at all** — never an empty window state, which would overwrite a whole saved session with one holding no windows. That rule holds at two levels: a window with no contributing tab drops out of the set the same way.
 
-Closing one window has three answers, and each guards a different way to lose a session. Closing the last window is quitting, so its entry is kept and the session survives — the path `:qa` takes. Closing one of several drops that window, or one the user deliberately dismissed reappears at the next launch.
+Closing one window has three answers, and each guards a different way to lose a session. Closing the last window is quitting, so its entry is kept and the session survives — the path `:qa` takes on a window's only tab, and `:WolfCloseWindow`'s. Closing one of several drops that window, or one the user deliberately dismissed reappears at the next launch.
 
 A close arriving during a quit commits nothing at all. The quit path has already committed the whole window state once, while every core and every pane was still alive, and then closes each window in turn; committing again per window would shrink that state to nothing one window at a time.
 

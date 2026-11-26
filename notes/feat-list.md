@@ -134,7 +134,7 @@ The GTK sidebar re-roots from one settle point, on the working directory Neovim 
 | Pane-layout persistence across relaunch      | `feat/macos-pane-dividers` (`5f8becb`)                    | [x]   | [x]   |
 | Single-pane state-persistence fix            | `fix/state-persistence-single-pane-bug`                   | [x]   | [x]   |
 | Copy / paste through the system clipboard    | `feat/copy-paste`                                         | [x]   | [x]   |
-| `:q` / `:qa` mapped to close pane / window   | `feat/colon-q-remapping`                                  | [x]   | [x]   |
+| `:q` / `:qa` mapped to close pane / tab      | `feat/colon-q-remapping`                                  | [x]   | [x]   |
 | ⌘N opens a new untitled Markdown buffer      | `feat/colon-q-remapping` (`0266b96`)                      | [x]   | [x]   |
 
 `wolf-gnome` calls `WolfCore::drain_commands()` on every render wake, behind a total `Command` to `UiAction` mapping in `command_action.rs` with no catch-all arm, so a new core command fails to compile until it is classified. Every command dispatches except `HideApplication`, which has no GNOME equivalent since the shell owns window visibility, and the font-size commands (`ResetFontSize`, `IncreaseFontSize`, `DecreaseFontSize`), which are deferred with a distinct printed reason.
