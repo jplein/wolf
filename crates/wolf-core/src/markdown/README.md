@@ -38,6 +38,7 @@ Each front-end's route from its resolved appearance to that preference is its ow
 **Decisions**
 
 - `hr` is painted through `border-top-color`, never `background-color`. `base.css` gives the rule an explicit 24px border-box height so its hairline stays on the baseline grid, and this file wins the cascade over it — a background declaration here would fill that 24px box with a solid bar.
+- The `pre` background in each palette, `#252525` dark and `#ffffff` light, is a hand copy of the bundled Lighthouse colorscheme's `slightHighlightBG`, the colour Lighthouse gives orlando's code-block fill in the editor. The preview is a fixed palette, not wired to the live colorscheme (see [Deferred and open](../../../../specs/architecture.md#deferred-and-open)), so a [Lighthouse pin](../../../../bazel/lighthouse/README.md#the-pin) bump does not change these values, and following one means copying them again.
 
 #### `assets/inter-variable.woff2`
 
