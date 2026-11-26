@@ -460,6 +460,8 @@ The titlebar smokes, one per Lighthouse background: the checkout binary over a s
 
 The dialog is the route to backdrop: `cage` activates every toplevel it maps and deactivates one only when another takes focus, so no launch starts inactive. A toplevel with a parent is centred at its own size, so the main window and both bars stay visible beside it. A precondition proves the dimming: the title's contrast over `WolfTitlebar` must reach a floor while focused, and be at most a share of it in backdrop.
 
+The empty-view smoke opens an empty tab over Lighthouse under `appearance: dark` and samples the view's two side bands, clear of the status page and derived from the geometry constants. The view must match the grid's `Normal`, then the other background after a typed `:set background`, and keep it after a runtime `WolfTitlebar` the header bar takes. An OCR precondition proves the view is up.
+
 #### `smoke_headless/titlebar_tabs.rs`
 
 The `gtk-titlebar-style` smokes. The first launches on the shared seeded config, so it runs the default `tabs`. With one tab, the header band must read the window title and the probe click the one-tab pane origin. A second tab, `:cd`ed into a sibling directory, must put both tabs' titles in the header band, take no editor row, leave the header's shade row where it was by `TABS_HEADER_GROWTH_PX`, and paint the tabs in the grid's background; a probe click and a delta click in it must land.
@@ -584,8 +586,9 @@ Every observable is a Neovim readback of `winwidth` and `winheight` per recorded
 
 **Covers**
 
-- `titlebar_background::titlebar_background`'s precedence: a set `WolfTitlebar` beats `Normal`, `Normal` fills in when it is unset, and `Libadwaita` holds while neither is known.
-- `titlebar_css` writing lowercase `#rrggbb` in channel order, declaring no `color`, and giving `""` for `Libadwaita`; `stylesheet_update` answering `None` for equal inputs and the wanted stylesheet for each change.
+- `titlebar_background::titlebar_background`'s precedence: a set `WolfTitlebar` beats `Normal`, `Normal` fills in when it is unset, and `Libadwaita` holds while neither is known. `empty_state_background` takes `Normal` when it is known and `Libadwaita` while it is not.
+- `titlebar_css` and `empty_state_css` writing lowercase `#rrggbb` in channel order and giving `""` for `Libadwaita`, the first declaring no `color` and the second `background-color` alone.
+- `stylesheet_update` answering `None` for equal inputs and, for each change, the stylesheet of the function it is given, run over both.
 
 **Gotchas**
 
@@ -718,7 +721,7 @@ The directory is a sibling of the working directory rather than a child, for the
 
 A smoke pins `native` through `main.rs`'s `titlebar_pinned_config_dir` when, with two tabs or more open, it clicks or reads the tab bar's row, or asserts a size or position that includes it, because `tabs` moves that row into the header bar. These pin it:
 
-- both `titlebar.rs` smokes, through `titlebar_smoke`;
+- every `titlebar.rs` smoke, through `smoke_config_dir_at`'s style argument, since each also forces its `appearance`;
 - `tab_bar.rs`'s `each_tab_is_titled_by_its_own_directory_under_cage`;
 - every `new_tab.rs` smoke, through `run_new_tab`;
 - `panes.rs`'s `native_tabs_open_switch_and_close_under_cage` and `a_file_saved_in_one_tab_reloads_in_another_on_switch_under_cage`;
@@ -822,6 +825,7 @@ Being scrupulous about this is the point of the section.
 - **`shell::copy_selection`'s write-nothing-never-clear branch, and the paste callback's ordering.** That an absent or empty yank writes nothing rather than clearing whatever the user copied from another application, and that the callback upgrades its `Weak` before it borrows the core, are widget-layer facts neither suite can execute. `clipboard_ui`'s tables cover the rules; what is unobserved is the glue carrying them out.
 - **Anything a desktop portal supplies.** Every cage's bus activates no portal, so every smoke runs GTK's portal-less path: font and xft settings from the pinned `settings.ini`, the dpi from the app's own pin, and the in-process file chooser. What a real desktop's portal hands GTK in their place is observed by nothing.
 - **The titlebar provider's per-window scoping and its removal at close.** No smoke runs two windows on different colorschemes, or closes a window and opens another under its id, so neither `TitlebarStyle`'s class nor `uninstall` reaches a pixel. Every titlebar capture exercises `install`.
+- **The empty view's per-tab scoping and its removal at a tab's close.** Only the selected tab's view is on screen, and a selection wakes that tab, so no smoke tells a tab's own `Normal` from the selected tab's, and none closes a tab and checks that its provider is gone. That a background tab's view has its own colour when selected holds by construction alone: each tab applies from its own core on its own wakes.
 - **Backdrop reached any other way than through a transient dialog, and the bars after it closes.** The titlebar smokes deactivate the window only by opening the save dialog, and kill the app with it still up. GTK's `:backdrop` state is the same when focus moves to another application, which a person checks on a GNOME desktop.
 - **The portal route the save dialog takes on a real desktop.** `the_save_dialog_writes_a_named_file_under_cage` drives GTK's in-process fallback, forced by the `GDK_DEBUG` export the conventions above require, so what it proves is bounded by that widget: the seam's `Choose` answer reaches a real `gtk::FileDialog`, the dialog's `Ok(GFile)` reaches the callback, and the resulting `InputEvent::SaveAs` writes the file. `gdk_display_should_use_portal` answers true wherever GDBus reaches a session bus, so a real session gets a different widget, a different confirmation and a different `GFile` producer, none of them observed here.
 - **The overwrite confirmation, and the front-end's `force: true` end to end.** The save smoke's target does not exist, so neither is exercised; driving GTK's confirmation alert from the keyboard is fragile enough that the recipe is recorded rather than written. What covers the effect is the pair in `crates/wolf-core/tests/save_open.rs`, `save_as_refuses_to_overwrite_without_force` and `save_as_with_force_overwrites`, each of which discriminates the other against a real Neovim.

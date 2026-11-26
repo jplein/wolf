@@ -921,13 +921,13 @@ Purpose: the glue for the action namespace — `gio` actions, the primary menu, 
 **Decisions**
 
 - The chord controller matches keys itself: GTK's keymap-aware matching does not fire under the smokes' keystroke injector. Accelerators are registered only for the menu's labels, `app.` rows included ([`coordinator.rs`](#coordinatorrs)).
-- The controller lives on the window, ahead of any overlay's, and needs no open-overlay guard: no overlay key is a bound chord.
+- The controller sits on the window, ahead of any overlay's, with no open-overlay guard: no overlay key is a bound chord.
 - One settle point, over [`workspace.rs`](#workspacers)'s `reroot_decision`, moves the sidebar's root for a typed `:cd`, a switch and a filled tab alike.
-- Each Markdown-preview press reads one `preview_shape` pass, since two would describe no window that existed, and is a blocking RPC gated by [`preview_ui.rs`](#preview_uirs).
-- Save and Save As read one `save_shape` pass each for the same reason and issue no blocking call.
+- A Markdown-preview press, Save and Save As each read one `preview_shape` or `save_shape` pass: two would describe no window that existed. Only the preview blocks, gated by [`preview_ui.rs`](#preview_uirs).
 - `sidebar.set_visible` has one caller, over [`state_seam.rs`](#state_seamrs)'s `sidebar_is_shown`, or a tab switch would undo a user toggle. The search chord and a [toggle click](#sidebar_togglesrs) reveal it through that preference. New Tab captures what it shows ([why](../../../notes/wolf-gnome/application-state.md#new-tab)).
 - A switch first records the sidebar into, and captures, the tab it leaves ([why](../../../notes/wolf-gnome/application-state.md#the-extras)).
 - Actions resolve the selected tab's core per use, and commands drain from it alone ([why](../../../notes/wolf-gnome/window-structure.md)).
+- The empty state's `background` class makes it opaque and colours it until [`EmptyStateStyle`](#titlebar_backgroundrs) applies `Normal`.
 
 #### `sidebar.rs`
 
@@ -1110,20 +1110,21 @@ Purpose: the pure title seam of the window and of each tab — the working direc
 
 #### `titlebar_background.rs`
 
-Purpose: the background of the header bar and the tab bar, by the rule [Theming](../../../specs/architecture.md#theming) states: the pure decision, the stylesheet that carries it, and the per-window provider that applies it. The counterpart of [`TitlebarBackground.swift`](../../wolf-macos/Sources/WolfKeyMap/README.md#titlebarbackgroundswift).
+Purpose: the background of the header bar, the tab bar and an empty tab's view, by [Theming](../../../specs/architecture.md#theming)'s rule: the pure decisions, their stylesheets, and the providers that apply them. The counterpart of [`TitlebarBackground.swift`](../../wolf-macos/Sources/WolfKeyMap/README.md#titlebarbackgroundswift).
 
 **Public API**
 
-- `titlebar_background(titlebar, normal) -> TitlebarBackground` — `normal` is the resolved default background before the grid's fallback colour, so an unknown `Normal` keeps libadwaita's colour rather than painting the fallback.
-- `titlebar_css(class, background)`, `""` for `Libadwaita`, and `stylesheet_update(applied, wanted, class)`, `None` when the two are equal, so a wake that changes nothing does no CSS work.
-- `TitlebarStyle::install(id, header, tab_bar)`, `apply(wanted)` and `uninstall()` — [`shell.rs`](#shellrs) applies the selected tab's colour on that tab's render wakes, and [`window.rs`](#windowrs)'s close handler uninstalls.
+- `titlebar_background(titlebar, normal)`, and `empty_state_background(normal)`, which takes no `WolfTitlebar` — `normal` is the resolved default background before the grid's fallback colour, so an unknown `Normal` keeps libadwaita's colour.
+- `titlebar_css(class, background)` and `empty_state_css(class, background)`, `""` for `Libadwaita`; `stylesheet_update(applied, wanted, class, css)`, `None` when the two are equal, so an unchanged wake does no CSS work.
+- `TitlebarStyle::install(id, header, tab_bar)`, `apply(wanted)` and `uninstall()` — [`shell.rs`](#shellrs) applies the selected tab's colour, and [`window.rs`](#windowrs)'s close handler uninstalls.
+- `EmptyStateStyle::install(tab, view)`, `apply(wanted)` and `uninstall()` — [`tab_view.rs`](#tab_viewrs) installs one per tab, applies its own Neovim's colour on each of the tab's refreshes, selected or not, and uninstalls at shutdown.
 
 **Decisions**
 
-- One provider per window, following the selected tab, since each tab's Neovim may run its own colorscheme, scoped by a class on the header bar and the tab bar themselves. A descendant selector under the window would also match a header bar that a child widget brings.
-- `uninstall` at close is required: a closed window's id is minted again, and its provider would restyle the new window.
-- The rule declares `background-color` alone, at application priority and with no state selector ([why](../../../notes/wolf-gnome/window-structure.md)).
-- The tab bar's node is its `box.box`, the one libadwaita colours; the `tabbar` node paints nothing.
+- One provider per window for the bars, following the selected tab, scoped by a class on the bars themselves: a descendant selector under the window would also match a child widget's header bar. `uninstall` at close is required: a closed window's id is minted again.
+- One provider per tab for the view, so a background tab's view already has its own colour when selected.
+- Both rules declare `background-color` alone, at application priority and with no state selector ([why](../../../notes/wolf-gnome/window-structure.md)); the view's button and text keep libadwaita's foreground and geometry.
+- The tab bar's coloured node is its `box.box`; the `tabbar` node paints nothing.
 
 #### `tree.rs`
 
