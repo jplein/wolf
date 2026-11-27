@@ -116,7 +116,7 @@ The ask is silent, `WolfCore::request_unsaved`. Only the tab chosen is then sele
 
 The window's check sits in its `close-request` handler, ahead of `on_window_closing`, so the close button, Close Window, `:WolfCloseWindow` and the last tab's close all take it. A refusal returns `Propagation::Stop` before anything is committed or any core taken. The check is skipped once `Coordinator::is_quitting`, because the quit asked every window before it latched.
 
-A tab whose own close is confirmed counts as clean unasked. The last page's close confirms its tab before it closes the window: that tab's check has passed, and a forced `:qa!` there must not be refused by the window's.
+A tab whose own close is confirmed counts as clean unasked. The last page's close confirms its tab before it closes the window, which spares that tab a second ask from the window's check. A tab that answered `NoAnswer` closes unchecked, as Close Tab closes it, and one whose check passed is not asked twice.
 
 Quit asks the windows in stacking order, frontmost first, and each window's tabs in page order, which `TabsHandle::entries` is not. On a refusal it selects the tab, has it echo and presents its window, and latches nothing. `present()` is best effort, and `cage` declines it, so the raise is unobservable in the smokes. Every quit route reaches `Coordinator::quit`, and `AppShell::quit_application` without a coordinator closes its own window, which that window's check covers.
 

@@ -598,7 +598,7 @@ Purpose: the command-palette overlay — registry commands, one Open Recent row 
 - The window list is a closure taken fresh at each open over each window's cached entry, so the open touches no other core and adds no RPC.
 - The label is `PaletteRow::display` unchanged: [`title.rs`](#titlers)'s home abbreviation would rank one string and show another, and a query matching the visible `~` would return nothing.
 - Ranking runs unbounded and `max` applies after the classification filter, since `rank_palette` truncates first and undispatched rows would otherwise eat the budget.
-- Activation records, closes, then dispatches: a dispatched Close Window tears the window down synchronously.
+- Activation records, closes, then dispatches: Close Window may tear the window down synchronously.
 
 #### `pane_layout.rs`
 

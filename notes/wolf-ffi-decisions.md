@@ -38,7 +38,7 @@ This distinction governs regeneration. An additive `WolfCoreHandle` method rides
 
 ## Discriminant tables are append-only
 
-The `u8` discriminant modules in `src/lib.rs` (`command_kind`, `palette_row_kind`, `liveness`, the mouse, scroll, split, and focus enums, the `terminal_*` enums and bitsets, the application-state `pane_kind`, `pane_ref`, `sidebar_mode` and `tristate`, and the file-open `open_kind` and `pane_placement`) are the ABI. Swift decodes raw integers, so renumbering an existing value silently changes behavior on the other side of the boundary rather than failing to compile.
+The `u8` discriminant modules in `src/lib.rs` are the ABI, and [`src/README.md`](../crates/wolf-ffi/src/README.md#discriminant-tables) lists their tables. Swift decodes raw integers, so renumbering an existing value silently changes behavior on the other side of the boundary rather than failing to compile.
 
 Append at the end, never renumber or reuse. `command_kind` is contiguous from `0` and is the Rust side's record of each `wolf_core::Command` discriminant. The `//crates/wolf-ffi:commands` test requires every `COMMAND_SPECS` row to drain as its index, which turns a renumbering or a reorder into a test failure, and `CommandSeamTests` checks Swift's decode against it over the bridge.
 

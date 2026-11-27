@@ -312,7 +312,11 @@ It clicks nothing, because keys reach the selected tab after a restore, a premis
 
 #### `smoke_headless/close_tab.rs`
 
-The Close Tab smoke, one launch restoring a planted window of two tabs, each on a file of the project, with the second tab modified. A click on the background second tab's close button must select it, keep both Neovims and leave E37 in its `:messages`, and Close Tab from the palette must refuse the same way. After `:w` it must close the tab, leaving the first, and on the last tab end the app. Every observable is a Neovim count, a readback a Neovim writes about itself or the app's exit, never OCR.
+The Close Tab smokes, each one launch restoring a planted window whose tabs are on files of the project. Every observable is a Neovim count, a readback a Neovim writes about itself or the app's exit, never OCR.
+
+`close_tab_asks_the_tabs_neovim_under_cage` restores two tabs, with the second modified. A click on the background second tab's close button must select it, keep both Neovims and leave E37 in its `:messages`, and Close Tab from the palette must refuse the same way. After `:w` it must close the tab, leaving the first, and on the last tab end the app.
+
+`close_tab_with_no_answer_on_the_last_tab_closes_the_window_under_cage` restores one modified tab whose Neovim's `_G.wolf_close_tab` is made to answer no boolean, so the ask gets `NoAnswer`. Close Tab from the palette must then end the app, because the last page's close confirms its tab and the window's check does not ask it again.
 
 The close button's x is `CT_CLOSE_BUTTON_INSET_PX` left of the output's right edge, derived from libadwaita's stylesheet rather than measured, and a background tab shows its button only while hovered. Exit 184 or 185 can mean the click missed the close button, and then the inset is what to fix, not the code.
 

@@ -62,7 +62,9 @@ A live owner's swap, which is another tab's Neovim, stays under `A` and raises n
 
 ## Waits end before the tab closes
 
-`do_quit` ends the waits of every buffer of the tab's Neovim, hidden ones included, before it notifies `close_tab`. The front-end shuts the tab's core down on that command, and the shutdown ends every wait it still holds with `1`. Core applies notifications in the order Neovim sent them, so the `0` reaches the command first. `WinClosed` cannot do it here, because the front-end closes the tab without closing its last window in Neovim.
+`do_quit` ends the waits of every buffer of the tab's Neovim, hidden ones included, with `0` before it notifies `close_tab`. The `0` is row 1 of the table in [§6](../../../specs/cli-and-file-open.md#6-waiting): the buffer was closed. It holds only for the quit family, `do_quit`'s, which Close Pane on the tab's last pane joins through `wolf_close_pane`. Every other route that closes a tab, its window or the app, Close Tab included, leaves the waits to the shutdown's `1`.
+
+The front-end shuts the tab's core down on `close_tab`, and the shutdown ends every wait it still holds with `1`. Core applies notifications in the order Neovim sent them, so the `0` reaches the command first. `WinClosed` cannot do it here, because the front-end closes the tab without closing its last window in Neovim.
 
 ## A hide asks core
 
