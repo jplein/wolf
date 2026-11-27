@@ -8,9 +8,7 @@ If you are making more than a trivial change, always use the /orchestrate skill,
 
 Prefer end-to-end and integration tests over mocks. The purpose of this application is to communicate with a Neovim process, so the tests should actually start a Neovim process and communicate with it.
 
-Every new test must actually be run by the command that runs its suite. Bazel does NOT auto-discover test files — each test target enumerates its sources explicitly, so a new test file that is not wired into a target is silently skipped. When you add a test file, also wire it up, then confirm it actually runs.
-
-Where each suite's test files are wired, for Rust, Swift, doc-lint and the lint scripts, is in [`notes/test-discovery.md`](notes/test-discovery.md).
+Every new test must actually be run by the command that runs its suite: Bazel does not discover test files, so wire each new one into its target and confirm it runs. How each suite is wired is in [`notes/test-discovery.md`](notes/test-discovery.md).
 
 ## specs/ and notes/
 

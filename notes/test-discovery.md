@@ -2,7 +2,7 @@
 
 Last verified at commit `fa5972c1258425c8512fdfd015cc6415170bc5d5`.
 
-Bazel does not discover test files: each test target lists its sources explicitly, so a new test file that is not wired into a target is silently skipped. This is where each suite's files must be wired.
+Where each suite's test files are wired, for the rule in [`CLAUDE.md`](../CLAUDE.md) that every new test runs. A file left out of its target is skipped without an error.
 
 - **Rust (`crates/*/tests/*.rs`)**: runs under both `bazelisk test` (macOS) and `cargo test` (Linux/Nix). `cargo test` discovers every `tests/*.rs`, but Bazel does not, so add a matching `rust_test` target in the crate's `BUILD.bazel`, mirroring a sibling. A real-nvim test needs the staged `//bazel/nvim:nvim_tree` and `//runtime/nvim:init.lua` runfiles, the wired `WOLF_*` env, and `tags = ["no-sandbox"]`; a headless test needs none of those. Because `cargo test` would still pick it up, an unwired file is a macOS-only gap, so verify with `bazelisk test`.
 - **Swift (`crates/wolf-macos/Tests/WolfKeyMapTests/*.swift` and `crates/wolf-macos/Tests/WolfMacOSTests/*.swift`)**: each directory runs only through its `swift_test` target, `//crates/wolf-macos:WolfKeyMapTests` or `//crates/wolf-macos:WolfMacOSTests`. Each target's `srcs` is an explicit hand-maintained list, not a glob, so add every new `.swift` file to it, fixtures and helpers included, or the file never compiles into the test binary and never runs. There is no `cargo`-style fallback, so the `srcs` list is the sole source of truth.
