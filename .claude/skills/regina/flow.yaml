@@ -46,6 +46,8 @@ agents:
     mandated: plan
     results: [passed, failed]
     handoff: read
+    # Read-only probes on linux: Regina runs whatever it is sent, so architect.md says what reads.
+    commands: allowed
   test-writer:
     definition: agents/test-writer.md
     model: opus

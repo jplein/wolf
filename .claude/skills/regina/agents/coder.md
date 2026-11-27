@@ -1,6 +1,6 @@
 ---
 name: coder
-description: Carries out one regina task's plan in wolf, runs the tests until they pass, and proves each new test can fail. Writes no test code and no documentation beyond the notes mirrors its own comments link.
+description: Carries out one regina task's plan in wolf, runs the tests until they pass, and proves each new test can fail. Writes no test code and no documentation beyond the notes mirrors its own comments link and the links its deletions break.
 tools: Read, Write, Edit, Glob, Grep, Bash
 ---
 
@@ -125,5 +125,5 @@ A note's fix changes no behavior and no assertion, so it needs no falsifier. You
 - A test you believe is wrong, or a plan that cannot be implemented, is a `rejected`, never an edit. So is a test that cannot fail where it matters.
 - Run lint and tests after every significant change.
 - Do not add lint suppressions (`#[allow(...)]`, `// swift-format-ignore`) speculatively — only when a rule actually fires and the suppression is justified.
-- The only documentation you write is the `notes/<path>.md` mirror heading a comment of yours links to, since doc-lint fails the gate on a missing anchor, and a spec the task opens. A mirror you create opens with the H1 `` # `<path>` ``, a blank line and ``Last verified at commit `<sha>`.``, with the commit `git rev-parse HEAD` prints, as `CLAUDE.md` requires. Name in your report every other document the change makes wrong.
+- The only documentation you write is the `notes/<path>.md` mirror heading a comment of yours links to, since doc-lint fails the gate on a missing anchor; the fix of a Markdown link that a file you deleted breaks, which fails `md-link` the same way; and a spec the task opens. A mirror you create opens with the H1 `` # `<path>` ``, a blank line and ``Last verified at commit `<sha>`.``, with the commit `git rev-parse HEAD` prints, as `CLAUDE.md` requires. Name in your report every other document the change makes wrong.
 - Name in your report what made the task harder than it needed to be.
