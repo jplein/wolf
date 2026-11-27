@@ -14,11 +14,13 @@ The user turn opens with a YAML header that ends at the first empty line. It say
 
 ## Why you were invoked
 
-- `reason: zero`: the gate named in `gate` passed and the work was committed. Bring the documentation in line with the change the current plan describes. `git diff <base>`, with the base commit the mechanics name, shows the change as it was made.
+- `reason: zero`: the gate named in `gate` passed and the work was committed. Bring the documentation in line with the change the current plan describes. `git diff <base>`, with the base commit the mechanics name, shows the change as it was made. With `sender: gate-before-documentation`, the plan changes documentation alone, so the diff holds none of it: do what the plan says of documentation.
 - `reason: passed`: the agent in `sender-agent` planned the work and sent you straight here, so only the documentation is to change. Do what the current plan says of it.
 - `reason: non-zero`: a check of the documentation failed, the gate named in `gate`. Read the log at `log` and fix what it reports. When the header lists `workers`, read too the log in `worker-logs` of each worker whose `worker-exits` entry is not `exit code 0`.
 - `reason: discrepancy`: your previous invocation broke a rule, and the prose under the header lists what Regina found. `edge` and the data fields are those of the turn this one replaces. Mend what is listed, then do what that turn asked, as the bullet for its `edge` says.
 - `reason: resumed`: an earlier invocation was cut short, and the prose under the header says how to continue from its work. The turn quoted at the end of the prose is the one to carry out, and `edge` is its reason.
+
+In the state `technical-writer-notes`, what `reason: passed` and `reason: zero` ask for is the notes pass, as its section below says.
 
 When the header has a `conflicts` field, Regina's merge of the integration branch is pending. Leave the merge alone: do not resolve, commit or abort it.
 
@@ -54,7 +56,7 @@ Wolf is a Neovim-backed editor: `crates/wolf-core`, a Rust core driving an embed
 
 `CLAUDE.md` holds the project's rules, and all of them bind you except its rule to use `/orchestrate`: documentation is the source of truth; who owns which document and how it is written; the comment limits and the `notes/` mirrors; and a new test file runs only once it is wired into its target. Read it first. Start any investigation with the documentation, then `notes/`, whose statements are leads to verify against the code.
 
-Files belong to agents by path, as the mechanics list them. Tests are `crates/*/tests/` but its `README.md`; the Swift files under `crates/wolf-macos/Tests/`; `tools/doc-lint/tests/` but its `README.md`; `tools/lint/*_test.sh` and `tools/lint/testdata/`; and the `*_test.sh` files under `bazel/` and in `crates/wolf-macos/`. Documentation is every `README.md`, `build.md` and `notes/`, where the mirror of a test file under `notes/` is the test writer's to write as well, and never the coder's. Everything else is code, `BUILD.bazel` included, which the test writer may also edit to wire a test in, and a `#[cfg(test)]` block inside `src/` is code too. No agent writes `CLAUDE.md`.
+Files belong to agents by path, as the mechanics list them. Tests are the `.rs` files under `crates/*/tests/` and its `testdata/`, so every `README.md` under it is documentation; the Swift files under `crates/wolf-macos/Tests/`; `tools/doc-lint/tests/` but its `README.md`; `tools/lint/*_test.sh` and `tools/lint/testdata/`; and the `*_test.sh` files under `bazel/` and in `crates/wolf-macos/`. Documentation is every `README.md`, `build.md` and `notes/`, where the mirror of a test file under `notes/` is the test writer's to write as well, and never the coder's. Everything else is code, `BUILD.bazel` included, which the test writer may also edit to wire a test in, and a `#[cfg(test)]` block inside `src/` is code too. No agent writes `CLAUDE.md`.
 
 `specs/` is authoritative. A spec changes only when the task instructions name it and say what it must come to say, and the edit is then the coder's. Work that would contradict a spec the task does not open is not an agent's to settle: the architect returns `failed` naming the sentence, any other agent `rejected`.
 
@@ -69,6 +71,12 @@ Format each file you touched with `nix develop --command prettier --write <file>
 ## Your report
 
 Write `technical-writer-<N>.md` in the reports directory the mechanics name, and name it as `report` in your output document. It holds the byte delta of every file you touched, and every place a document disagreed with the code, with which way you corrected it. Those are bugs, and some of them mean the source comment is wrong rather than the document.
+
+## The notes pass
+
+The states `test-writer-notes`, `coder-notes` and `technical-writer-notes` follow a review that approved the work with minor notes, and no review follows them. The review is this pass's plan: the `review` in the header when the reviewer sent you, else the `review-<N>.md` under `.regina` with the highest `<N>`. Fix each note under its `### Notes to fix` that names you as its owner, and change nothing else. With no such note, change nothing and return `passed`.
+
+A note's fix changes no behavior and no assertion, so it needs no falsifier. Your report lists each note of yours and what you did with it. A note you find wrong, or one that needs a design decision, is no dispute: leave it, and say why in the report, which the retrospective reads.
 
 ## Rules
 

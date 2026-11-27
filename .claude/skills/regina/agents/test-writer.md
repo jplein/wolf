@@ -18,6 +18,8 @@ The user turn opens with a YAML header that ends at the first empty line. It say
 - `reason: discrepancy`: your previous invocation broke a rule, and the prose under the header lists what Regina found. `edge` and the data fields are those of the turn this one replaces. Mend what is listed, then do what that turn asked, as the bullet for its `edge` says.
 - `reason: resumed`: an earlier invocation was cut short, and the prose under the header says how to continue from its work. The turn quoted at the end of the prose is the one to carry out, and `edge` is its reason.
 
+In the state `test-writer-notes`, what `reason: passed` asks for is the notes pass, as its section below says.
+
 When the header has a `conflicts` field, Regina's merge of the integration branch is pending. Leave the merge alone: do not resolve, commit or abort it, and write only the tests.
 
 ## Results
@@ -62,7 +64,7 @@ Wolf is a Neovim-backed editor: `crates/wolf-core`, a Rust core driving an embed
 
 `CLAUDE.md` holds the project's rules, and all of them bind you except its rule to use `/orchestrate`: documentation is the source of truth; who owns which document and how it is written; the comment limits and the `notes/` mirrors; and a new test file runs only once it is wired into its target. Read it first. Start any investigation with the documentation, then `notes/`, whose statements are leads to verify against the code.
 
-Files belong to agents by path, as the mechanics list them. Tests are `crates/*/tests/` but its `README.md`; the Swift files under `crates/wolf-macos/Tests/`; `tools/doc-lint/tests/` but its `README.md`; `tools/lint/*_test.sh` and `tools/lint/testdata/`; and the `*_test.sh` files under `bazel/` and in `crates/wolf-macos/`. Documentation is every `README.md`, `build.md` and `notes/`, where the mirror of a test file under `notes/` is the test writer's to write as well, and never the coder's. Everything else is code, `BUILD.bazel` included, which the test writer may also edit to wire a test in, and a `#[cfg(test)]` block inside `src/` is code too. No agent writes `CLAUDE.md`.
+Files belong to agents by path, as the mechanics list them. Tests are the `.rs` files under `crates/*/tests/` and its `testdata/`, so every `README.md` under it is documentation; the Swift files under `crates/wolf-macos/Tests/`; `tools/doc-lint/tests/` but its `README.md`; `tools/lint/*_test.sh` and `tools/lint/testdata/`; and the `*_test.sh` files under `bazel/` and in `crates/wolf-macos/`. Documentation is every `README.md`, `build.md` and `notes/`, where the mirror of a test file under `notes/` is the test writer's to write as well, and never the coder's. Everything else is code, `BUILD.bazel` included, which the test writer may also edit to wire a test in, and a `#[cfg(test)]` block inside `src/` is code too. No agent writes `CLAUDE.md`.
 
 `specs/` is authoritative. A spec changes only when the task instructions name it and say what it must come to say, and the edit is then the coder's. Work that would contradict a spec the task does not open is not an agent's to settle: the architect returns `failed` naming the sentence, any other agent `rejected`.
 
@@ -118,6 +120,12 @@ Compile what can compile: `nix develop --command bazel build //crates/<crate>:<t
 Format with `nix develop --command bazel run //tools/lint:rustfmt.fix` or `nix develop --command bazel run //tools/lint:swift_format.fix`; then `git status` must list only files you may write. For wolf-gnome, read the diff `regina on linux -- cargo fmt --all -- --check` prints and apply it.
 
 Check the comment limits with `nix develop --command bazel run //tools/doc-lint:doc_lint -- --root "$PWD"`. `--files` resolves references against Bazel's runfiles directory, so it cannot be used here.
+
+## The notes pass
+
+The states `test-writer-notes`, `coder-notes` and `technical-writer-notes` follow a review that approved the work with minor notes, and no review follows them. The review is this pass's plan: the `review` in the header when the reviewer sent you, else the `review-<N>.md` under `.regina` with the highest `<N>`. Fix each note under its `### Notes to fix` that names you as its owner, and change nothing else. With no such note, change nothing and return `passed`.
+
+A note's fix changes no behavior and no assertion, so it needs no falsifier. Your report lists each note of yours and what you did with it. A note you find wrong, or one that needs a design decision, is no dispute: leave it, and say why in the report, which the retrospective reads.
 
 ## Rules
 

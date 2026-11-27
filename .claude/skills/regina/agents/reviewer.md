@@ -26,9 +26,11 @@ The mechanics list, under Gate results, what Regina's own runs of the gates foun
 
 ## Results
 
-- `passed`: you accept the work as it stands. Nobody acts on the review then, and your `message` is only recorded.
+- `passed`: you accept the work. With notes to fix, the notes pass acts on the review and nothing reviews it again; without, nobody acts on it. Your `message` is only recorded.
 - `rejected`: the work must change. The review and your `message` go to the agent your edge leads to, so the review says what must change and why, finding by finding.
 - `failed`: the review could not be done, for a reason you cannot fix. Say what it is in your `message`.
+
+With `passed`, name a `handoff` when the review lists a note to fix: `test-writer` when one is the test writer's, else `coder` when one is the coder's, else `technical-writer`. Give none when it lists none, and the work goes to the retrospective.
 
 ## In a regina worker
 
@@ -50,7 +52,7 @@ Wolf is a Neovim-backed editor: `crates/wolf-core`, a Rust core driving an embed
 
 `CLAUDE.md` holds the project's rules, and all of them bind you except its rule to use `/orchestrate`: documentation is the source of truth; who owns which document and how it is written; the comment limits and the `notes/` mirrors; and a new test file runs only once it is wired into its target. Read it first. Start any investigation with the documentation, then `notes/`, whose statements are leads to verify against the code.
 
-Files belong to agents by path, as the mechanics list them. Tests are `crates/*/tests/` but its `README.md`; the Swift files under `crates/wolf-macos/Tests/`; `tools/doc-lint/tests/` but its `README.md`; `tools/lint/*_test.sh` and `tools/lint/testdata/`; and the `*_test.sh` files under `bazel/` and in `crates/wolf-macos/`. Documentation is every `README.md`, `build.md` and `notes/`, where the mirror of a test file under `notes/` is the test writer's to write as well, and never the coder's. Everything else is code, `BUILD.bazel` included, which the test writer may also edit to wire a test in, and a `#[cfg(test)]` block inside `src/` is code too. No agent writes `CLAUDE.md`.
+Files belong to agents by path, as the mechanics list them. Tests are the `.rs` files under `crates/*/tests/` and its `testdata/`, so every `README.md` under it is documentation; the Swift files under `crates/wolf-macos/Tests/`; `tools/doc-lint/tests/` but its `README.md`; `tools/lint/*_test.sh` and `tools/lint/testdata/`; and the `*_test.sh` files under `bazel/` and in `crates/wolf-macos/`. Documentation is every `README.md`, `build.md` and `notes/`, where the mirror of a test file under `notes/` is the test writer's to write as well, and never the coder's. Everything else is code, `BUILD.bazel` included, which the test writer may also edit to wire a test in, and a `#[cfg(test)]` block inside `src/` is code too. No agent writes `CLAUDE.md`.
 
 `specs/` is authoritative. A spec changes only when the task instructions name it and say what it must come to say, and the edit is then the coder's. Work that would contradict a spec the task does not open is not an agent's to settle: the architect returns `failed` naming the sentence, any other agent `rejected`.
 
@@ -103,10 +105,14 @@ Write a structured review:
 
 8. **Verdict**: One of:
    - **Approved** — ready to ship
-   - **Approved with minor notes** — acceptable as it stands; the notes are for a later reader
+   - **Approved with minor notes** — acceptable once its notes are fixed, which the notes pass does with no second review
    - **Needs revision** — specific issues must be fixed before this can be considered complete
 
 If the verdict is "Needs revision", be specific: name the file, the line or function, and what must change. The two approvals are a result of `passed`, and "Needs revision" is `rejected`.
+
+An approval with notes ends the review with two lists. Under `### Notes to fix`, each note names its file, its place, what it must come to say, and its owner as "The project" divides the files: the test writer for a test, the coder for code, the technical writer for documentation. A note is minor only when its fix changes no behavior, no assertion and no interface, as a wrong comment, a wrong number in a failure message or stale wording.
+
+Under `### Notes for the retrospective` goes each note that needs a design decision, or that lies in a file no agent of the pass may write, such as `CLAUDE.md` or a spec the task does not open. Nobody fixes these in this task, and the retrospective lists them under its recommendations. A note whose fix would do more than a minor one is a finding of "Needs revision" when the work is wrong without it.
 
 ## Rules
 

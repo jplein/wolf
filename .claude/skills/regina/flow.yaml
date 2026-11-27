@@ -1,15 +1,16 @@
-# The flow of a regina run on wolf, for the regina skill: regina's five-agent example less its
-# `final` gate, plus a retrospective agent. README.md beside this file has the reasons.
+# The flow of a regina run on wolf: regina's five-agent example less its `final` gate, plus a
+# retrospective, a documentation-only route and a notes pass. README.md beside it has the reasons.
 
 version: 1
 # A cap reached fails the task and its retry starts fresh, which costs more than rounds saved.
 max-iterations: 10
 
 sets:
-  # Test sources, harnesses and fixtures. A README among them is documentation, so it is negated.
+  # Test files and fixtures. A pattern that takes a directory takes every README under it, so
+  # crates/*/tests/ is named by file; doc-lint's tests keep theirs: their fixtures include Markdown.
   tests:
-    - "/crates/*/tests/**"
-    - "!/crates/*/tests/README.md"
+    - "/crates/*/tests/**/*.rs"
+    - "/crates/*/tests/testdata/**"
     - "/crates/wolf-macos/Tests/**/*.swift"
     - "/crates/wolf-macos/*_test.sh"
     - "/bazel/**/*_test.sh"
@@ -76,6 +77,7 @@ agents:
     writes: nothing
     mandated: review
     results: [passed, rejected, failed]
+    handoff: read
   retrospective:
     definition: agents/retrospective.md
     model: opus
@@ -107,6 +109,10 @@ states:
         handoff:
           test-writer: test-writer
           coder: coder
+          # A gate state takes no dirty-within-target-writes, so this gate commits whatever is dirty.
+          documentation-only:
+            to: gate-before-documentation
+            guard: [no-merge-pending]
           technical-writer:
             to: technical-writer
             guard: [no-merge-pending, dirty-within-target-writes]
@@ -123,9 +129,17 @@ states:
 
   coder:
     agent: coder
-    next: { passed: gate-implementation, rejected: architect, failed: architect }
+    next:
+      passed: gate-implementation
+      rejected: architect
+      failed: architect
 
   gate-implementation:
+    gate: implementation
+    next: { zero: commit-implementation, non-zero: architect }
+
+  # A plan of documentation alone: ./gates.sh judges the tree before the writer, as after a coder.
+  gate-before-documentation:
     gate: implementation
     next: { zero: commit-implementation, non-zero: architect }
 
@@ -147,9 +161,54 @@ states:
 
   reviewer:
     agent: reviewer
-    next: { passed: retrospective, rejected: architect, failed: architect }
+    next:
+      passed:
+        handoff:
+          none: retrospective
+          test-writer: test-writer-notes
+          coder: coder-notes
+          technical-writer: technical-writer-notes
+      rejected: architect
+      failed: architect
+
+  # The notes pass: an approval's minor notes, each fixed by its owner, with no second review.
+  # Its `rejected` and `failed` go to the architect, so that work is planned and reviewed again.
+  test-writer-notes:
+    agent: test-writer
+    next: { passed: coder-notes, rejected: architect, failed: architect }
+
+  coder-notes:
+    agent: coder
+    next:
+      passed: gate-implementation-notes
+      rejected: architect
+      failed: architect
+
+  gate-implementation-notes:
+    gate: implementation
+    next: { zero: commit-implementation-notes, non-zero: coder-notes }
+
+  commit-implementation-notes:
+    commit: all-dirty-files
+    next: technical-writer-notes
+
+  technical-writer-notes:
+    agent: technical-writer
+    next:
+      passed: gate-documentation-notes
+      rejected: architect
+      failed: architect
+
+  gate-documentation-notes:
+    gate: documentation
+    next: { zero: commit-documentation-notes, non-zero: technical-writer-notes }
+
+  commit-documentation-notes:
+    commit: all-dirty-files
+    next: retrospective
 
   # No agent can act on a failed retrospective, so it ends the attempt, where a person sees it.
+  # To drop it, lead every edge into it to coverage instead, and delete it, its gate and its commit.
   retrospective:
     agent: retrospective
     next: { passed: gate-retrospective, failed: attempt-failed }

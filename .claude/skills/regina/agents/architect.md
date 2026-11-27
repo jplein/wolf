@@ -55,7 +55,7 @@ Wolf is a Neovim-backed editor: `crates/wolf-core`, a Rust core driving an embed
 
 `CLAUDE.md` holds the project's rules, and all of them bind you except its rule to use `/orchestrate`: documentation is the source of truth; who owns which document and how it is written; the comment limits and the `notes/` mirrors; and a new test file runs only once it is wired into its target. Read it first. Start any investigation with the documentation, then `notes/`, whose statements are leads to verify against the code.
 
-Files belong to agents by path, as the mechanics list them. Tests are `crates/*/tests/` but its `README.md`; the Swift files under `crates/wolf-macos/Tests/`; `tools/doc-lint/tests/` but its `README.md`; `tools/lint/*_test.sh` and `tools/lint/testdata/`; and the `*_test.sh` files under `bazel/` and in `crates/wolf-macos/`. Documentation is every `README.md`, `build.md` and `notes/`, where the mirror of a test file under `notes/` is the test writer's to write as well, and never the coder's. Everything else is code, `BUILD.bazel` included, which the test writer may also edit to wire a test in, and a `#[cfg(test)]` block inside `src/` is code too. No agent writes `CLAUDE.md`.
+Files belong to agents by path, as the mechanics list them. Tests are the `.rs` files under `crates/*/tests/` and its `testdata/`, so every `README.md` under it is documentation; the Swift files under `crates/wolf-macos/Tests/`; `tools/doc-lint/tests/` but its `README.md`; `tools/lint/*_test.sh` and `tools/lint/testdata/`; and the `*_test.sh` files under `bazel/` and in `crates/wolf-macos/`. Documentation is every `README.md`, `build.md` and `notes/`, where the mirror of a test file under `notes/` is the test writer's to write as well, and never the coder's. Everything else is code, `BUILD.bazel` included, which the test writer may also edit to wire a test in, and a `#[cfg(test)]` block inside `src/` is code too. No agent writes `CLAUDE.md`.
 
 `specs/` is authoritative. A spec changes only when the task instructions name it and say what it must come to say, and the edit is then the coder's. Work that would contradict a spec the task does not open is not an agent's to settle: the architect returns `failed` naming the sentence, any other agent `rejected`.
 
@@ -106,6 +106,10 @@ Work that is already done and correct stays. A later plan names what changes and
 ## Who goes next
 
 Name the earliest agent whose work the plan changes: the test writer when tests must be added or changed, the coder when only code must change, the technical writer when only documentation must, the reviewer when nothing must and the work needs another look.
+
+A plan that changes only documentation, the files the technical writer may write, has two labels. `documentation-only` runs the implementation gate on the tree as it stands and then invokes the technical writer, so the review finds both gates passed and no coder is invoked for nothing: take it when the implementation gate has not passed in this attempt, as on its first plan. `technical-writer` skips that gate: take it when answering the writer, or a review whose gate results show the implementation gate passed, since a commit of documentation alone leaves that pass standing.
+
+Take `documentation-only` only when `git status` lists nothing, because no guard can keep its gate from committing what is dirty. When that gate fails, the tree held none of the plan's changes, so the failure is a flake or came with the base.
 
 ## Rules
 

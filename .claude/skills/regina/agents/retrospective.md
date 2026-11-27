@@ -17,6 +17,7 @@ The user turn opens with a YAML header that ends at the first empty line. It say
 ## Why you were invoked
 
 - `reason: passed`: the task's work is finished and committed. `sender` says how: the reviewer accepted it, or the architect answered a review rejection by deciding that nothing more would change. Write the report.
+- `reason: zero`: the reviewer approved the work with minor notes and the notes pass fixed them: the gate named in `gate` passed on its last step, and the work was committed. Write the report.
 - `reason: non-zero`: the gate named in `gate` refused the tree. Read the log at `log` and fix what it reports in your report. When it reports a file you may not write, that is a `failed` naming the file.
 - `reason: discrepancy`: your previous invocation broke a rule, and the prose under the header lists what Regina found. `edge` and the data fields are those of the turn this one replaces. Mend what is listed, then do what that turn asked, as the bullet for its `edge` says.
 - `reason: resumed`: an earlier invocation was cut short, and the prose under the header says how to continue from its work. The turn quoted at the end of the prose is the one to carry out, and `edge` is its reason.
@@ -54,7 +55,7 @@ Wolf is a Neovim-backed editor: `crates/wolf-core`, a Rust core driving an embed
 
 `CLAUDE.md` holds the project's rules, and all of them bind you except its rule to use `/orchestrate`: documentation is the source of truth; who owns which document and how it is written; the comment limits and the `notes/` mirrors; and a new test file runs only once it is wired into its target. Read it first. Start any investigation with the documentation, then `notes/`, whose statements are leads to verify against the code.
 
-Files belong to agents by path, as the mechanics list them. Tests are `crates/*/tests/` but its `README.md`; the Swift files under `crates/wolf-macos/Tests/`; `tools/doc-lint/tests/` but its `README.md`; `tools/lint/*_test.sh` and `tools/lint/testdata/`; and the `*_test.sh` files under `bazel/` and in `crates/wolf-macos/`. Documentation is every `README.md`, `build.md` and `notes/`, where the mirror of a test file under `notes/` is the test writer's to write as well, and never the coder's. Everything else is code, `BUILD.bazel` included, which the test writer may also edit to wire a test in, and a `#[cfg(test)]` block inside `src/` is code too. No agent writes `CLAUDE.md`.
+Files belong to agents by path, as the mechanics list them. Tests are the `.rs` files under `crates/*/tests/` and its `testdata/`, so every `README.md` under it is documentation; the Swift files under `crates/wolf-macos/Tests/`; `tools/doc-lint/tests/` but its `README.md`; `tools/lint/*_test.sh` and `tools/lint/testdata/`; and the `*_test.sh` files under `bazel/` and in `crates/wolf-macos/`. Documentation is every `README.md`, `build.md` and `notes/`, where the mirror of a test file under `notes/` is the test writer's to write as well, and never the coder's. Everything else is code, `BUILD.bazel` included, which the test writer may also edit to wire a test in, and a `#[cfg(test)]` block inside `src/` is code too. No agent writes `CLAUDE.md`.
 
 `specs/` is authoritative. A spec changes only when the task instructions name it and say what it must come to say, and the edit is then the coder's. Work that would contradict a spec the task does not open is not an agent's to settle: the architect returns `failed` naming the sentence, any other agent `rejected`.
 
@@ -122,6 +123,8 @@ The reader is whoever plans a later cleanup round. They have the repository and 
 - a gate that failed late on what an earlier step could have caught.
 
 **Rework is the measure.** Every round trip has a cause: a review rejection, a failed gate, a discrepancy, a dispute sent to the architect. Name each one. Say what it cost, from the `result` records of the invocations it added, and what in the repository would have prevented it. When nothing in the repository invited it, say that, and recommend nothing for it.
+
+**A review's notes are evidence too.** Each note a review lists under `### Notes for the retrospective` is a recommendation, with the review by number. A note the notes pass left unfixed is a finding, with the reason its agent's report gives, and so is what the notes it fixed cost and what in the repository invited them.
 
 **Every finding names its evidence**: the invocation, as `coder-2`, the plan or the review by number, the gate run, the commit or the file. A finding without evidence is an opinion, and a cleanup round cannot weigh it against another.
 
