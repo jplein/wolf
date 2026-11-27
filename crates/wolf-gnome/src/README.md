@@ -8,11 +8,11 @@ The GTK front-end's modules, one entry each. The pure seams here are the Linux c
 
 #### `about.rs`
 
-Purpose: the About dialog: a pure text seam over the bundled fonts' and linked libraries' licence notices, and the toplevel window that shows it. It discharges their attribution obligations, so its content has legal weight.
+Purpose: the About dialog: a pure text seam over the bundled fonts' and linked libraries' licence notices, and the toplevel window that shows it. It discharges their attribution obligations, so its content has legal weight. Its pure seam is `about_text`.
 
 #### `actions.rs`
 
-Purpose: the action namespace as data, one row per `gio` action, with the chord matcher `action_for_key` and the invariant checker. `ACTION_TABLE` and `MENU_SECTIONS` are the one table the menu, the accelerators and the command dispatch read ([The accelerator namespace](../../../notes/wolf-gnome/the-accelerator-namespace.md)).
+Purpose: the action namespace as data, one row per `gio` action, with the chord matcher `action_for_key` and the invariant checker. `ACTION_TABLE` and `MENU_SECTIONS` are the one table the menu, the accelerators and the command dispatch read ([The accelerator namespace](../../../notes/wolf-gnome/the-accelerator-namespace.md)). Its other pure seams are `parse_accel`, `ctrl_fold` and `forbidden_reason`.
 
 **Decisions**
 
@@ -80,7 +80,7 @@ Purpose: the pure rulebook behind the command-line strip, the message toast and 
 
 #### `command_action.rs`
 
-Purpose: the pure mapping from a drained `wolf_core::Command` to the `UiAction` this front-end performs, with no catch-all arm. `ui_action_for_front_end_action` covers the `actions::ACTION_TABLE` rows carrying no command, and is the only other way an action is installed.
+Purpose: the pure mapping from a drained `wolf_core::Command` to the `UiAction` this front-end performs, with no catch-all arm. The mapping is `ui_action_for`. `ui_action_for_front_end_action` covers the `actions::ACTION_TABLE` rows carrying no command, and is the only other way an action is installed.
 
 #### `config_seam.rs`
 
@@ -92,7 +92,7 @@ Purpose: the pure configuration seam, every rule about consuming a `wolf_core::W
 
 #### `coordinator.rs`
 
-Purpose: the process-scoped layer above the windows, and their ordered registry. [Its note](../../../notes/wolf-gnome/the-coordinator-and-its-windows.md) owns what lives there, why, and the state protocol.
+Purpose: the process-scoped layer above the windows, and their ordered registry. [Its note](../../../notes/wolf-gnome/the-coordinator-and-its-windows.md) owns what lives there, why, and the state protocol. Its pure seam is `next_free_id`.
 
 **Decisions**
 
@@ -119,7 +119,7 @@ Purpose: pure cursor geometry and colour: `cursor_rect`, whose `cell_percentage`
 
 #### `drawer.rs`
 
-Purpose: the terminal drawer's pure rulebook: its share of the pane area (`DrawerShare`, one per tab, which a drawer's close or a restart keeps), and which pane `<C-w>h/j/k/l` focuses once a drawer exists (`focus_target`). Why the drawer sits outside the pane tree is in [Window structure](../../../notes/wolf-gnome/window-structure.md).
+Purpose: the terminal drawer's pure rulebook: its share of the pane area (`DrawerShare`, one per tab, which a drawer's close or a restart keeps), and which pane `<C-w>h/j/k/l` focuses once a drawer exists (`focus_target`). Its other pure seams are `bottom_most_leaf`, `drawer_up_target` and `DrawerState`. Why the drawer sits outside the pane tree is in [Window structure](../../../notes/wolf-gnome/window-structure.md).
 
 **Decisions**
 
@@ -128,7 +128,7 @@ Purpose: the terminal drawer's pure rulebook: its share of the pane area (`Drawe
 
 #### `editor_inset.rs`
 
-Purpose: a pane's chrome as arithmetic, which every pixel-to-grid conversion routes through: the rectangle its grid paints into (`grid_rect`), the content-width cap and its centring (`ColumnCap`, and `column_cap`, where `b:wolf_full_width` becomes geometry), the grid size left (`grid_size_for_pane`), and a pane's content floor (`min_pane_size`).
+Purpose: a pane's chrome as arithmetic, which every pixel-to-grid conversion routes through: the rectangle its grid paints into (`grid_rect`), the content-width cap and its centring (`ColumnCap`, and `column_cap`, where `b:wolf_full_width` becomes geometry), the grid size left (`grid_size_for_pane`), and a pane's content floor (`min_pane_size`). Its other pure seam is `grid_local`.
 
 **Decisions**
 
@@ -141,11 +141,11 @@ Purpose: the process-global glue behind [`frame_stats.rs`](#frame_statsrs): the 
 
 #### `frame_stats.rs`
 
-Purpose: the pure frame-time seam: the `Bucket` set, accumulation, percentiles, report formatting, the `WOLF_FRAME_STATS*` parsers and the interval decision. It reads no clock or environment and holds nothing process-global, so it runs in a parallel `cargo test`; [`frame_metrics.rs`](#frame_metricsrs) owns all three.
+Purpose: the pure frame-time seam: the `Bucket` set, accumulation, percentiles, report formatting, the `WOLF_FRAME_STATS*` parsers and the interval decision. Its pure seams are `FrameStats`, `Report`, `BucketSummary`, `percentile`, `format_report`, `is_enabled`, `report_interval`, `report_file_path` and `interval_elapsed`. It reads no clock or environment and holds nothing process-global, so it runs in a parallel `cargo test`; [`frame_metrics.rs`](#frame_metricsrs) owns all three.
 
 #### `geometry.rs`
 
-Purpose: the pure pixel conversions behind every resize, pointer event and divider position. `cell_at` takes grid-local coordinates and answers `(row, col)`, `wolf_core::MouseEvent`'s order; `grid_size_for` never answers below one cell.
+Purpose: the pure pixel conversions behind every resize, pointer event and divider position. `cell_at` takes grid-local coordinates and answers `(row, col)`, `wolf_core::MouseEvent`'s order; `grid_size_for` never answers below one cell. Its other pure seams are `divider_position` and `divider_span_fraction`.
 
 **Decisions**
 
@@ -182,7 +182,7 @@ Purpose: where the captive `runtime/nvim/init.lua` lives, as a function of injec
 
 #### `layout.rs`
 
-Purpose: the pure n-ary pane-layout tree behind split panes, mirroring Neovim's frame model. `split` is a no-op on a non-leaf, and `remove` on the last pane, so the tree is never empty; `split_root_left` is [§5.2](../../../specs/cli-and-file-open.md#52-choosing-the-pane)'s whole-tab split. A divider's fraction is its child's share of the remainder ([Pane weights and dividers](../../../notes/wolf-gnome/pane-weights-and-dividers.md)).
+Purpose: the pure n-ary pane-layout tree behind split panes, mirroring Neovim's frame model. The pure seams are `PaneTree` and `Orientation`. `split` is a no-op on a non-leaf, and `remove` on the last pane, so the tree is never empty; `split_root_left` is [§5.2](../../../specs/cli-and-file-open.md#52-choosing-the-pane)'s whole-tab split. A divider's fraction is its child's share of the remainder ([Pane weights and dividers](../../../notes/wolf-gnome/pane-weights-and-dividers.md)).
 
 **Decisions**
 
@@ -198,7 +198,7 @@ Purpose: the crate root: the modules, and re-exports of the display-free seams.
 
 #### `liveness_ui.rs`
 
-Purpose: the pure rulebook for crash and stall recovery: `liveness_ui`, `overlay_message`, `restart_outcome`, `reopen_order`, `restart_button_rect`, and `terminal_restore`, a restart's [steps](../../../specs/terminal-panes.md#when-neovim-dies). `restart_button_rect` collapses on a too-small allocation, so a caller deriving a click must check the size first.
+Purpose: the pure rulebook for crash and stall recovery: `liveness_ui`, `overlay_message`, `restart_outcome`, `reopen_order`, `restart_button_rect`, and `terminal_restore`, a restart's [steps](../../../specs/terminal-panes.md#when-neovim-dies) as a `TerminalRestore`. `restart_button_rect` collapses on a too-small allocation, so a caller deriving a click must check the size first.
 
 #### `main.rs`
 
@@ -219,7 +219,7 @@ Purpose: the pure rulebook for per-pane Back and Forward: which window a press a
 
 #### `open_folder.rs`
 
-Purpose: the pure seam of Open Folder ([§6](../../../specs/application-state.md#6-opening-a-folder)): the step a directory takes (`step`), the plan of the tab it fills or opens (`plan`), and the size a fill applies (`fill_size`, only for its window's only tab). [`coordinator.rs`](#coordinatorrs) gathers the windows and acts ([why there](../../../notes/wolf-gnome/the-coordinator-and-its-windows.md#opening-a-folder)).
+Purpose: the pure seam of Open Folder ([§6](../../../specs/application-state.md#6-opening-a-folder)): the step a directory takes (`step`), the plan of the tab it fills or opens (`plan`), and the size a fill applies (`fill_size`, only for its window's only tab), over `LiveWindow` readings. [`coordinator.rs`](#coordinatorrs) gathers the windows and acts ([why there](../../../notes/wolf-gnome/the-coordinator-and-its-windows.md#opening-a-folder)).
 
 **Decisions**
 
@@ -227,11 +227,11 @@ Purpose: the pure seam of Open Folder ([§6](../../../specs/application-state.md
 
 #### `open_request.rs`
 
-Purpose: the pure routing of a `wolf` request ([§3–§5](../../../specs/cli-and-file-open.md#3-tab-ids)) to Activate, Open Folder, the tab its `WOLF_TAB_ID` names, or its file's project: `route`, `current_tab`, `placement` and `may_place`. [`coordinator.rs`](#coordinatorrs) acts on it. A port of [`FileOpenSeam.swift`](../../wolf-macos/Sources/WolfKeyMap/README.md#fileopenseamswift), keyed by the `(WindowId, TabId)` pair.
+Purpose: the pure routing of a `wolf` request ([§3–§5](../../../specs/cli-and-file-open.md#3-tab-ids)) to Activate, Open Folder, the tab its `WOLF_TAB_ID` names, or its file's project: `route`, `current_tab`, `placement` and `may_place`. [`coordinator.rs`](#coordinatorrs) acts on it. A port of [`FileOpenSeam.swift`](../../wolf-macos/Sources/WolfKeyMap/README.md#fileopenseamswift), keyed by `TabRef`, the `(WindowId, TabId)` pair.
 
 #### `other_pane_seam.rs`
 
-Purpose: the pure rule for the pane Preview or Edit in Another Pane binds into (`target`); [`pane_view.rs`](#pane_viewrs) resolves it to a Neovim window. An `active` that is no leaf, such as the drawer, yields `None`, a no-op rather than a stray split.
+Purpose: the pure rule for the pane Preview or Edit in Another Pane binds into (`target`, over `Side` and `Target`); [`pane_view.rs`](#pane_viewrs) resolves it to a Neovim window. An `active` that is no leaf, such as the drawer, yields `None`, a no-op rather than a stray split.
 
 **Decisions**
 
@@ -262,7 +262,7 @@ Purpose: the command-palette overlay: registry commands, an Open Recent row per 
 
 #### `pane_layout.rs`
 
-Purpose: the pure codec between the live pane tree and the saved `wolf_core::app_state::Node`: `resolve_leaves`, all-or-nothing, `encode_with_views`, `saved_views`, `pane_ref`, `leaf_index`, `decode`, and the `MAX_RESTORE_LEAVES` and `MAX_RESTORE_DEPTH` caps, which are restore policy rather than a tree limit.
+Purpose: the pure codec between the live pane tree and the saved `wolf_core::app_state::Node`: `resolve_leaves`, all-or-nothing, `encode_with_views`, `saved_views`, `pane_ref`, `leaf_index`, `decode`, and the `MAX_RESTORE_LEAVES` and `MAX_RESTORE_DEPTH` caps, which are restore policy rather than a tree limit. Its other pure seams are `encode`, `is_empty_leaf`, `leaf_count`, `leaf_paths_dfs`, `WinContent`, `PaneView` and `LayoutGather`.
 
 #### `pane_view.rs`
 
@@ -279,7 +279,7 @@ Purpose: one tab's GTK glue: the tree as nested `gtk::Paned`, a `gtk::Overlay` p
 
 #### `pane_zoom.rs`
 
-Purpose: the pure Zoom Pane rules: which pane each event leaves zoomed (`zoomed_after`), and where focus (`focus_origin`), a restore (`restore_targets`) and the other-pane commands (`other_pane_target`) go while zoomed. `zoomed_after`'s `panes` must be the tree's leaves plus the open drawer, or the drawer cannot zoom.
+Purpose: the pure Zoom Pane rules: which pane each event leaves zoomed (`zoomed_after`), and where focus (`focus_origin`), a restore (`restore_targets`) and the other-pane commands (`other_pane_target`) go while zoomed. `zoomed_after`'s `panes` must be the tree's leaves plus the open drawer, or the drawer cannot zoom. Its other pure seam is `ZoomEvent`.
 
 **Decisions**
 
@@ -316,7 +316,7 @@ Purpose: the pure state machine behind the preview's coalesced render; every ent
 
 #### `preview_link.rs`
 
-Purpose: the pure URI rulebook for a link clicked in the preview: what it means (`classify`, over the URI WebKit already resolved against the base), the base URI a document loads against (`file_uri_for`, whose exact form [Following a link in the preview](../../../notes/wolf-gnome/following-a-link-in-the-preview.md) states), and the fragment-scroll script. [`preview_ui.rs`](#preview_uirs) owns the gates and load strategy.
+Purpose: the pure URI rulebook for a link clicked in the preview: what it means (`classify`, over the URI WebKit already resolved against the base), the base URI a document loads against (`file_uri_for`, whose exact form [Following a link in the preview](../../../notes/wolf-gnome/following-a-link-in-the-preview.md) states), and the fragment-scroll script (`scroll_into_view_js`). [`preview_ui.rs`](#preview_uirs) owns the gates and load strategy.
 
 **Decisions**
 
@@ -327,17 +327,19 @@ Purpose: the pure URI rulebook for a link clicked in the preview: what it means 
 
 Purpose: the pure rulebook for the preview pane: its gates (`preview_press`, `edit_press`, `may_render`, `preview_file_press`, `browser_press`), how a document reaches the view (`document_update`, `needs_reload`), the pane's status (`preview_status`), and the page's scroll report ([why](../../../notes/wolf-gnome/application-state.md#capture-moments)). A search result's repoint is [`search_panel.rs`](#search_panelrs)'s gate.
 
+Its other pure seams are `reported_scroll`, `scroll_to_fraction_js`, `browser_url` and `PreviewLoad`.
+
 #### `preview_width.rs`
 
 Purpose: the pure root style that caps and centres a preview page (`root_style`, with a `max-width` only where [`editor_inset.rs`](#editor_insetrs)'s `grid_rect` would cap), the document carrying it on `<html>` (`styled_document`), and the script setting it live (`apply_root_style_js`). [The preview's content width](../../../notes/wolf-gnome-decisions.md#the-previews-content-width) says why the page caps; [`pane_view.rs`](#pane_viewrs) is the glue.
 
 #### `ready_seam.rs`
 
-Purpose: the pure predicate behind the test-only readiness file (`launch_readiness`), over per-window readings from each selected tab. [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md#the-readiness-file) says why each condition is there; `READY_FILE_ENV` and `LINE_PREFIX` are the contract with the harness's `wait_ready`.
+Purpose: the pure predicate behind the test-only readiness file (`launch_readiness`), over per-window readings from each selected tab. Its other pure seams are `PaneReadiness`, `WindowReadiness`, `Blocker`, `grid_settled`, `ready_file_path`, `ready_file_contents`, `next_step` and `ReadyStep`. [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md#the-readiness-file) says why each condition is there; `READY_FILE_ENV` and `LINE_PREFIX` are the contract with the harness's `wait_ready`.
 
 #### `refresh_coalescer.rs`
 
-Purpose: the pure state machine behind the sidebar's trailing refresh: a burst of traversal batches collapses into one rebuild per `REFRESH_INTERVAL`. `request` answers `Some(generation)` when the caller must arm a one-shot timeout.
+Purpose: the pure state machine (`RefreshCoalescer`) behind the sidebar's trailing refresh: a burst of traversal batches collapses into one rebuild per `REFRESH_INTERVAL`. `request` answers `Some(generation)` when the caller must arm a one-shot timeout.
 
 **Decisions**
 
@@ -423,7 +425,7 @@ Purpose: the header bar's sidebar control, an `adw::ToggleGroup` of Files and Se
 
 #### `stacking.rs`
 
-Purpose: the pure window stacking order and per-window tab recency of [application-state.md §3](../../../specs/application-state.md#3-stacking-order-and-tab-recency), kept from events because Wayland lets a client query neither.
+Purpose: the pure window stacking order and per-window tab recency (`TabRecency`) of [application-state.md §3](../../../specs/application-state.md#3-stacking-order-and-tab-recency), kept from events because Wayland lets a client query neither.
 
 **Decisions**
 
@@ -432,6 +434,8 @@ Purpose: the pure window stacking order and per-window tab recency of [applicati
 #### `state_seam.rs`
 
 Purpose: the pure application-state seam: what to restore at launch (`restore_plans`, never an empty vec), and the write side, what each tab and window contributes to the saved state and whether a commit or a close writes anything (`tab_entry`, `seeded_tab`, `sidebar_entry`, `ordered_tab_states`, `window_entry`, `window_state`, `close_commit`). [Application state](../../../notes/wolf-gnome/application-state.md) owns the rules.
+
+Its other pure seams are `TabPlan`, `present_after`, `new_window_size`, `active_size`, `restored_window_size`, `sidebar_is_shown`, `snapshot_cwd`, `may_snapshot`, `restored_sidebar`, `restore_runs_search` and `may_capture_cursor`.
 
 **Decisions**
 
@@ -472,7 +476,7 @@ Purpose: the GTK glue for native tabs, each owning its `WolfCore`, wake drain, r
 
 #### `tabs_ui.rs`
 
-Purpose: the pure rulebook for a window's native tabs: what a close does (`close_outcome`, `close_page_now`), a tab's title and tooltip (`tab_label`), Close Window's and Quit's decisions (`tab_unsaved`, `window_close`, `quit`), and which tab's Neovim holds the UI focus (`focused_tab`, `focus_edges`). [`tab_view.rs`](#tab_viewrs) carries them out.
+Purpose: the pure rulebook for a window's native tabs: what a close does (`close_outcome`, `close_page_now`), a tab's title and tooltip (`tab_label`), Close Window's and Quit's decisions (`tab_unsaved`, `window_close`, `quit`), and which tab's Neovim holds the UI focus (`focused_tab`, `focus_edges`), over `TabId` and `FocusEdge`. [`tab_view.rs`](#tab_viewrs) carries them out.
 
 **Public API**
 
@@ -497,7 +501,7 @@ Purpose: the pure title seam of the window and each tab: the working directory w
 
 #### `titlebar_background.rs`
 
-Purpose: the background of the header bar, the tab bar and an empty tab's view, by [Theming](../../../specs/architecture.md#theming)'s rule: the pure decisions (`titlebar_background`, `empty_state_background`, `stylesheet_update`), their stylesheets, and the providers applying them. The counterpart of [`TitlebarBackground.swift`](../../wolf-macos/Sources/WolfKeyMap/README.md#titlebarbackgroundswift).
+Purpose: the background of the header bar, the tab bar and an empty tab's view, by [Theming](../../../specs/architecture.md#theming)'s rule: the pure decisions (`titlebar_background`, `empty_state_background`, `stylesheet_update`), their stylesheets (`titlebar_css`, `empty_state_css`), and the providers applying them. The counterpart of [`TitlebarBackground.swift`](../../wolf-macos/Sources/WolfKeyMap/README.md#titlebarbackgroundswift).
 
 **Decisions**
 
@@ -510,7 +514,7 @@ Purpose: a re-export shim over `wolf_core::tree`, which projects the flat file l
 
 #### `tree_gate.rs`
 
-Purpose: the pure gate every refresh of the sidebar's two pages passes, visibility first and version second. A refresh requested while hidden is refused and owed, and `set_visible` answers `true` only for the catch-up that owes.
+Purpose: the pure gate (`TreeRefreshGate`) every refresh of the sidebar's two pages passes, visibility first and version second. A refresh requested while hidden is refused and owed, and `set_visible` answers `true` only for the catch-up that owes.
 
 **Decisions**
 
