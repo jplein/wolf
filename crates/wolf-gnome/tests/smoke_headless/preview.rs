@@ -1196,7 +1196,8 @@ const DPI_PIN_STDERR_PREFIX: &str = "wolf-xft-dpi-pinned:";
 ///
 /// A precondition gets NO revert: inventing one would manufacture a discriminator this
 /// smoke does not have. The `measured` column is from an actual red run, per
-/// `tests/README.md`'s "A red-run demonstration is a deliverable, not a formality".
+/// `crates/wolf-gnome/tests/smoke_headless/README.md#smoke-conventions`, "A red-run
+/// demonstration is a deliverable, not a formality".
 /// Rows marked unmeasured have not been run against a captured red.
 ///
 /// | # | assertion | kind | revert | measured |
@@ -1773,7 +1774,8 @@ fn preview_burst_delay_stays_below_the_coalescer_trailing_delay() {
 /// swapped into a body whose BASE URI still points at the previous file's directory,
 /// which is invisible to a readback and to a single click. The guard's only falsifiable
 /// evidence is `preview_ui::tests::document_update_table`. This is the same shape as
-/// the vacuously-passing checks `tests/README.md` collects under "Smoke conventions"
+/// the vacuously-passing checks that
+/// `crates/wolf-gnome/tests/smoke_headless/README.md#smoke-conventions` collects
 /// ("A red-run demonstration is a deliverable, not a formality"): **a check aimed at
 /// the right property, looking somewhere the defect cannot appear.** Saying so
 /// here is what stops a later reader trying that revert, seeing green, and concluding
@@ -1788,7 +1790,8 @@ fn preview_burst_delay_stays_below_the_coalescer_trailing_delay() {
 ///
 /// A precondition gets NO revert: inventing one would manufacture a discriminator this
 /// smoke does not have. The `measured` column is from an actual red run, per
-/// `tests/README.md`'s "A red-run demonstration is a deliverable, not a formality".
+/// `crates/wolf-gnome/tests/smoke_headless/README.md#smoke-conventions`, "A red-run
+/// demonstration is a deliverable, not a formality".
 ///
 /// | # | assertion | kind | revert | measured |
 /// | --- | --- | --- | --- | --- |
@@ -2908,11 +2911,11 @@ exit 0
 ///
 /// A precondition gets NO revert: inventing one would manufacture a discriminator
 /// this smoke does not have. The `measured` column carries the readings from actual
-/// runs, per `tests/README.md`'s "A red-run demonstration is a deliverable, not a
-/// formality", taken at GTK 4.22.4, libadwaita 1.9.0, WebKitGTK 2.52.4 and `cage`
-/// 0.3.0 on a 1280x720 output. A cell reading `n/a` is a precondition with no red run
-/// by design; the three discriminators each carry both their green and their red
-/// reading.
+/// runs, per `crates/wolf-gnome/tests/smoke_headless/README.md#smoke-conventions`,
+/// "A red-run demonstration is a deliverable, not a formality", taken at GTK 4.22.4,
+/// libadwaita 1.9.0, WebKitGTK 2.52.4 and `cage` 0.3.0 on a 1280x720 output. A cell
+/// reading `n/a` is a precondition with no red run by design; the three
+/// discriminators each carry both their green and their red reading.
 ///
 /// | # | assertion | kind | falsifying edit | measured |
 /// | --- | --- | --- | --- | --- |

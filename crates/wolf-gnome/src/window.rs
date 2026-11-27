@@ -931,8 +931,7 @@ fn wire_ready_triggers(handle: &WindowHandle, coordinator: Weak<CoordinatorInner
 /// through [`crate::im_ui::commit_decision`] instead. The precedence and the commit
 /// rulebook are [`mod@crate::im_ui`]'s, not this function's — every branch below
 /// reads its answer from [`crate::im_ui::key_route`]. No smoke discriminates the
-/// overlay guard — see "What is still unproven" in
-/// `crates/wolf-gnome/tests/README.md`.
+/// overlay guard — see `notes/crates/wolf-gnome/tests/what-is-still-unproven.md`.
 ///
 /// Where a key or a commit goes is decided at that moment, against the SELECTED
 /// tab's core ([`TabsHandle::selected_core`]) and [`TabsHandle::active_terminal`]: a

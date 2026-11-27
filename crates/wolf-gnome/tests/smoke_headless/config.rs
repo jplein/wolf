@@ -339,8 +339,9 @@ const APPEARANCE_LIGHT_READBACK_NAME: &str = "wolf_gnome_appearance_background_2
 /// into one: "an app died before it was ready for input" is a different
 /// investigation depending on whether it was the launch reading a forced `dark` or
 /// the one reading a forced `light`, and the convention
-/// `crates/wolf-gnome/tests/README.md` states is about the CODE carrying the
-/// meaning rather than about the cause being recoverable by other means.
+/// `crates/wolf-gnome/tests/smoke_headless/README.md#smoke-conventions` states is
+/// about the CODE carrying the meaning rather than about the cause being
+/// recoverable by other means.
 ///
 /// `wait_ready` and `quit_app` additionally print the run's LABEL on stderr, which
 /// costs nothing, makes a truncated log readable without the code table, and is what
@@ -461,8 +462,8 @@ exit 0
 ///
 /// ## What it does NOT prove
 ///
-/// Three entries for `tests/README.md`'s "What is still unproven", named here so
-/// they are not lost.
+/// Three entries for `notes/crates/wolf-gnome/tests/what-is-still-unproven.md`,
+/// named here so they are not lost.
 ///
 /// **The `auto` arm.** Under `cage` there is no settings portal and no xsettings
 /// bridge, so `adw::StyleManager::is_dark()` is constant for a whole run and no

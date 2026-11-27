@@ -2177,7 +2177,8 @@ fn open_recent_from_a_folder_tab_opens_a_fresh_window_under_cage() {
 /// the header bar's toggle group as well.
 ///
 /// It does NOT cover the RESTORE half: no smoke hides the sidebar, quits and
-/// relaunches. That gap is recorded in `tests/README.md`, "What is still unproven",
+/// relaunches. That gap is recorded in
+/// `notes/crates/wolf-gnome/tests/what-is-still-unproven.md`,
 /// together with the reason it matters — the persistence write side changed from
 /// `!empty` to the stored preference, and a stale write plus a live read would hide
 /// the sidebar after any empty-state session.
@@ -2391,7 +2392,8 @@ fn sidebar_toggle_chord_hides_the_file_tree_under_cage() {
 ///
 /// A precondition gets NO revert: inventing one would manufacture a discriminator this
 /// smoke does not have. The `measured` column is from an actual red run, per
-/// `tests/README.md`'s "A red-run demonstration is a deliverable, not a formality".
+/// `crates/wolf-gnome/tests/smoke_headless/README.md#smoke-conventions`, "A red-run
+/// demonstration is a deliverable, not a formality".
 ///
 /// | # | assertion | kind | revert | measured |
 /// | --- | --- | --- | --- | --- |

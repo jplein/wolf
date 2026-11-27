@@ -709,9 +709,9 @@ impl TreeHandle {
 /// [`build`] calls this, so a second window adds a SECOND identical provider to
 /// the same default display. Two identical providers are inert — the rule
 /// resolves the same either way — and the call is deliberately NOT hoisted into
-/// [`crate::coordinator`]: `crates/wolf-gnome/tests/README.md` records that the
-/// current-file bold reaches no pixel in either suite, so the hoist would be an
-/// unverifiable edit to the startup path.
+/// [`crate::coordinator`]: `notes/crates/wolf-gnome/tests/what-is-still-unproven.md`
+/// records that the current-file bold reaches no pixel in either suite, so the
+/// hoist would be an unverifiable edit to the startup path.
 fn install_css() {
     if let Some(display) = gdk::Display::default() {
         let provider = gtk::CssProvider::new();

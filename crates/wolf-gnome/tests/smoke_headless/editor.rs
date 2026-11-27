@@ -1597,7 +1597,8 @@ fn new_untitled_buffer_replaces_open_file_under_cage() {
 ///
 /// A precondition gets NO revert: inventing one would manufacture a discriminator this
 /// smoke does not have. The `measured` column is from an actual red run, per
-/// `tests/README.md`'s "A red-run demonstration is a deliverable, not a formality".
+/// `crates/wolf-gnome/tests/smoke_headless/README.md#smoke-conventions`, "A red-run
+/// demonstration is a deliverable, not a formality".
 ///
 /// | # | assertion | kind | revert | measured |
 /// | --- | --- | --- | --- | --- |
@@ -1759,7 +1760,8 @@ fn command_palette_chord_runs_the_selected_command_under_cage() {
 ///
 /// A precondition gets NO revert: inventing one would manufacture a discriminator this
 /// smoke does not have. The `measured` column is from an actual red run, per
-/// `tests/README.md`'s "A red-run demonstration is a deliverable, not a formality".
+/// `crates/wolf-gnome/tests/smoke_headless/README.md#smoke-conventions`, "A red-run
+/// demonstration is a deliverable, not a formality".
 ///
 /// | # | assertion | kind | revert | measured |
 /// | --- | --- | --- | --- | --- |
@@ -2020,7 +2022,8 @@ fn buffer_picker_chord_switches_to_the_queried_buffer_under_cage() {
 ///
 /// A precondition gets NO revert: inventing one would manufacture a discriminator this
 /// smoke does not have. The `measured` column is from an actual red run, per
-/// `tests/README.md`'s "A red-run demonstration is a deliverable, not a formality".
+/// `crates/wolf-gnome/tests/smoke_headless/README.md#smoke-conventions`, "A red-run
+/// demonstration is a deliverable, not a formality".
 ///
 /// | # | assertion | kind | revert | measured |
 /// | --- | --- | --- | --- | --- |
@@ -2565,8 +2568,8 @@ fn copy_and_paste_round_trip_through_the_clipboard_under_cage() {
 ///
 /// Forward is NOT smoked. `nav_press` / `nav_buttons` treat the two symmetrically
 /// and `history_forward` mirrors `history_back` in core, but the widget wiring for
-/// Forward is undiscriminated — recorded in `tests/README.md`, "What is still
-/// unproven".
+/// Forward is undiscriminated — recorded in
+/// `notes/crates/wolf-gnome/tests/what-is-still-unproven.md`.
 ///
 /// ## Why the readbacks exist
 ///
@@ -2579,7 +2582,8 @@ fn copy_and_paste_round_trip_through_the_clipboard_under_cage() {
 ///
 /// A precondition gets NO revert: inventing one would manufacture a discriminator this
 /// smoke does not have. The `measured` column is from an actual red run, per
-/// `tests/README.md`'s "A red-run demonstration is a deliverable, not a formality".
+/// `crates/wolf-gnome/tests/smoke_headless/README.md#smoke-conventions`, "A red-run
+/// demonstration is a deliverable, not a formality".
 ///
 /// | # | assertion | kind | revert | measured |
 /// | --- | --- | --- | --- | --- |
@@ -3378,7 +3382,8 @@ exit 0
 ///
 /// A precondition gets NO revert: inventing one would manufacture a discriminator this
 /// smoke does not have. The `measured` column carries an actual red run, per
-/// `tests/README.md`'s "A red-run demonstration is a deliverable".
+/// `crates/wolf-gnome/tests/smoke_headless/README.md#smoke-conventions`, "A red-run
+/// demonstration is a deliverable".
 ///
 /// | # | assertion | kind | revert | measured |
 /// | --- | --- | --- | --- | --- |

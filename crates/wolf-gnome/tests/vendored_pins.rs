@@ -629,12 +629,12 @@ struct Mismatch {
 ///
 /// ## Why the mismatches are collected rather than asserted in a loop
 ///
-/// `crates/wolf-gnome/tests/README.md` records an observed case where a revert broke
-/// two rows of a `for`-loop-with-an-assertion and produced exactly one reported
-/// failure, so the second row's breakage was invisible until the first was fixed. A
-/// one-sided bump of two assets at once is the ordinary shape here — someone bumps
-/// orlando and lighthouse together on macOS — so reporting one of the two would send
-/// the reader round the loop twice.
+/// `notes/crates/wolf-gnome/tests/what-is-still-unproven.md` records an observed
+/// case where a revert broke two rows of a `for`-loop-with-an-assertion and produced
+/// exactly one reported failure, so the second row's breakage was invisible until the
+/// first was fixed. A one-sided bump of two assets at once is the ordinary shape here
+/// — someone bumps orlando and lighthouse together on macOS — so reporting one of the
+/// two would send the reader round the loop twice.
 ///
 /// ## Falsifiers
 ///

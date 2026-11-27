@@ -2969,11 +2969,12 @@ exit 0
 /// "The picker's rows are on screen" looks like the cheap version of this test and is
 /// worthless here. The rows are FILENAMES, and the tree sidebar renders every one of
 /// them by name on every capture — so that assertion is satisfied with the picker
-/// CLOSED, which is precisely the vacuity `tests/README.md`'s fixture-naming rule
-/// exists to prevent. And OCR cannot say WHERE a word is, so no OCR assertion can
-/// distinguish a box drawn over the preview from one drawn beside it. Pixels are the
-/// only instrument that answers the question, which is why this smoke asserts no OCR
-/// term and contributes no `ASSERTED_OCR_TERMS` row.
+/// CLOSED, which is precisely the vacuity the fixture-naming rule of
+/// `crates/wolf-gnome/tests/smoke_headless/README.md#smoke-conventions` exists to
+/// prevent. And OCR cannot say WHERE a word is, so no OCR assertion can distinguish
+/// a box drawn over the preview from one drawn beside it. Pixels are the only
+/// instrument that answers the question, which is why this smoke asserts no OCR term
+/// and contributes no `ASSERTED_OCR_TERMS` row.
 ///
 /// ## The two rectangles, and why every edge of them is located from the pixels
 ///

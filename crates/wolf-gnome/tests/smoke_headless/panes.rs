@@ -1049,8 +1049,8 @@ fn vertical_split_shows_two_panes_under_cage() {
         out_png.display()
     );
 
-    // A pane's own edges carry no themed chrome, read from pixels: tesseract cannot tell colours apart
-    // (see `crates/wolf-gnome/tests/README.md`). This capture already has the right page.
+    // A pane's own edges carry no themed chrome, read from pixels as OCR cannot tell colours:
+    // `crates/wolf-gnome/tests/smoke_headless/README.md#smoke-conventions`. Reuses this capture.
     let capture = decode_capture(&out_png, SMOKE, "the vertical-split capture");
     let (left_probe, right_probe) = pane_edge_probes();
 
@@ -1875,13 +1875,14 @@ fn pane_edge_probes() -> (SampleRect, SampleRect) {
 /// and the bold flag as values, and `draw_pane` demonstrably reads `active_pane`, but
 /// OCR reads neither font weight nor a 50 % dim — both strips are legible either way,
 /// which is exactly why both are asserted PRESENT here. Same shape as the sidebar's
-/// current-file bold, recorded in `tests/README.md`.
+/// current-file bold, recorded in `notes/crates/wolf-gnome/tests/what-is-still-unproven.md`.
 ///
 /// ## Assertions, classified
 ///
 /// A precondition gets NO revert: inventing one would manufacture a discriminator this
 /// smoke does not have. The `measured` column is from an actual red run, per
-/// `tests/README.md`'s "A red-run demonstration is a deliverable, not a formality".
+/// `crates/wolf-gnome/tests/smoke_headless/README.md#smoke-conventions`, "A red-run
+/// demonstration is a deliverable, not a formality".
 ///
 /// | # | assertion | kind | revert | measured |
 /// | --- | --- | --- | --- | --- |

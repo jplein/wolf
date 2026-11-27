@@ -2803,8 +2803,8 @@ const CAGE_SPAWN_NEEDLE: &str = concat!("Command::new(\"", "cage", "\")");
 /// permanently-red count is to relax it to `<= 1` — at which point a needle that
 /// matches NOTHING (someone renames the binary, or `cage` moves behind a const)
 /// satisfies it vacuously and the guard silently stops guarding. That is exactly the
-/// vacuity shape `crates/wolf-gnome/tests/README.md` records under "Smoke
-/// conventions" ("A red-run demonstration is a deliverable, not a formality"): a
+/// vacuity shape `crates/wolf-gnome/tests/smoke_headless/README.md#smoke-conventions`
+/// records ("A red-run demonstration is a deliverable, not a formality"): a
 /// check aimed at the right property, looking somewhere the defect cannot appear.
 /// So the count is asserted from BOTH sides: at least one (the guard is not vacuous)
 /// and at most one (the invariant holds).
@@ -4182,11 +4182,11 @@ const EXPECT_SMOKE_APPEARANCE: &str = "dark";
 /// ## The premise, and why it needs a guard rather than a comment
 ///
 /// Every OCR smoke reads a light-on-dark grid, which is what
-/// `crates/wolf-gnome/tests/README.md` records as the premise for sparse-text
-/// segmentation. That grid is the captive Neovim's default colorscheme responding
-/// to `&background`, and the front-end pushes `&background` from the configured
-/// `appearance`. So the seeded value sits upstream of every OCR
-/// assertion at once — and it is written in [`write_smoke_config`], in a
+/// `crates/wolf-gnome/tests/smoke_headless/README.md#smoke-conventions` records as
+/// the premise for sparse-text segmentation. That grid is the captive Neovim's
+/// default colorscheme responding to `&background`, and the front-end pushes
+/// `&background` from the configured `appearance`. So the seeded value sits
+/// upstream of every OCR assertion at once — and it is written in [`write_smoke_config`], in a
 /// different file from every assertion it can disarm. That distance is the same reason the
 /// fixture-name guards exist.
 ///
@@ -4641,7 +4641,7 @@ fn assert_inside_extents(smoke: &str, label: &str, point: (i64, i64), extents: (
 /// lazily, so the origin is observable on a FAILING run and never on a green one.
 /// Deriving it from a green run instead means reading the smoke's persisted probe
 /// readback and crossing it with an independently measured cell — the method
-/// `crates/wolf-gnome/tests/README.md` records.
+/// `crates/wolf-gnome/tests/smoke_headless/README.md#smoke-conventions` records.
 ///
 /// `probe_cell` is whatever Neovim reported for a gesture whose PRESS was at
 /// `(PROBE_X, PROBE_Y)`: the click smoke passes its probe click's `line('.')` /

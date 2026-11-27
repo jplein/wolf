@@ -42,9 +42,9 @@
 //! What this file still does NOT prove, and does not try to: anything about the
 //! GTK controllers themselves (above), and — like the cage smokes — nothing about
 //! `record_pointer` or the `drag_grid` / `drag_button` press-pinning.
-//! `crates/wolf-gnome/tests/README.md`, section "Pointer injection: how it works
-//! and why it is built this way", carries the authoritative proven/unproven list —
-//! keep this doc consistent with it.
+//! `notes/crates/wolf-gnome/tests/what-is-still-unproven.md`, whose pointer
+//! items open it, carries the authoritative proven/unproven list — keep this doc
+//! consistent with it.
 //!
 //! ## Test wiring (read this before hunting for a BUILD file)
 //!

@@ -2496,7 +2496,7 @@ fn window_summary(window: &Window) -> WindowSummary {
 /// **It does not discriminate the close path from the per-wake commit.** The quit
 /// path's commit has already been preceded by per-wake commits of the same windows,
 /// so this smoke's save would be right by either route; that redundancy is recorded
-/// in `tests/README.md`.
+/// in `notes/crates/wolf-gnome/tests/what-is-still-unproven.md`.
 ///
 /// **It cannot see the restore's seed of the stacking order.** `cage` focuses each window
 /// as it maps, so those focuses order the save with or without the seed.
@@ -2515,8 +2515,9 @@ fn window_summary(window: &Window) -> WindowSummary {
 /// | F3 | in `coordinator.rs`'s `open_new_window`, pass the process cwd to `restore_plans` | exit 22 | Not re-measured since the app-state switch. |
 /// | step 6 | in `coordinator.rs`, delete the body of `install_app_actions` | exit 12 | Not re-measured since the app-state switch. |
 ///
-/// Each row is run alone, per `tests/README.md`'s "A red-run demonstration is a
-/// deliverable, not a formality".
+/// Each row is run alone, per
+/// `crates/wolf-gnome/tests/smoke_headless/README.md#smoke-conventions`, "A red-run
+/// demonstration is a deliverable, not a formality".
 #[test]
 fn two_windows_two_neovims_and_two_saved_sessions_under_cage() {
     const SMOKE: &str = "two_windows_two_neovims_and_two_saved_sessions_under_cage";

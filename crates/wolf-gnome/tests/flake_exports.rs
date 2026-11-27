@@ -308,7 +308,8 @@ const VENDORED_TREE_EXPORTS: [(&str, &str); 2] = [
 /// `linuxShell.shellHook`: assertion 2 fires naming that variable, the two test files
 /// it disarms and what each one stops proving. Delete both lines and BOTH are
 /// reported in one run, rather than the first alone — the shape
-/// `crates/wolf-gnome/tests/README.md` records a loop-with-an-assertion getting wrong.
+/// `notes/crates/wolf-gnome/tests/what-is-still-unproven.md` records a
+/// loop-with-an-assertion getting wrong.
 ///
 /// ## What it needs
 ///

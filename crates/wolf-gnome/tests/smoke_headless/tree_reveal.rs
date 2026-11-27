@@ -475,7 +475,7 @@ fn top_of_tree_reading(text: &str) -> String {
 /// | B | capture B reads them and [`TRIGGER_TERM`] | `reveal_target` ignores `rebuilt` (C2) | B |
 ///
 /// Nothing here observes the `map` re-arm, because the launch reveal runs with the list mapped:
-/// see `tests/README.md`, "What is still unproven".
+/// see `notes/crates/wolf-gnome/tests/what-is-still-unproven.md`.
 ///
 /// At the base commit leg A is red: that is the reproduction.
 #[test]

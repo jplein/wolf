@@ -211,8 +211,8 @@ impl ScrollAccumulator {
 /// value. The rule it exists for — **a change of target grid discards the carried
 /// sub-line remainder** — lives here rather than in `pane_view.rs`, which needs a
 /// live display. Four cage smokes drive real `wl_pointer` events through the
-/// controllers (`crates/wolf-gnome/tests/README.md`, "Pointer injection: how it
-/// works and why it is built this way"), but discriminating a per-grid carry end to
+/// controllers (`crates/wolf-gnome/tests/smoke_headless/README.md#pointer-injection`),
+/// but discriminating a per-grid carry end to
 /// end would need two panes plus a pointer that scrolls across both, which no smoke
 /// does. Here it is decidable from the arguments, and `pane_scroll_table` /
 /// `grid_change_discards_the_carry` pin it headlessly.
