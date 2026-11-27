@@ -40,17 +40,16 @@ Purpose: the configuration `start` writes into the run directory.
 
 #### `flow.yaml`
 
-Purpose: regina's five-agent flow less its `final` gate, plus a retrospective agent whose reports go to `notes/retrospectives/`.
+Purpose: regina's five-agent flow less its `final` gate, plus a retrospective agent whose reports go to `notes/retrospectives/`, a documentation-only route and a notes pass.
 
 **Decisions**
 
-- Sets use gitignore semantics, where a directory a set matches takes every file under it, whatever a later `!` says. So the Swift tests are `/crates/wolf-macos/Tests/**/*.swift` rather than the directory, which keeps the two READMEs there in `docs`, and `!/crates/*/tests/README.md` works because `/crates/*/tests/**` does not match the directory itself.
-- `wiring` is in both the test writer's and the coder's writes: wiring a test is part of writing it, and the coder still needs `BUILD.bazel` for `compile_data` and deps.
-- `CLAUDE.md` is in `protected`, which no agent writes, and regina reverts any write to it. `specs/` cannot be a set, since a set cannot read the task body: the definitions allow a spec edit only when the task names the spec.
-- A `#[cfg(test)]` block inside `src/` is code by path, so it is the coder's.
-- `test-notes`, the `notes/` mirrors of test files, is the test writer's and not the coder's: a test comment over the limit moves to its mirror. It stays in `docs` for the technical writer.
-- The coder's falsifier evidence goes to a report under `.regina/reports`, not to `notes/`: wolf has no red-green note convention, and a note needs a verified header.
-- To drop the retrospective, point the reviewer's `passed` and the architect's `none` at `coverage` and delete its three states. Choose before `start`: an edit to the flow mid-request makes a retry start over.
+- Sets use gitignore semantics, where a directory a set matches takes every file under it, whatever a later `!` says. So a test directory with a README below its top is named by file, as `/crates/*/tests/**/*.rs` and `/crates/wolf-macos/Tests/**/*.swift`, which keeps every README under it in `docs`; a fixture under `crates/*/tests/` outside `testdata/` is the coder's.
+- `wiring` is the test writer's and the coder's: wiring a test is part of writing it, and the coder needs `BUILD.bazel` for `compile_data` and deps.
+- `CLAUDE.md` is in `protected`, which no agent writes. `specs/` cannot be a set, since a set cannot read the task body: the definitions allow a spec edit only when the task names the spec.
+- `test-notes`, the `notes/` mirrors of test files, is the test writer's, not the coder's: a test comment over the limit moves to its mirror. It stays in `docs` for the technical writer.
+- `documentation-only` runs `./gates.sh` before the technical writer, as the coder's route does, so a plan of documentation alone reaches review with both gates passed and no coder.
+- An approval with notes runs the `-notes` states from the first owner of a note, then the retrospective with no second review, so a note is fixed before the task lands.
 
 #### `agents/`
 
@@ -59,7 +58,7 @@ Purpose: the six agent definitions the flow names.
 **Decisions**
 
 - They are not under `.claude/agents/`, where Claude Code would load them as this session's subagents and clash by name with the `/orchestrate` team.
-- The protocol sections are copied verbatim from regina's shipped `res/definitions/<agent>.md`, and the retrospective's from regina's `.claude/agents/retrospective.md`, at regina 7b72b1e. They name the `reason`s regina's flows send, so re-copy them whenever regina is upgraded.
-- A rule two definitions share is copied into each, never linked: both harnesses send a definition's body verbatim as the system prompt and expand no link, so a linked rule reaches only an agent that reads it. A regina agent would read it from the task's branch, not the checkout [`SKILL.md`](SKILL.md#the-two-sides-of-a-run) fixes for the run.
-- The worker sections come in two versions, each word for word: the four writing agents' and the read-only architect's and reviewer's. The zsh paragraph is the same in all six. Nothing checks that here.
-- The `/orchestrate` team in `.claude/agents/` states some of the same rules on tests, in its `coder.md`, `architect.md`, `test-writer.md` and `reviewer.md`, kept in line by hand in the same task. The copies differ where the harnesses do. A `#[cfg(test)]` block is the coder's here, since write sets go by path, and the test writer's under `/orchestrate`. Falsifier IDs exist only here: the reviewer joins the plan and the coder's report, written in separate invocations, by ID and by reading alone, where `/orchestrate`'s orchestrator checks the evidence itself in its step 7.
+- The protocol sections are copied verbatim from regina's shipped `res/definitions/<agent>.md`, and the retrospective's from regina's `.claude/agents/retrospective.md`, at regina 7b72b1e, but for the sentences on states wolf's flow adds. They name the `reason`s regina's flows send, so re-copy them whenever regina is upgraded, and keep those sentences.
+- A rule two definitions share is copied into each, never linked: both harnesses send a definition's body verbatim as the system prompt and expand no link, so a linked rule reaches only an agent that reads it.
+- The worker sections come in two versions, each word for word: the four writing agents' and the read-only architect's and reviewer's. The zsh paragraph and `## The project` are the same in all six, and `## The notes pass` in each agent of the notes pass. Nothing checks that here.
+- The `/orchestrate` team in `.claude/agents/` states some of the same rules on tests, kept in line by hand in the same task. A `#[cfg(test)]` block is the coder's here, since write sets go by path, and the test writer's under `/orchestrate`. Falsifier IDs exist only here, since the reviewer joins the plan and the coder's report by ID and by reading alone.
