@@ -35,6 +35,9 @@ pub const DEFAULT_ROWS: u16 = 24;
 /// Generous timeout to absorb nvim `--embed` startup + first redraw flush.
 /// nvim startup is not instantaneous and redraw is never synchronous, so we wait
 /// well beyond the expected latency before declaring failure.
+/// The bound is not sized for a kernel I/O stall: a test that runs while a relinking
+/// build is still being written back can stall past it, so on Linux the gate flushes
+/// that writeback first. See notes/gates.sh.md#linux-gates
 pub const FLUSH_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Gap between two tries of a polling helper, such as [`poll_frame`].

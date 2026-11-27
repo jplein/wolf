@@ -155,6 +155,9 @@ if [ "$platform" = linux ]; then
   run rustdoc-links env RUSTDOCFLAGS='-D rustdoc::broken_intra_doc_links' \
     cargo doc --workspace --no-deps
   run build cargo build --workspace --all-targets
+  # Flush the build's output first, or the tests' file operations stall behind its writeback.
+  # See notes/gates.sh.md#linux-gates
+  run writeback sync
   run test cargo test --workspace --no-fail-fast
 else
   # See notes/gates.sh.md#macos-gates
