@@ -15,26 +15,26 @@ Each compiles into this module and has its own README with the entries for its f
 
 #### `AppDelegate.swift`
 
-Purpose: The application coordinator: launch, the live `WolfWindowController`s, their restore and persistence, tab focus and dynamic menus.
+Purpose: The application coordinator: launch, the live `WolfWindowController`s and their restore, persistence, tab focus and menus.
 
 **Public API**
 
 - `makeNewWindow(originatingCwd:)` — an empty-state tab in a window [sized and cascaded](../../../../notes/wolf-macos-decisions.md#new-windows) from the active one.
 - `makeNewTab(from:)` — New Window's tab in `key`'s group, carrying its sidebar visibility ([why](../../../../notes/wolf-macos-decisions.md#opening-a-folder)).
-- `refreshTabFocus()` — sends each [`TabFocusSeam`](../WolfKeyMap/README.md#tabfocusseamswift) edge to its core and focuses the main window's tab in the `StackingOrder`, capturing the tab it leaves ([capture](../../../../notes/wolf-macos-decisions.md#the-per-tab-extras)).
-- `windowMinimizedChanged(_:minimized:)` — marks or unmarks the controller's tab group.
+- `refreshTabFocus()` — sends each [`TabFocusSeam`](../WolfKeyMap/README.md#tabfocusseamswift) edge to its core and focuses the main window's tab in the `StackingOrder`, capturing the one left ([capture](../../../../notes/wolf-macos-decisions.md#the-per-tab-extras)).
 - `scheduleStateSnapshot()` / `snapshotNow()` — throttled and immediate whole-tree commits ([write model](../../../../notes/wolf-macos-decisions.md#state-is-a-tree-and-the-front-end-owns-every-write)).
+- `closeWindow(_:)` and `applicationShouldTerminate(_:)` — Close Window's and Quit's checks of every tab, a logout's too ([how](../../../../notes/wolf-macos-decisions.md#closing-a-window-and-quitting-ask-every-tab)).
 - `closeCommit(for:)` — a closing view's commit through [`SessionSeam.CloseBurst`](../WolfKeyMap/Persistence/README.md#sessionseamswift), after capturing its group.
-- `otherWindows(excluding:)`, `raiseWindow(tabId:)` — Switch to Window's rows and raise.
+- `otherWindows(excluding:)`, `raiseWindow(tabId:)` — Switch to Window.
 - `openFolder(_:from:)` — [Open Folder](../../../../notes/wolf-macos-decisions.md#opening-a-folder), answering the landed view.
-- `handleOpenRequests()` — handles the queued socket and Finder requests once launched ([why](../../../../notes/wolf-macos-decisions.md#opening-files-from-outside-wolf)).
+- `handleOpenRequests()` — the queued socket and Finder requests, once launched ([why](../../../../notes/wolf-macos-decisions.md#opening-files-from-outside-wolf)).
 - `appAppearance(for:)` — a mode's forced `NSApp.appearance`; `nil` under `auto`.
 
 **Decisions**
 
 - Launch order is fonts, config, metrics: CoreText needs the bundled families, and measuring reads the config.
 - `appearanceObservation` must stay stored: a deallocated observation invalidates itself, ending auto-mode tracking.
-- Tab focus and the stacking order follow main ([why](../../../../notes/wolf-macos-decisions.md#one-neovim-per-tab)). Its loss rides `didResignActive`, where `NSApp.isActive` reads `false`.
+- Tab focus and stacking order follow main ([why](../../../../notes/wolf-macos-decisions.md#one-neovim-per-tab)). Its loss rides `didResignActive`, where `NSApp.isActive` reads `false`.
 - A directory request raises its landed view: a fill does not activate the app.
 - The About panel's credits are in `labelColor`: uncoloured, they render black in dark mode.
 
@@ -132,7 +132,7 @@ Purpose: Maps a decoded `CommandKind` to its native AppKit action. Both the menu
 
 - The switch carries no `default` case, so adding a `CommandKind` variant fails to compile until it is handled here.
 - `.closeTab` closes `window`, which is the tab, with `performClose(_:)`, so `WolfWindowController`'s `windowShouldClose` decides, through [`CloseTabSeam`](../WolfKeyMap/README.md#closetabseamswift), whether the tab's Neovim is asked. A drained `close_tab` arrives confirmed and closes at once ([why](../../../../notes/wolf-macos-decisions.md#closing-a-tab-asks-its-neovim)). Closing a tab group's only window closes the window.
-- `.closeWindow` closes with `close()`, which no `windowShouldClose` refuses.
+- `.closeWindow` hands `window` to `AppDelegate.closeWindow(_:)`, which asks every tab of its group and, with none unsaved, closes the group with `close()`, so no `windowShouldClose` asks again ([why](../../../../notes/wolf-macos-decisions.md#closing-a-window-and-quitting-ask-every-tab)).
 
 #### `CommandPaletteView.swift`
 
@@ -651,24 +651,25 @@ Purpose: The app's entry point, called by [`WolfMain`](../WolfMain/README.md): `
 
 #### `WolfWindowController.swift`
 
-Purpose: One tab's whole UI stack, owning its [`TabCore`](#tabcoreswift) as that core's `TabCoreView`. Each tab is its own OS window, maybe tab-grouped.
+Purpose: One tab's whole UI stack, its own `NSWindow`, maybe tab-grouped, owning its [`TabCore`](#tabcoreswift) as that core's `TabCoreView`.
 
 **Public API**
 
-- `build()` — shows the stack at its `WindowPlacement`, `.cascaded` being [§7's](../../../../notes/wolf-macos-decisions.md#new-windows) through `NSWindow.cascade(fromTopLeft:size:)`, and becomes its core's view.
+- `build()` — shows the stack at its `WindowPlacement` ([`.cascaded`](../../../../notes/wolf-macos-decisions.md#new-windows)) and becomes its core's view.
 - `hasFolder` — false in the empty state, whose sidebar never scans `home`.
 - `persistedCwd` — the live cwd, else the launch directory ([why](../../../../notes/wolf-macos-decisions.md#opening-files-from-outside-wolf)); `""` in the empty state.
-- `openFile(_:wait:)` — places a file from outside Wolf and raises the tab ([empty tab](../../../../notes/wolf-macos-decisions.md#opening-files-from-outside-wolf)).
+- `openFile(_:wait:)` — places an outside file and raises the tab ([empty tab](../../../../notes/wolf-macos-decisions.md#opening-files-from-outside-wolf)).
 - `persistedTab()` — this view's [`SessionSeam`](../WolfKeyMap/Persistence/README.md#sessionseamswift) contribution, seeded from the restored tab.
 - `normalFrame` — [`StatePersistence`](#statepersistenceswift)'s, `nil` until recorded.
-- `canCopy` — Copy's gate; a terminal pane copies and pastes through its session.
+- `canCopy` — Copy's gate; a terminal pane copies through its session.
 - `drainAndDispatchCommands()` — apart from `onRenderWake()`, so the core drains in every state ([why](../WolfKeyMap/README.md#livenessseamswift)).
 - `captureViewports()` — a no-op once torn down.
 
 **Decisions**
 
-- `tabCore` is held strong and holds this view weakly.
-- `teardown()` commits its close before setting `isTornDown`, which the burst's read skips, or a last close commits nothing. It is idempotent and defers `removeController` a turn, holding `self`: the coordinator holds the last reference in `windowWillClose`, and dropping it there frees the `NSWindow` mid-close.
-- `window.historyNav = self` is explicit: as no `NSWindowController`, it gets no `target: nil` toolbar action.
-- The file tree starts last in `build()`, after the collapse state seeds its refresh gate, so a collapsed sidebar defers outline work.
+- `tabCore` is strong and holds this view weakly.
+- `teardown()` commits its close before setting `isTornDown`, which the burst's read skips, or a last close commits nothing. It is idempotent and defers `removeController` a turn, holding `self`: dropping the coordinator's last reference in `windowWillClose` frees the `NSWindow` mid-close.
+- `window.historyNav = self` is set explicitly: a non-`NSWindowController` gets no `target: nil` toolbar action.
+- `build()` starts the file tree last, after the collapse state seeds its refresh gate, so a collapsed sidebar defers outline work.
+- `windowShouldClose` answers no in a multi-window group, so the coordinator can tell the red button from a tab's close ([why](../../../../notes/wolf-macos-decisions.md#closing-a-window-and-quitting-ask-every-tab)).
 - Both key edges sync terminal focus; tab focus follows `windowDidBecomeMain` ([why](../../../../notes/wolf-macos-decisions.md#one-neovim-per-tab)).

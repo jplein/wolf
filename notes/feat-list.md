@@ -120,23 +120,24 @@ The GTK sidebar re-roots from one settle point, on the working directory Neovim 
 
 ## Windows, tabs, commands
 
-| Feature                                      | Branch or commit                                          | macOS | Linux |
-| -------------------------------------------- | --------------------------------------------------------- | ----- | ----- |
-| Multiple windows                             | `feat/mac-ui-changes` (`2fd6256`)                         | [x]   | [x]   |
-| Command registry (`:Wolf*` + Lua faces)      | `feat/commands` (`fb0147c`)                               | [x]   | [x]   |
-| Commands drained and dispatched to the UI    | `feat/commands` (`fb0147c`)                               | [x]   | [x]   |
-| Native application menu bar                  | `feat/commands`                                           | [x]   | [x]   |
-| Empty state ("Open folder…" button)          | `feat/commands` (`2a1eb94`)                               | [x]   | [x]   |
-| Working directory in the window title        | `feat/status-bar` (`6fd2427`)                             | [x]   | [x]   |
-| Unified toolbar (sidebar toggle, nav, title) | `feat/nav-buttons` (`96d2c97`) / `linux-feat/nav-history` | [x]   | [x]   |
-| Native tabs, one Neovim per tab              | `feat/window-tabs`                                        | [x]   | [x]   |
-| Application state persistence                | `feat/remember-working-directory`                         | [x]   | [x]   |
-| Pane-layout persistence across relaunch      | `feat/macos-pane-dividers` (`5f8becb`)                    | [x]   | [x]   |
-| Single-pane state-persistence fix            | `fix/state-persistence-single-pane-bug`                   | [x]   | [x]   |
-| Copy / paste through the system clipboard    | `feat/copy-paste`                                         | [x]   | [x]   |
-| `:q` / `:qa` mapped to close pane / tab      | `feat/colon-q-remapping`                                  | [x]   | [x]   |
-| Close Tab, refusing unsaved changes          | `close-commands-2`                                        | [x]   | [x]   |
-| ⌘N opens a new untitled Markdown buffer      | `feat/colon-q-remapping` (`0266b96`)                      | [x]   | [x]   |
+| Feature                                         | Branch or commit                                          | macOS | Linux |
+| ----------------------------------------------- | --------------------------------------------------------- | ----- | ----- |
+| Multiple windows                                | `feat/mac-ui-changes` (`2fd6256`)                         | [x]   | [x]   |
+| Command registry (`:Wolf*` + Lua faces)         | `feat/commands` (`fb0147c`)                               | [x]   | [x]   |
+| Commands drained and dispatched to the UI       | `feat/commands` (`fb0147c`)                               | [x]   | [x]   |
+| Native application menu bar                     | `feat/commands`                                           | [x]   | [x]   |
+| Empty state ("Open folder…" button)             | `feat/commands` (`2a1eb94`)                               | [x]   | [x]   |
+| Working directory in the window title           | `feat/status-bar` (`6fd2427`)                             | [x]   | [x]   |
+| Unified toolbar (sidebar toggle, nav, title)    | `feat/nav-buttons` (`96d2c97`) / `linux-feat/nav-history` | [x]   | [x]   |
+| Native tabs, one Neovim per tab                 | `feat/window-tabs`                                        | [x]   | [x]   |
+| Application state persistence                   | `feat/remember-working-directory`                         | [x]   | [x]   |
+| Pane-layout persistence across relaunch         | `feat/macos-pane-dividers` (`5f8becb`)                    | [x]   | [x]   |
+| Single-pane state-persistence fix               | `fix/state-persistence-single-pane-bug`                   | [x]   | [x]   |
+| Copy / paste through the system clipboard       | `feat/copy-paste`                                         | [x]   | [x]   |
+| `:q` / `:qa` mapped to close pane / tab         | `feat/colon-q-remapping`                                  | [x]   | [x]   |
+| Close Tab, refusing unsaved changes             | `close-commands-2`                                        | [x]   | [x]   |
+| Close Window and Quit, refusing unsaved changes | `close-commands-2`                                        | [x]   | [x]   |
+| ⌘N opens a new untitled Markdown buffer         | `feat/colon-q-remapping` (`0266b96`)                      | [x]   | [x]   |
 
 `wolf-gnome` calls `WolfCore::drain_commands()` on every render wake, behind a total `Command` to `UiAction` mapping in `command_action.rs` with no catch-all arm, so a new core command fails to compile until it is classified. Every command dispatches except `HideApplication`, which has no GNOME equivalent since the shell owns window visibility, and the font-size commands (`ResetFontSize`, `IncreaseFontSize`, `DecreaseFontSize`), which are deferred with a distinct printed reason.
 

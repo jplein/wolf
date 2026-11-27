@@ -108,6 +108,18 @@ A drained `close_tab` is Neovim's own verdict, sent only once its check passed o
 
 A dead, stalled or gone core, or an ask with no answer within core's RPC timeout, closes unchecked. A wedged tab must stay closable, and its swap files keep its edits recoverable. A stalled core is not asked at all, since a call has already outlasted the timeout and asking again would stall the UI for another.
 
+## Closing a window and quitting ask every tab
+
+Close Window and Quit refuse on a tab's unsaved changes ([§9](../specs/application-state.md#9-closing-a-window-and-quitting)), and each tab's Neovim is asked in turn. [`tabs_ui`](../crates/wolf-gnome/src/README.md#tabs_uirs)'s `tab_unsaved`, `window_close` and `quit` make the decision, and they pull the answers lazily, so no tab after the first unsaved one is asked, and a wedged one there costs no RPC timeout. A dead, stalled or gone core, or one with no answer, counts as clean, as for Close Tab.
+
+The ask is silent, `WolfCore::request_unsaved`. Only the tab chosen is then selected and asked to echo, through `show_unsaved`, so the message shows in the tab it names, as Close Tab selects first. An echoing ask would echo in every unsaved tab, background ones included.
+
+The window's check sits in its `close-request` handler, ahead of `on_window_closing`, so the close button, Close Window, `:WolfCloseWindow` and the last tab's close all take it. A refusal returns `Propagation::Stop` before anything is committed or any core taken. The check is skipped once `Coordinator::is_quitting`, because the quit asked every window before it latched.
+
+A tab whose own close is confirmed counts as clean unasked. The last page's close confirms its tab before it closes the window: that tab's check has passed, and a forced `:qa!` there must not be refused by the window's.
+
+Quit asks the windows in stacking order, frontmost first, and each window's tabs in page order, which `TabsHandle::entries` is not. On a refusal it selects the tab, has it echo and presents its window, and latches nothing. `present()` is best effort, and `cage` declines it, so the raise is unobservable in the smokes. Every quit route reaches `Coordinator::quit`, and `AppShell::quit_application` without a coordinator closes its own window, which that window's check covers.
+
 ## The coordinator and its windows
 
 Eight things are process-scoped, each because a second copy would be wrong rather than wasteful: the one `AppStateStore`, the window stacking order, the config read, the `CellMetrics`, the `app.` actions, the launch plans, the readiness probe and the open channel's listener. [The coordinator and its windows](wolf-gnome/the-coordinator-and-its-windows.md) gives each reason, why restore is positional, why it maps the windows backmost first, each after the one behind it, and how a request from outside Wolf is routed.

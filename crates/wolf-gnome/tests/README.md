@@ -316,6 +316,16 @@ The Close Tab smoke, one launch restoring a planted window of two tabs, each on 
 
 The close button's x is `CT_CLOSE_BUTTON_INSET_PX` left of the output's right edge, derived from libadwaita's stylesheet rather than measured, and a background tab shows its button only while hovered. Exit 184 or 185 can mean the click missed the close button, and then the inset is what to fix, not the code.
 
+#### `smoke_headless/close_window.rs`
+
+The Close Window and Quit smokes, each one launch restoring a planted window of two tabs on files of the project, with the background second tab modified. Every observable is a Neovim count, a readback a Neovim writes about itself or the app's exit, never OCR.
+
+`close_window_asks_every_tab_under_cage`: Close Window from the palette in the clean tab must keep both Neovims, select the modified tab and leave E37 in its `:messages`. After `:w`, `:qa` there must close only its own tab. Close Window on two clean tabs, the one left and a new one, must end the app with neither Neovim left.
+
+`quit_asks_every_window_under_cage` opens window 2 from the palette, and a readback naming its buffer, `Untitled.md`, which is none of window 1's files, proves the keys reach it. Ctrl+Shift+Q there must quit nothing. `:WolfCloseWindow` in clean window 2 must close it, which shows that Close Window asks only its own tabs. The keys then pass to window 1, whose readback and `:messages` show that the refused quit selected the modified tab and echoed E37, and after `:w` Ctrl+Shift+Q ends the app.
+
+The palette queries are asserted to rank Close Window and New Window first. Measured by the green runs: a page selected inside `close-request` is the tab keys reach, and once cage's newest toplevel closes, the one below takes the keys, which exit 216 checks. The quit's raise of window 1 is unobservable, because cage declines `present()`.
+
 #### `smoke_headless/compose.rs`
 
 Input-method smokes: composed text reaching Neovim, and a control chord typed while a compose sequence is pending.
@@ -559,11 +569,12 @@ Every observable is a Neovim readback of `winwidth` and `winheight` per recorded
 **Covers**
 
 - `tabs_ui::close_page_now`'s table: a live tab is asked once and only `NoAnswer` closes it, while a dead, stalled or gone core and a confirmed close close without asking.
+- The tables of `tabs_ui::tab_unsaved`, `window_close` and `quit`: a confirmed tab is `Clean` and a core not `Alive` is `Unreachable`, both unasked, and `NoAnswer` is `Unreachable`. The first `Unsaved` is shown, windows in the order given, and nothing after it is pulled; `Unreachable` beside `Clean` closes everything.
 - The `win.close-tab` row: `Command::CloseTab`, no accelerator or fold, `MenuOnly`, `action_for_command`'s answer, and the menu item directly before Close Window.
 
 **Gotchas**
 
-- Pure: no display, no Neovim and no compositor. Whether `on_close_page` passes the page's own confirmation, liveness and ask, and selects a background page first, is [`smoke_headless/close_tab.rs`](#smoke_headlessclose_tabrs)'s question.
+- Pure: no display, no Neovim and no compositor. Whether `on_close_page` passes the page's own confirmation, liveness and ask, and selects a background page first, is [`smoke_headless/close_tab.rs`](#smoke_headlessclose_tabrs)'s question. Whether the close handler and `Coordinator::quit` ask and show the tab is [`smoke_headless/close_window.rs`](#smoke_headlessclose_windowrs)'s.
 
 #### `tab_focus.rs`
 
@@ -750,6 +761,7 @@ A smoke pins `native` through `main.rs`'s `titlebar_pinned_config_dir` when, wit
 
 - every `titlebar.rs` smoke, through `smoke_config_dir_at`'s style argument, since each also forces its `appearance`;
 - `close_tab.rs`'s `close_tab_asks_the_tabs_neovim_under_cage`;
+- both `close_window.rs` smokes;
 - `tab_bar.rs`'s `each_tab_is_titled_by_its_own_directory_under_cage`;
 - every `new_tab.rs` smoke, through `run_new_tab`;
 - `panes.rs`'s `native_tabs_open_switch_and_close_under_cage` and `a_file_saved_in_one_tab_reloads_in_another_on_switch_under_cage`;
@@ -879,6 +891,7 @@ Being scrupulous about this is the point of the section.
 - **`pane_layout::resolve_leaves`' refusal reaches no smoke.** Arranging a leaf whose Neovim window has left both snapshot maps while its pane survives is timing-dependent under a compositor. Its table is the whole of the coverage, and the same holds for the restore caps past [`restore_caps.rs`](#restore_capsrs), which need a hand-edited file rather than a session.
 - **The restore's seed of the window stacking order has no smoke.** Under `cage` each window gains focus as it maps, which rebuilds the order without the seed, so no save tells the two apart. [`stacking.rs`](#stackingrs) covers the seed rule, and nothing covers its install in `restore_session`.
 - **The restored window order on mutter.** The three-window restore smoke shows the present chain under `cage`; whether mutter focuses a restore's windows as they map is a person check.
+- **The window's close button and a refused Quit's raise.** No smoke clicks the header bar's close button, which takes the same `close-request` check as Close Window, and `cage` declines `present()`, so whether a refused Quit raises the unsaved tab's window is a person check on a session compositor.
 - **A quit during the restore's present chain.** No harness quits within a launch's first frames, so no test reaches `WindowHandle::cancel_present` with a present still pending.
 - **The restore seed is table-tested only.** A restored tab contributes its seed to a commit made before its own first gather, which another tab's wake can make, and the next commit replaces it with the live gather, so no smoke's frozen save tells the two apart.
 - **The glue that pairs a tab's cache with its page position.** `state_seam::ordered_tab_states` is table-tested, but nothing executes `WindowHandle::cached_window`'s pairing of each live cache with `TabHandle::page_position`. A glue bug pairing each cache with its `enumerate()` index instead would satisfy every headless row and persist insertion order again, and `three_tabs_survive_a_relaunch_under_cage` cannot discriminate it: in a window nobody has rearranged, position and index coincide. Closing it needs `a_dragged_tab_is_persisted_in_its_new_position_under_cage` and a capability no smoke has — dragging a bar entry under `cage` — so the next unit that touches the tab bar owes that one.

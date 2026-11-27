@@ -289,7 +289,7 @@ A `wolf --wait` popped into `Request(owning:)` exits `0` at `:q` in its pane.
 
 #### `CloseTabDispatchTests.swift`
 
-**Covers** — `CommandDispatcher.dispatch`'s two close arms: `.closeTab` calling `performClose(_:)` alone, so `windowShouldClose` decides whether the tab's Neovim is asked, and `.closeWindow` calling `close()` alone, which no `windowShouldClose` refuses.
+**Covers** — `CommandDispatcher.dispatch`'s two close arms: `.closeTab` calling `performClose(_:)` alone, so `windowShouldClose` decides whether the tab's Neovim is asked, and `.closeWindow` reaching `AppDelegate.closeWindow(_:)` over a bare delegate and closing with `close()` once, never `performClose(_:)`, so no `windowShouldClose` asks again. A bare delegate owns no live controller, so no tab is asked and the window closes; a never-shown window's group is the window alone.
 
 **Decisions**
 

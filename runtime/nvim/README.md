@@ -180,11 +180,15 @@ Returns the tab-local working directory of the tabpage named by its stable handl
 
 #### `wolf_refuse_unsaved()`
 
-Whether closing the tab must be refused for unsaved changes. At the first modified buffer of this Neovim, which is the tab's ([§8](../../specs/application-state.md#8-one-neovim-per-tab)), it echoes Vim's refusal as an `ErrorMsg` and returns `true`; with none it echoes nothing and returns `false`. `do_quit` calls it unless forced, and core reaches it through [`wolf_close_tab`](#wolf_close_tab).
+Whether closing the tab must be refused for unsaved changes. At the first modified buffer of this Neovim, which is the tab's ([§8](../../specs/application-state.md#8-one-neovim-per-tab)), it echoes Vim's refusal as an `ErrorMsg` and returns `true`; with none it echoes nothing and returns `false`. `do_quit` calls it unless forced, and core reaches it through [`wolf_close_tab`](#wolf_close_tab) and through `WolfCore::show_unsaved`, which echoes for the tab a refused Close Window or Quit shows.
 
 The search runs over the current buffer, then the current tabpage's windows, then every buffer, which is the order of Neovim's `check_changed_any`. The current buffer gives `E37: No write since last change (add ! to override)`, and any other `E162: No write since last change for buffer "<name>"`. `<name>` is the one Vim gives: `[Quickfix List]` or `[Location List]` for a quickfix buffer, else the buffer's name, else `[Prompt]`, `[Scratch]` for an `acwrite` buffer, or `[No Name]`. Unlike native `:qa`, it does not show the refused buffer, because a refusal changes nothing.
 
 **Every buffer whose `'modified'` is on counts, whatever its `'buftype'`.** Neovim never marks a `nofile`, `nowrite` or `terminal` buffer modified, so preview scratches, terminal placeholders and `:terminal` buffers never count. A buftype filter would also pass over a modified help, quickfix or prompt buffer, which Neovim's own `:qa` refuses on.
+
+#### `wolf_has_unsaved()`
+
+Close Window's and Quit's silent ask: whether [`wolf_refuse_unsaved`](#wolf_refuse_unsaved) would refuse, by the same search, echoing nothing. Core's caller is `WolfCore::request_unsaved`, which a front-end runs for every tab it would close, so a refusal echoes only in the tab it then shows. Like `wolf_close_tab`, it ends no wait ([why](#decisions)).
 
 #### `wolf_switch_buffer(win, buf)`
 

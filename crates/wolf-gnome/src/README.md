@@ -196,18 +196,18 @@ Purpose: the process-scoped layer above the windows, and their ordered registry.
 **Public API**
 
 - `build() -> Coordinator`, then `install_app_actions(app)`, `listen(app)` and `restore_session(app)`.
-- `open_new_window(app)`, `open_folder(app, current, directory) -> Option<TabRef>`, `commit(waking)`, `on_window_closing(id)`, `quit(app)`, `raise(id)`, `palette_windows(exclude)`, `register(handle)`, `window_count()`, `on_window_focused(id)`, `on_window_minimized(id)`.
+- `open_new_window(app)`, `open_folder(app, current, directory) -> Option<TabRef>`, `commit(waking)`, `on_window_closing(id)`, `quit(app)`, `is_quitting()`, `raise(id)`, `palette_windows(exclude)`, `register(handle)`, `window_count()`, `on_window_focused(id)`, `on_window_minimized(id)`.
 - `next_free_id(next, live) -> WindowId`, and `upgrade(&weak)` for window-side closures.
 - `ready_pending()`, `next_paint_ordinal()`, `check_ready()` — the readiness probe.
 
 **Decisions**
 
-- The coordinator holds strong `WindowHandle`s and every window-side closure a `Weak` it upgrades per use: the other direction is a cycle, and a dropped coordinator performs nothing.
-- `install_app_actions` runs before the first window exists, so the menu and the chord controller resolve `app.quit` from the first frame. Each window's [`shell.rs`](#shellrs) registers their accelerators, idempotently, so the menu draws the chord.
-- A window that has lost its application or its coordinator opens nothing, and quits by closing itself.
-- `quit` captures every window's panes before any Neovim exits, and closes every window the _application_ holds: a transient toplevel such as About would keep the process alive. A close captures only on `KeepSubtree` ([why](../../../notes/wolf-gnome/application-state.md#capture-moments)).
+- The coordinator holds strong `WindowHandle`s, window-side closures a `Weak` upgraded per use: the other direction is a cycle, and a dropped coordinator performs nothing.
+- `install_app_actions` runs before the first window exists, so the menu and chord controller resolve `app.quit` from the first frame. Each window's [`shell.rs`](#shellrs) registers their accelerators, idempotently, so the menu draws the chord.
+- A window that has lost its application or coordinator opens nothing and quits by closing itself.
+- `quit` asks every tab first ([why](../../../notes/wolf-gnome-decisions.md#closing-a-window-and-quitting-ask-every-tab)), then captures every window's panes before any Neovim exits, and closes every window the _application_ holds: a transient toplevel such as About would keep the process alive. A close captures only on `KeepSubtree` ([why](../../../notes/wolf-gnome/application-state.md#capture-moments)).
 - `next_free_id` is free because the registry cannot reach the wrap it guards; a reused id targets the wrong window.
-- The readiness probe judges nothing until `restore_session` has opened every launch window, so no window is judged alone.
+- The readiness probe waits for `restore_session` to open every launch window, so no window is judged alone.
 - `restore_session` maps the windows backmost first, each after the one behind it ([why](../../../notes/wolf-gnome/the-coordinator-and-its-windows.md)).
 - `listen` binds before `restore_session`, whose windows its requests still follow ([why](../../../notes/wolf-gnome/the-coordinator-and-its-windows.md#opening-from-outside-wolf)).
 
@@ -1047,40 +1047,37 @@ Purpose: the GTK glue for native tabs, each owning its `WolfCore`, wake drain, r
 
 - `build(TabsParts) -> TabsHandle`, empty until `open_tab`.
 - `TabsHandle::open_tab(TabParts) -> Option<TabHandle>` starts its core and selects it, or logs once. `replace(old, parts)` does so in `old`'s place; hold no core borrow across it or `close(tab)`.
-- `select`, `selected`, `selected_core`, `core_source`, `entries`, `len`, `n_pages`, `focus_target`, `shutdown_all`, `view_widget`, `bar_widget`, `seed_recency`, `recency`, `drawer_opener`.
+- `select`, `selected`, `selected_core`, `core_source`, `entries` (insertion order), `in_page_order`, `len`, `n_pages`, `focus_target`, `unsaved_tab`, `show_unsaved(tab)`, `shutdown_all`, `view_widget`, `bar_widget`, `seed_recency`, `recency`, `drawer_opener`.
 - `connect_selected`, given the tab left; `connect_wake`; `connect_closing`, before a tab's shutdown; `connect_n_pages`.
 - `sync_ui_focus(window_active)`, the `:checktime` trigger; `active_terminal()` and `sync_terminal_focus(window_active)` ([how](../../../notes/wolf-gnome/terminal-panes.md)).
-- `TabHandle`'s `core`, `liveness`, `restart`, `wake`, `refresh`, `refresh_label`, `capture_viewports`, `shutdown`, `set_empty`, `hide_empty_state`, `is_empty`, `wolf_tab_id`, `launch_cwd`, `live_directory`, `new_tab_sidebar` and sidebar accessors; `CoreSource` and `with_core`.
+- `TabHandle`'s `core`, `liveness`, `request_unsaved`, `show_unsaved`, `restart`, `wake`, `refresh`, `refresh_label`, `capture_viewports`, `shutdown`, `set_empty`, `hide_empty_state`, `is_empty`, `wolf_tab_id`, `launch_cwd`, `live_directory`, `new_tab_sidebar` and sidebar accessors; `CoreSource` and `with_core`.
 
 **Decisions**
 
 - A tab's wake channel exists before its core starts, so the startup flush's wake is queued. The core's [tab ID](../../../specs/cli-and-file-open.md#3-tab-ids) is set first, so no terminal session lacks it.
 - Window-level widgets take a `CoreSource`, never a cell, stale after a switch, and try `drawer_opener`'s `FileOpener` before `InputEvent::Open`, which would edit in an active drawer ([why](../README.md#entry-point)).
-- `close-page` is a veto: every arm answers `close_page_finish` and returns `Propagation::Stop`, or the page stays, and it asks first ([why](../../../notes/wolf-gnome-decisions.md#closing-a-tab-asks-its-neovim)). Closing the last page closes the window, so `replace` opens first, keeping `old` on failure.
+- `close-page` is a veto: every arm answers `close_page_finish` and returns `Propagation::Stop`, or the page stays, and it asks first ([why](../../../notes/wolf-gnome-decisions.md#closing-a-tab-asks-its-neovim)). Closing the last page closes the window, so `replace` opens first, keeping `old` on failure, and confirms the tab ([why](../../../notes/wolf-gnome-decisions.md#closing-a-window-and-quitting-ask-every-tab)).
 - Handlers and drains hold only `Weak`s, or leak every tab's pane view.
 - A tab is titled from its own Neovim's `live_cwd`, never the shell's read ([why](../../../notes/wolf-gnome-decisions.md#threading-and-the-wake)).
 
-**Gotchas**
-
-- `entries` is in insertion order; `TabHandle::page_position` gives the user's arrangement.
-
 #### `tabs_ui.rs`
 
-Purpose: the pure, widget-free rulebook for a window's native tabs: what closing one does, the title and tooltip a tab shows, and which tab's Neovim holds the UI focus. [`tab_view.rs`](#tab_viewrs) carries the answers out.
+Purpose: the pure, widget-free rulebook for a window's native tabs: what each close does, the title and tooltip a tab shows, and which tab's Neovim holds the UI focus. [`tab_view.rs`](#tab_viewrs) carries the answers out.
 
 **Public API**
 
 - `close_outcome(live_pages) -> TabClose` — `CloseTab` or `CloseWindow`; `live_pages` counts the page being closed.
 - `close_page_now(confirmed, liveness, ask) -> bool` — whether the veto closes at once; `None` is no core ([rule](../../../notes/wolf-gnome-decisions.md#closing-a-tab-asks-its-neovim)).
-- `tab_label(empty, cwd, home) -> TabLabel` — the title is `title::window_title` of `cwd`, so the selected tab's equals its window's. An empty tab, or one whose cwd is not yet reported, is titled `title::WINDOW_TITLE_FALLBACK` with no tooltip, so libadwaita shows the title. Otherwise the tooltip is `cwd` in full, as Pango markup.
+- `tab_label(empty, cwd, home) -> TabLabel` — the title is `title::window_title` of `cwd`, so the selected tab's equals its window's, and the tooltip is `cwd` in full. An empty tab, or one with no cwd yet, is `title::WINDOW_TITLE_FALLBACK` with no tooltip, so libadwaita shows the title.
+- `tab_unsaved(confirmed, liveness, ask)`, `window_close(tabs)` and `quit(windows)` — Close Window's and Quit's decisions, pulling nothing past the first `Unsaved` ([rule](../../../notes/wolf-gnome-decisions.md#closing-a-window-and-quitting-ask-every-tab)).
 - `TabId`, `FocusEdge`, `focused_tab(window_active, selected)` and `focus_edges(previous, next)` — the focus trigger.
 
 **Decisions**
 
-- `close_outcome` routes the last tab's close into the window's: a window with no tab holds a tab bar and no editor, with no way to reach one.
-- `focus_edges` is computed against the last focus sent, because Neovim fires `FocusGained` on every `set_ui_focus` with no de-duplication. An unchanged focus sends nothing, and a switch sends the loss before the gain, so two Neovims never both hold it.
-- The tooltip is escaped because `AdwTabPage:tooltip` is Pango markup: a `&` or `<` in a directory name would fail to parse rather than show.
-- The title is never shortened or measured in Wolf: libadwaita fades one too long for its tab.
+- `close_outcome` routes the last tab's close into the window's: a window with no tab has no editor and no way to reach one.
+- `focus_edges` compares against the last focus sent, because Neovim fires `FocusGained` on every `set_ui_focus` with no de-duplication. An unchanged focus sends nothing, and a switch sends the loss before the gain, so two Neovims never both hold it.
+- The tooltip is escaped because `AdwTabPage:tooltip` is Pango markup: a `&` or `<` in a directory name would otherwise fail to parse.
+- Wolf never shortens or measures the title: libadwaita fades one too long for its tab.
 
 #### `terminal.rs`
 
@@ -1174,19 +1171,20 @@ Purpose: the file-tree sidebar, a `gtk::ListView` over a `gtk::TreeListModel`.
 
 #### `window.rs`
 
-Purpose: one window and everything scoped to it — an `adw::ApplicationWindow` over its tabs ([`tab_view.rs`](#tab_viewrs)) and the window's own overlays. [Window structure](../../../notes/wolf-gnome/window-structure.md) owns its widgets and stacking.
+Purpose: one window and everything scoped to it — an `adw::ApplicationWindow` over its tabs ([`tab_view.rs`](#tab_viewrs)) and its own overlays. [Window structure](../../../notes/wolf-gnome/window-structure.md) owns its widgets and stacking.
 
 **Public API**
 
 - `build(parts) -> Option<WindowHandle>` — `None` when no planned tab's core starts; a launch whose only window fails exits.
 - `WindowHandle::id`, `present`, `raise`, `show_after(others)`, `cancel_present`, `refresh_subtree`, recording the selected tab's sidebar first, `capture_viewports`, `cached_window`, `normal_size`, `display_cwd` and `readiness`, of the selected tab.
+- `tabs_in_page_order`, and `show_unsaved(tab)`, which presents too.
 - `live_window`, `selected_tab`, `tab_is_empty`, `new_tab_sidebar`, `focus_tab`, `fill_tab`, `wolf_tab_ids`, `open_file` — [Open Folder](#open_folderrs)'s and [a request's](#open_requestrs).
 
 **Decisions**
 
-- The close handler's statement order is load-bearing at both ends. Telling the coordinator comes first, or the gathered entry sees nothing and the session is lost; focusing the input method out and clearing its client widget comes last, after every core shuts down, so a focus-out commit finds no core and the context releases the widget tree.
+- The close handler's order is load-bearing. Its unsaved check, borrowing only, comes first ([why](../../../notes/wolf-gnome-decisions.md#closing-a-window-and-quitting-ask-every-tab)), then telling the coordinator, or the gathered entry sees nothing and the session is lost. Focusing the input method out and clearing its client widget comes last, after every core shuts down, so a focus-out commit finds no core and the context releases the widget tree.
 - Each tab's first drain is a wake queued after the window registers and installs its close handler: an earlier drain could reach a coordinator unaware of it, or close and orphan every tab's Neovim.
-- `display_cwd` is the cached entry's active `directory`, so palette and save cannot disagree.
+- `display_cwd` is the cached entry's active `directory`, so palette and save agree.
 - Keys, commits and focus reach the selected tab ([terminal panes](../../../notes/wolf-gnome/terminal-panes.md)).
 
 **Gotchas**

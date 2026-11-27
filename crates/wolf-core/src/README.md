@@ -12,22 +12,23 @@ Crate root. Declares every module and flattens the public surface into root re-e
 
 #### `api.rs`
 
-`WolfCore`, the FFI-shaped surface both front-ends share, owning the runtime, Neovim and snapshot.
+`WolfCore`, the FFI-shaped surface both front-ends share.
 
 **Public API**
 
-- `CoreConfig.cwd` is nvim's launch directory, and the search/MRU root until nvim reports `live_cwd`.
-- `SnapshotReadGuard` outlives `&self`, owning an `Arc` of the lock; hold it for one paint.
+- `CoreConfig.cwd` is nvim's launch directory and the search/MRU root until `live_cwd` arrives.
+- `SnapshotReadGuard` owns an `Arc` of the lock; hold it for one paint.
 - Blocking queries (`list_buffers`, `request_close_tab` and siblings) fall back to empty, zero or `NoAnswer` on an RPC error or timeout. `open_split_left(path)` makes [§5.2](../../../specs/cli-and-file-open.md#52-choosing-the-pane) rule 4's split ([why](../../../notes/wolf-core-decisions.md#opening-files-from-outside-wolf)). The rest is fire-and-forget, on the ordered input channel: `split_pane` splits the window an earlier `focus_win` made current, `set_window_cursor(win, view)` re-applies a view after a resize ([why](../../../notes/wolf-core-decisions.md#a-saved-view-is-applied-twice)), and `wait_on(path, wait)` registers after the `Open` that placed `path`.
-- `restart_nvim` returns `Ok(false)` when no respawn happened (`Alive` or in flight) and reopens nothing: capture `open_files_for_tabpage` first. After `Ok(true)` the snapshot, intents, history and waits start over ([what carries](../../../notes/wolf-core-decisions.md#liveness-and-restart)).
+- `request_unsaved` asks silently, so every tab a close would end can be asked; `show_unsaved` echoes, in the tab then selected.
+- `restart_nvim` returns `Ok(false)` when no respawn happened and reopens nothing: capture `open_files_for_tabpage` first. After `Ok(true)` the snapshot, intents, history and waits start over ([what carries](../../../notes/wolf-core-decisions.md#liveness-and-restart)).
 - `start` ignores `SIGPIPE` process-wide ([why](../../../notes/wolf-core-decisions.md#liveness-and-restart)).
 - `recent_dirs` stats on the calling thread, omits non-directories and never prunes, so a returning folder reappears.
 
 **Decisions**
 
-- `block_on_rpc` detaches a call outliving `WOLF_RPC_TIMEOUT_MS`, never drops it: dropping its `nvim-rs` response receiver kills the io loop, which reads as a crash.
+- `block_on_rpc` detaches a call outliving `WOLF_RPC_TIMEOUT_MS`: dropping its `nvim-rs` response receiver kills the io loop, which reads as a crash.
 - `WolfCore` is `!Send` and keeps the process in a `RefCell`, so a restart can swap one in through `&self`. Never hold a borrow across an `.await`.
-- Typing sent before a restart's swap never reaches the fresh nvim, while state input does. `send_input`'s generation stamp cuts it, not liveness: input sent while `Alive` can still be queued then.
+- `send_input`'s generation stamp, not liveness, keeps typing sent before a restart's swap from the fresh nvim, while state input reaches it: input sent while `Alive` can still be queued then.
 
 #### `pump.rs`
 

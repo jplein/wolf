@@ -55,7 +55,7 @@ Purpose: Pure line-height and baseline math for the grid cell, split out of `Cel
 
 #### `CloseTabSeam.swift`
 
-Purpose: Whether a tab's window closes at once or stays open while its Neovim is asked, the decision [`WolfWindowController`](../WolfMacOS/README.md#wolfwindowcontrollerswift)'s `windowShouldClose(_:)` makes. The same rule as wolf-gnome's [`tabs_ui::close_page_now`](../../../wolf-gnome/src/README.md#tabs_uirs).
+Purpose: Whether a tab's window closes at once or stays open while its Neovim is asked, the decision [`WolfWindowController`](../WolfMacOS/README.md#wolfwindowcontrollerswift)'s `windowShouldClose(_:)` makes for a one-tab window, and its `closeTabChecked()` once [`CloseScopeSeam`](#windowcloseseamswift) decides `.tab` in a group of several. The same rule as wolf-gnome's [`tabs_ui::close_page_now`](../../../wolf-gnome/src/README.md#tabs_uirs).
 
 **Public API**
 
@@ -783,3 +783,19 @@ Purpose: The window titlebar's background: a set `WolfTitlebar` background, else
 **Decisions**
 
 - `WolfTitlebar` comes first because a colorscheme that defines it is asking for it. `Normal` comes next so a colorscheme that does not, such as Lighthouse, still gets a titlebar that matches the grid ([why](../../../../notes/wolf-macos-decisions.md#the-titlebar)).
+
+#### `WindowCloseSeam.swift`
+
+Purpose: Close Window's and Quit's decisions over each tab's unsaved answer, and `CloseScopeSeam`, which tells a tab group's own close from one tab's. [`AppDelegate`](../WolfMacOS/README.md#appdelegateswift) carries them out. The same rule as wolf-gnome's [`tabs_ui::window_close` and `quit`](../../../wolf-gnome/src/README.md#tabs_uirs), with no confirmed input, since a confirmed macOS tab closes in `windowShouldClose` and never reaches the ask.
+
+**Public API**
+
+- `UnsavedAnswer` — its raw values are `wolf-ffi`'s `mod unsaved_answer` discriminants, kept by hand; an unknown one decodes to `nil`.
+- `tabUnsaved(liveness:ask:)` — asks only an `.alive` Neovim, once; any other, and `.noAnswer`, is `.unreachable`, which counts as clean.
+- `closeWindow(_:)` and `quit(_:)` — `.show` for the first `.unsaved` tab, the windows in the order given, else `.closeAll` or `.quit`. They pull their sequences lazily and stop there, so no tab after it is asked.
+- `CloseScopeSeam(schedule:decide:)` and `request(_:group:)` — the first request of a batch schedules its end, `closeScopeSettle` later in production. At the end each group decides `.window(group)` when every window of it asked, and otherwise `.tab(w)` for each window that did.
+
+**Decisions**
+
+- A wedged tab never keeps its window or the app open: its swap files keep its edits ([why](../../../../notes/wolf-macos-decisions.md#closing-a-window-and-quitting-ask-every-tab)).
+- The batch empties before any decision runs, so the closes a decision makes start a batch of their own.

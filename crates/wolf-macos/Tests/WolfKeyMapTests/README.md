@@ -506,6 +506,14 @@ Of `CloseBurst`: a tab group closed in one turn keeps the tree read once, at its
 
 **Gotchas**: one test pins the interaction of the two: requests made while hidden must not advance reload tracking, so the version still reloads after the catch-up. That is what stops a hidden sidebar from silently consuming a snapshot it never rendered.
 
+#### `WindowCloseSeamTests.swift`
+
+**Covers**
+
+- `WindowCloseSeam.tabUnsaved`, `closeWindow` and `quit`, table-driven over the rows of wolf-gnome's [`tab_close.rs`](../../../wolf-gnome/tests/README.md#tab_closers) but the confirmed one: each answer, how many times a tab is asked, and which tabs and windows are pulled, none after the first `.unsaved`.
+- `UnsavedAnswer`'s raw values `0`, `1` and `2` against `mod unsaved_answer`, and `3` decoding to `nil`.
+- `CloseScopeSeam`, over ends the test runs by hand: one window of a two-window group, asking twice, decides `.tab` once and only at the end; both windows, in either order, decide `.window` in the group's order; two groups in one batch decide apart; and a request after an end schedules a batch of its own.
+
 #### `WindowStateRoundTripTests.swift`
 
 **Covers**: the macOS save and restore of [application-state.md](../../../../specs/application-state.md) §4 and §5 over a real `wolf.sqlite`, through `SessionSeam.windowState`, `WindowStateCodec` and the bridge, with no window or Neovim. A quit is the terminate path's calls, and a relaunch the launch's pure steps followed by another quit. Two windows with several tabs come back in stacking order with their frames, active tabs and zoom, an empty tab without its layout; a minimized window comes back minimized and behind; and the project states of a directory open in two windows follow §4's rule, rule 2 by recency rather than tab order.

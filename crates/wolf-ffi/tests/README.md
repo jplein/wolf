@@ -43,8 +43,6 @@ Where the wolf-core suite panics without a real nvim, these tests skip loudly th
 
 `WolfCoreHandle::set_background(dark)` flipping the captive Neovim's global `&background`. Spawns a real Neovim: needs `WOLF_NVIM_BIN`, and the `:appearance` target stages the nvim runfiles and is tagged `no-sandbox`.
 
-`request_close_tab()` answers `2` and drains `close_tab` on an unmodified tab, `1` once the buffer is modified, and `0` after `shutdown()`, checked as literals, since the Swift `CloseTabAnswer` mirrors them by value.
-
 **Gotchas**
 
 - The bridge exposes no `&background` accessor. A case observes it indirectly, by setting `WolfCursor guibg` to a marker chosen by the live option and reading `FfiFrame::cursor_fill()` back.
@@ -133,7 +131,9 @@ A `command_palette()` session: static registry rows, `add_window` and recent-fol
 
 **Covers**
 
-The command channel and the Rust side's discriminant record: for every `wolf_core::COMMAND_SPECS` row, typing its `:Wolf…` Ex command drains an `FfiCommand` whose `kind()` is the row's index, and `wolf_ffi_command_kind` of its id is that index too. A moved, reordered or inserted `command_kind` fails here, while an appended command passes with no edit to this file. Spawns a real Neovim: needs `WOLF_NVIM_BIN`, and the `:commands` target stages the nvim runfiles and is tagged `no-sandbox`.
+The command channel and the Rust side's discriminant record: for every `wolf_core::COMMAND_SPECS` row, typing its `:Wolf…` Ex command drains an `FfiCommand` whose `kind()` is the row's index, and `wolf_ffi_command_kind` of its id is that index too. A moved, reordered or inserted `command_kind` fails here, while an appended one needs no edit here. Spawns a real Neovim: needs `WOLF_NVIM_BIN`, and the `:commands` target stages the nvim runfiles and is tagged `no-sandbox`.
+
+`request_close_tab()` answers `2` and drains `close_tab` on an unmodified tab, `1` once the buffer is modified, and `0` after `shutdown()`. In the same three states `request_unsaved()` answers `2`, `1` and `0`, and `show_unsaved()` `false`, `true` and `false`. All are checked as literals, since the Swift `CloseTabAnswer` and `UnsavedAnswer` mirror them by value.
 
 **Gotchas**
 

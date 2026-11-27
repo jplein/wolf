@@ -73,7 +73,25 @@ A drained `close_tab` is Neovim's own verdict, since Neovim sends it only once i
 
 A dead or stalled Neovim, a tab with no core, or an ask with no answer within core's RPC timeout closes unchecked. A wedged tab must stay closable, and its swap files keep its edits recoverable ([§8](../specs/architecture.md#8-the-captive-neovim-is-hermetic-pinned-and-markdown-only)). A stalled Neovim is not asked at all, since a call has already outlasted the timeout and asking again would stall the UI for another.
 
-Close Window closes with `close()`, which no `windowShouldClose` refuses, and a close after the user has confirmed termination, `isTerminating`, is never refused either.
+A close after the user has confirmed termination, `isTerminating`, is never refused. In a tab group of several windows the check runs only once [the group's own close](#closing-a-window-and-quitting-ask-every-tab) is told apart from one tab's.
+
+## Closing a window and quitting ask every tab
+
+Close Window, a tab group's red close button and Quit refuse on a tab's unsaved changes ([§9](../specs/application-state.md#9-closing-a-window-and-quitting)). Each asks every tab it would close through the silent `request_unsaved`, and [`WindowCloseSeam`](../crates/wolf-macos/Sources/WolfKeyMap/README.md#windowcloseseamswift) decides, pulling the answers lazily, so no tab after the first unsaved one is asked. A dead or stalled Neovim, or one with no answer, counts as clean, as for Close Tab.
+
+Only the tab chosen is then raised and asked to echo, through `showUnsaved()`, so its E37 or E162 shows in its own toast. An echoing ask would echo in every unsaved tab, background ones included.
+
+Close Window runs `AppDelegate.closeWindow(_:)` over the window's tab group, because each tab is its own `NSWindow` and closing the key window closes one tab. After the check it closes every window of the group with `close()`, in one loop. `close()` calls no `windowShouldClose(_:)`, so Close Tab's check cannot refuse a window the path has checked.
+
+The loop closes the group in one runloop turn, so the close burst commits the tree read at its first close ([commit](#state-is-a-tree-and-the-front-end-owns-every-write)). The last window then keeps every tab, and one of several drops its tabs, as each teardown's `closeCommit(for:)` decides.
+
+AppKit sends `windowShouldClose(_:)` to every window of a tab group when its red button is clicked, and to one window for a tab's own close button or `performClose(_:)`. Ghostty's `macos/Sources/Helpers/TabGroupCloseCoordinator.swift` relies on the same, and no automated test here can measure it. So a window of a group of several answers no and files the request with the coordinator's `CloseScopeSeam`, which waits `WindowCloseSeam.closeScopeSettle`, Ghostty's debounce, for the rest of the group.
+
+When every window of the group asked, it takes Close Window's path. Otherwise each window that asked takes Close Tab's check through `closeTabChecked()`, and closes confirmed when that lets it through, so a group tab's own close is asked one settle later. A drained `close_tab` stays immediate, since it is confirmed. A one-tab window keeps Close Tab's synchronous check: for one tab the two checks agree, and that path needs no settle.
+
+Quit's check is `applicationShouldTerminate(_:)`, which the Dock's Quit, a logout and a shutdown reach too, so a refusal stops them at Wolf as in a macOS document app. It asks the tab groups frontmost first, by the coordinator's `StackingOrder`, and each group's tabs in tab order. A refusal raises the tab, which deminiaturizes its window, makes it key and so selects the tab, shows the message, and answers `.terminateCancel`.
+
+Otherwise it answers `.terminateNow`, and `applicationWillTerminate` commits. A terminate after the last window closed finds no live view, so it answers `.terminateNow`: that window's own close was checked.
 
 ## State is a tree, and the front-end owns every write
 
@@ -87,9 +105,9 @@ Every Alive core wake requests a commit, alongside the geometry, sidebar, cwd, t
 
 Two restored views never gather and go on contributing their seed. One whose rebuild failed shows a fallback pane rather than its saved split. One restored to the empty state because its saved folder was missing keeps that folder until the user opens another, so remounting a volume brings the session back.
 
-**Closing the last window is quitting, so it commits the tree with that window in it.** The app terminates after its last window closes, and a commit after the close would find no live view. The commit writes the tree as it stood at the first close of that runloop turn, because the tabs that close in one turn close their windows in turn, and by the last close the earlier tabs are torn down. Only tabs whose `windowShouldClose` answers yes at once close in one turn: confirmed ones, and those whose Neovim is not asked or gives no answer.
+**Closing the last window is quitting, so it commits the tree with that window in it.** The app terminates after its last window closes, and a commit after the close would find no live view. The commit writes the tree as it stood at the first close of that runloop turn, because the tabs that close in one turn close their windows in turn, and by the last close the earlier tabs are torn down. Only tabs that close without waiting on their Neovim close in one turn: a group closed by [Close Window's path](#closing-a-window-and-quitting-ask-every-tab), confirmed tabs, and tabs whose Neovim is not asked or gives no answer.
 
-A tab whose Neovim is asked closes on its own drained `close_tab`, in a turn of its own. So when a tabbed window's red close button asks every tab, as AppKit does, the last window keeps only the tab that closed last, a present limitation until Close Window has its own path. A tab closed alone likewise ends its burst on the next turn, so it drops, and a later close of the last tab keeps only that tab. That AppKit closes a tab group's windows within one turn is a premise no automated test measures.
+A tab whose Neovim is asked closes on its own drained `close_tab`, in a turn of its own, so it ends its burst alone and drops, and a later close of the last tab keeps only that tab. The red close button and Close Window close a whole group after their check in one turn, so its last window keeps every tab.
 
 Any other close commits without the closing view, and a close during termination commits nothing over the terminate commit. A walk with no live view or no window commits nothing at all, because it would erase the session.
 
@@ -97,7 +115,7 @@ Saved tabs that no view took at launch, because their core failed to start, are 
 
 **The saved frame is the normal frame.** `StatePersistence` records a window's frame on each geometry change only while it is neither zoomed nor full screen, so a quit while zoomed or in full screen reopens at the earlier size. A tab group writes its selected tab's normal frame, else any member's, else the selected window's frame.
 
-**At quit, the window state is on disk before any Neovim exits.** `applicationWillTerminate` runs `SessionSeam.terminate`: every tab captures its cursors and scroll, then the tree is committed and `wolf_ffi_app_state_flush` blocks on the writer, and only then does each teardown shut its core down. `WolfCoreHandle::shutdown` does not flush the store, so nothing else orders the two, and a capture after a teardown has no Neovim to read.
+**At quit, the window state is on disk before any Neovim exits.** Once [Quit's check](#closing-a-window-and-quitting-ask-every-tab) passes, `applicationWillTerminate` runs `SessionSeam.terminate`: every tab captures its cursors and scroll, then the tree is committed and `wolf_ffi_app_state_flush` blocks on the writer, and only then does each teardown shut its core down. `WolfCoreHandle::shutdown` does not flush the store, so nothing else orders the two, and a capture after a teardown has no Neovim to read.
 
 Only directories the user actually opened persist. The passive launch working directory is deliberately not written and not recorded in the recent-directories list, which is what keeps Open Recent clean. A frame restores only when it has a position and still intersects a live screen, and otherwise keeps a new window's placement. A tab's working directory restores only when it is still a directory; an empty or deleted one restores to the empty state, with no rebuild, rather than falling back to the process working directory.
 
@@ -315,7 +333,7 @@ The Mono face is the one cascaded because it is drawn unscaled, and every Mono g
 - A Neovim crash restart reopens the tab's open files into one pane, so its splits collapse, and the next commit records that. Restoring the pane topology across a restart would change the restart model.
 - Only what a pane shows persists: the window state carries buffer paths only as panes, so a file the user switched away from in its pane is not reopened at launch.
 - The toolbar's search segment seeds the search toggles from Neovim each time it shows the search panel, replacing restored or user-set toggles, while the sidebar commands do not seed. Seeding once would save a never-seeded panel's all-off toggles as if chosen, which needs a design of its own.
-- A fill discards an unsaved buffer typed into the empty tab, as closing that tab would.
+- A fill discards an unsaved buffer typed into the empty tab.
 - A file opened into an empty tab is not restored at launch: the tab has no folder, so it persists as an empty tab.
 - A capture runs only at a focus move, a tab switch, a window close and quit, so a crash loses the cursor and scroll movement since the last one, and a crash restart drops every capture with its panes.
 - Per-pane navigation history is not persisted across launches, and is not cursor-position history — Neovim's own jumplist (`<C-o>` / `<C-i>`) is untouched. Navigating back to a file deleted from disk opens an empty `[New]` buffer, exactly as `:e missing.md` would.

@@ -171,10 +171,11 @@ Real Neovim (`//crates/wolf-core:commands`: staged nvim runfiles, `WOLF_NVIM_BIN
 
 **Covers**
 
-- The Neovim-to-shell command channel: the `:Wolf<Pascal>` Ex face and the `require('wolf').<snake>()` Lua face both enqueue the matching `Command`; the `:q`/`:q!`/`:wq`/`:qa`/`:qa!`/`:wqa` overrides draining `CloseTab`; `ZZ` and `ZQ` on the last pane closing the tab with Neovim alive, `ZZ` writing only a modified buffer and `ZQ` nothing; and the registry invariants (`from_id` round-trip, unique ids and ex-commands, the `Wolf` prefix, menu groups, `close_tab` in File and `close_pane` as "Close Pane").
-- The quits' tab-wide refusals, E37 for the current buffer and E162 for a hidden one or one in another pane, `:wq` included; a modified buffer of any buftype refusing, named as Vim names an unnamed, prompt, `acwrite`, quickfix or location-list buffer; `:wqa` writing every modified buffer, and `:wqa!` aborting on a failed write; and the sweep that no quit command notifies `CloseWindow`.
+- The Neovim-to-shell command channel: the `:Wolf<Pascal>` Ex face and the `require('wolf').<snake>()` Lua face both enqueue the matching `Command`; the `:q`/`:q!`/`:wq`/`:qa`/`:qa!`/`:wqa` overrides draining `CloseTab`; `ZZ` and `ZQ` closing the last pane's tab with Neovim alive, `ZZ` writing only a modified buffer and `ZQ` nothing; and the registry invariants (`from_id` round-trip, uniqueness, the `Wolf` prefix and menu groups).
+- The quits' tab-wide refusals, E37 for the current buffer and E162 for any other, `:wq` included; a modified buffer of any buftype refusing, named as Vim names it; `:wqa` writing every modified buffer, and `:wqa!` aborting on a failed write; and the sweep that no quit command notifies `CloseWindow`.
 - `request_close_tab()` answering `Closing` with a drained `CloseTab`, `Refused` with E37 or E162 and none, and `NoAnswer` from a killed Neovim; `close_tab`'s two faces refusing with E37 before they notify.
-- `InputEvent::ClosePane` closing a split and notifying nothing, draining `CloseTab` on the tab's last pane, and refusing there with E37 or E162 and notifying nothing.
+- `request_unsaved()` answering `Clean`, `Unsaved` for a current or hidden modified buffer while echoing nothing, and `NoAnswer` from a killed Neovim; `show_unsaved()` echoing E37 and notifying nothing, or `false` when clean.
+- `InputEvent::ClosePane` closing a split and notifying nothing, draining `CloseTab` on the tab's last pane, and refusing there, notifying nothing.
 
 **Gotchas**
 
