@@ -1,6 +1,6 @@
 # `gates.sh`
 
-Last verified at commit `efd13269cafbd804019e8cff72bf9e70d121cb18`.
+Last verified at commit `6d34ea66995b255038a21c96d7a358d5b8bca136`.
 
 ## Dev shell entry
 
@@ -45,6 +45,10 @@ doc-lint is a Cargo workspace of its own, so `--workspace` never reaches it and 
 `rustdoc-links` denies `rustdoc::broken_intra_doc_links` alone, so an unresolved or ambiguous link fails. `private_intra_doc_links`, a public doc linking a private item, stays a warning: wolf-core and wolf-gnome carry over a hundred each. `env` scopes `RUSTDOCFLAGS` to this one step, since exported for the run it would also reach the rustdoc invocations of `cargo test`'s doctests. `--no-deps` documents only the workspace's own crates, whose links are the only ones this repository can fix.
 
 The gate is Linux only because only Cargo builds wolf-gnome, the macOS dev shell has no `cargo`, and no Bazel target runs rustdoc. It compiles nothing after `clippy`: on a warm `target/` it takes about a second, and documenting the workspace into an empty `target/doc` took 1.5 seconds. A cold `target/` was not measured.
+
+`writeback` runs `sync` between `build` and `test`. A relinking build leaves 9–17 GB of dirty pages under `target/`, and on regina's Linux secondary `TMPDIR`'s `/tmp` is the container's overlay, mounted `fsync=volatile`, whose upper dir shares one data=ordered ext4 journal with `target/`. While the 45–100 s writeback drains, Neovim's and the tests' file creates, unlinks, chmods and page writes stall in the kernel for 25 s or more. A real-Neovim wait then runs out `FLUSH_TIMEOUT` before Neovim has acted on its input, though it waits on the right event.
+
+After a relink, `commands.rs` and `drawer_last_pane.rs` run together failed 5 of 10 times, and 0 of 10 with `sync` first. The step costs about 60 s net on a relinking run, since the same writeback otherwise slows the test step, 343 s against 318 s, and a build that relinks nothing leaves little to flush. A larger `FLUSH_TIMEOUT` would be sized to the backlog rather than to the tests' work, and the worker has no tmpfs for `TMPDIR`: `/dev/shm` is `size=0k` and `XDG_RUNTIME_DIR` is unset. Turning fsync off gains nothing, since fsync is already a no-op on that overlay.
 
 `./tools/wolf-package-smoke.sh` stays out of the gate. Its package is input-addressed over everything under `crates/`, so after any source edit it is a cold release compile with no `target/` reuse, on top of the gate's own build. It runs on its own, as [build.md](../build.md#the-nix-package) describes.
 

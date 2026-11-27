@@ -69,6 +69,8 @@ What each target covers lives with the tests: [`wolf-core/tests`](crates/wolf-co
 
 Several cages run at once. `WOLF_SMOKE_JOBS=<n>` sets how many, and `1` runs them serially; unset, the count is `available_parallelism` divided by `DEFAULT_SMOKE_JOBS_CPUS_PER_CAGE`, clamped to between 1 and `DEFAULT_SMOKE_JOBS_CAP`, whose doc comment in `crates/wolf-gnome/tests/smoke_headless/main.rs` carries the measured wall times. Two `cargo test` runs share no socket or file, but each sizes its slots for the whole host, so never overlap them: together they oversubscribe the CPU and stretch the scenarios' fixed settles.
 
+Where `TMPDIR` shares a journalled filesystem with `target/`, as on regina's Linux secondary, a real-Neovim wait in a `cargo test` started right after a relinking build can time out while that build's output is written back. Run `sync` between building and testing, as the gate does, for example `cargo test --no-run && sync && cargo test`. [The gate's notes](notes/gates.sh.md#linux-gates) have the measurement.
+
 ### The optimized build
 
 From the repository root, for the reason [Activating the dev environment](#activating-the-dev-environment) gives, and because a checkout binary resolves the captive `init.lua` out of the checkout it was compiled in — the last of the three branches [`wolf-gnome-decisions.md`](notes/wolf-gnome-decisions.md) states, and the one [the Nix package](#the-nix-package) does not take:
@@ -472,7 +474,7 @@ doc-lint runs standalone too: `doc-lint --files <files>` checks comments in the 
 
 ## The verification gate
 
-`./gates.sh`, at the repository root, is the definition of green on both platforms. It detects the host and runs every deterministic gate for it: on Linux the format, Markdown, wolf-gnome wording, dev shell, `regina-run.sh clean`, doc-lint, wolf-core dependency, clippy, rustdoc link, build and test commands, and on macOS prettier, doc-lint's checkout-wide rules, the wolf-core dependency check, a check that `.bazelignore` keeps the regina worktrees out of `//...`, and `bazel test //...`. What each list covers, and why it runs in that order, is in [its notes](notes/gates.sh.md).
+`./gates.sh`, at the repository root, is the definition of green on both platforms. It detects the host and runs every deterministic gate for it: on Linux the format, Markdown, wolf-gnome wording, dev shell, `regina-run.sh clean`, doc-lint, wolf-core dependency, clippy, rustdoc link, build, writeback `sync` and test commands, and on macOS prettier, doc-lint's checkout-wide rules, the wolf-core dependency check, a check that `.bazelignore` keeps the regina worktrees out of `//...`, and `bazel test //...`. What each list covers, and why it runs in that order, is in [its notes](notes/gates.sh.md).
 
 ```sh
 ./gates.sh                          # inside the dev shell, or outside it with nix on PATH
