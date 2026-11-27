@@ -10,7 +10,7 @@ A restored tab whose editor pane is active on a file below the fold of a large f
 
 ## The cause, as measured
 
-Under `cage`, with instrumentation in `tree_view.rs` and the fixture of [`smoke_headless/tree_reveal.rs`](../../crates/wolf-gnome/tests/README.md#smoke_headlesstree_revealrs):
+Under `cage`, with instrumentation in `tree_view.rs` and the fixture of [`smoke_headless/tree_reveal.rs`](../../crates/wolf-gnome/tests/smoke_headless/README.md#tree_revealrs):
 
 - The launch reveal ran in the same refresh as the rebuild that first populated the tree. The list view was mapped and realized but not yet allocated: height 0, and a vertical adjustment with upper 0 and page size 0.
 - Inside that `scroll_to`, GTK bound rows 0 to 204, then unbound rows 1 to 82 one by one while binding rows 205 to 285. Only row 0 and rows 83 onward kept a widget.

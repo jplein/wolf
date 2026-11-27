@@ -176,7 +176,7 @@ A Markdown preview follows the configured appearance through a chain whose links
 
 **libadwaita propagates that property only while the running GTK is older than 4.23.1.** The flake pins 4.20/4.22, so the chain is live. Raising GTK past that version removes it, and the preview stops following the configured appearance with nothing in this repository changed.
 
-**The write is silent.** libadwaita carries a warning string for exactly this property and suppresses its own warning while it performs the write; zero occurrences reached stderr across six `cage` runs. Nothing logs it, so `preview_document_follows_the_configured_appearance_under_cage` in [`tests/README.md`](../crates/wolf-gnome/tests/README.md) is the only tripwire.
+**The write is silent.** libadwaita carries a warning string for exactly this property and suppresses its own warning while it performs the write; zero occurrences reached stderr across six `cage` runs. Nothing logs it, so `preview_document_follows_the_configured_appearance_under_cage` in [`preview.rs`](../crates/wolf-gnome/tests/smoke_headless/README.md#previewrs) is the only tripwire.
 
 **Do not move the theme's `color-scheme` declaration to `:root`.** Measured and falsified: the declaration sits on `body.wolf-markdown`, `getComputedStyle(documentElement).colorScheme` computes `normal`, and dark takes anyway; injecting it on the root changed nothing in either direction.
 
@@ -202,7 +202,7 @@ A dead Neovim is restarted automatically and a wedged one never is, each restart
 
 ## The headless smoke test
 
-The GTK glue is covered by end-to-end smokes that launch the real binary under `cage`, the headless wlroots compositor, drive it with `wtype` and [`wolf-pointer-inject`](../tools/wolf-pointer-inject/README.md), screenshot the live window with `grim`, read it back with `tesseract`, and resize it by resizing the headless output with `wlr-randr`. They prove the stack actually draws a window a human could see. They are not opt-in: they run in the ordinary `cargo test` suite, which is most of why it is slow. See [`tests/README.md`](../crates/wolf-gnome/tests/README.md) for the full list.
+The GTK glue is covered by end-to-end smokes that launch the real binary under `cage`, the headless wlroots compositor, drive it with `wtype` and [`wolf-pointer-inject`](../tools/wolf-pointer-inject/README.md), screenshot the live window with `grim`, read it back with `tesseract`, and resize it by resizing the headless output with `wlr-randr`. They prove the stack actually draws a window a human could see. They are not opt-in: they run in the ordinary `cargo test` suite, which is most of why it is slow. See [`tests/smoke_headless/README.md`](../crates/wolf-gnome/tests/smoke_headless/README.md) for the full list.
 
 A missing precondition fails loud rather than skipping quietly, because absence means the smoke toolchain was not provisioned; the environment they need is [`build.md`](../build.md)'s.
 

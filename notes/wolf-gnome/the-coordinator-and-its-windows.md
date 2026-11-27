@@ -20,7 +20,7 @@ A close arriving during a quit commits nothing at all. The quit path has already
 
 [`titlebar_background.rs`](../../crates/wolf-gnome/src/README.md#titlebar_backgroundrs) adds one per window whose data is that window's own colour, replaced only when the colour changes and removed at close, so it is per window by necessity rather than by default.
 
-What holds `tree_view`'s call where it is, is evidence: the class reaches no pixel, and [`tests/README.md`](../../crates/wolf-gnome/tests/README.md) records that for the bold, so moving it would be an unverifiable edit to a startup path. That argument bears on where a call lives, not on whether it is guarded — which is the distinction that lets `overlay_style` carry a flag while `tree_view` carries none.
+What holds `tree_view`'s call where it is, is evidence: the class reaches no pixel, and [What is still unproven](../crates/wolf-gnome/tests/what-is-still-unproven.md) records that for the bold, so moving it would be an unverifiable edit to a startup path. That argument bears on where a call lives, not on whether it is guarded — which is the distinction that lets `overlay_style` carry a flag while `tree_view` carries none.
 
 New Window opens a fresh, empty window at `$HOME` with one tab and that tab's own Neovim. It takes the active window's normal size ([§7](../../specs/application-state.md#7-new-windows-and-tabs)) and nothing else of a window: not the working directory, not the layout. That is what macOS's `makeNewWindow` does and parity is the row's whole subject. New Tab opens the same empty tab in the window it is asked from, planned by the same `restore_plans` call, so neither inherits a project.
 

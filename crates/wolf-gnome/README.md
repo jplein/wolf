@@ -6,11 +6,12 @@ The GTK 4 and libadwaita front-end: a runnable multi-window Linux application th
 
 ## Layout
 
-| Directory                                 | Contents                                            |
-| ----------------------------------------- | --------------------------------------------------- |
-| [`src/`](src/README.md)                   | The application and its pure seams, one entry each. |
-| [`src/terminal/`](src/terminal/README.md) | The terminal pane's seams and its painter.          |
-| [`tests/`](tests/README.md)               | Integration tests, including the headless smoke.    |
+| Directory                                                 | Contents                                            |
+| --------------------------------------------------------- | --------------------------------------------------- |
+| [`src/`](src/README.md)                                   | The application and its pure seams, one entry each. |
+| [`src/terminal/`](src/terminal/README.md)                 | The terminal pane's seams and its painter.          |
+| [`tests/`](tests/README.md)                               | Integration tests.                                  |
+| [`tests/smoke_headless/`](tests/smoke_headless/README.md) | The `cage` smokes and their harness.                |
 
 ## Entry point
 
@@ -47,4 +48,4 @@ Running needs a Wayland or X11 session, or the headless compositor the smoke tes
 
 `cargo test -p wolf-gnome` runs the whole suite, including the end-to-end smokes that drive the real window under a headless compositor — which is why it is slow. The authoritative full check is `./gates.sh`, described under [the verification gate](../../build.md#the-verification-gate).
 
-What each target covers, what the smokes prove, and what is deliberately left unproven are in [`tests/README.md`](tests/README.md).
+What each target covers and what is deliberately not smoked are in [`tests/README.md`](tests/README.md), what the smokes prove is in [`tests/smoke_headless/README.md`](tests/smoke_headless/README.md), and what no test proves is in [What is still unproven](../../notes/crates/wolf-gnome/tests/what-is-still-unproven.md).

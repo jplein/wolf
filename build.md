@@ -96,7 +96,7 @@ nix develop --command cargo test --release -p wolf-gnome --test smoke_headless -
           preview::preview_pane_renders_and_edit_source_returns_under_cage
 ```
 
-What each of them covers belongs with the tests, in [`wolf-gnome/tests`](crates/wolf-gnome/tests/README.md).
+What each of them covers belongs with the tests, in [`wolf-gnome/tests/smoke_headless`](crates/wolf-gnome/tests/smoke_headless/README.md).
 
 Measured on the 32-core dev host with `cargo 1.96.0` and `rustc 1.96.0`. A cold `cargo build --release` — `target/release` absent, 167 crates — took `real 0m52.610s` and `user 6m19.665s`, and `target/release` came to 1.4 GB.
 
