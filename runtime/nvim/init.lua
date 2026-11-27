@@ -917,8 +917,8 @@ function _G.wolf_setup_layout(chan)
 		if not opts.force and _G.wolf_refuse_unsaved() then
 			return false
 		end
-		-- Before close_tab, on which the front-end shuts the tab's core down and ends every wait
-		-- with 1. See notes/runtime/nvim/init.lua.md#waits-end-before-the-tab-closes
+		-- With 0 (specs/cli-and-file-open.md#6-waiting), before close_tab's shutdown ends them with 1.
+		-- See notes/runtime/nvim/init.lua.md#waits-end-before-the-tab-closes
 		for _, buf in ipairs(vim.api.nvim_list_bufs()) do
 			end_waits(buf, 0)
 		end

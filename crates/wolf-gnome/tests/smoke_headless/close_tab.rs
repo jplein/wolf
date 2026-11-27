@@ -1,15 +1,21 @@
-//! The Close Tab smoke: a tab's close, from its close button or the palette's Close Tab, asks
-//! the tab's own Neovim first, refuses while the tab has unsaved changes, and closes it once
-//! they are written; Close Tab on the last tab closes the window, and with it the app.
+//! The Close Tab smokes: whether `on_close_page` passes the page's own confirmation, liveness
+//! and ask, seen end to end.
 //!
-//! The launch restores one planted window of two tabs, each on a file of the project. Every
-//! observable is a count of the app's live Neovims, a readback a Neovim writes about itself, or
-//! the app's exit. Nothing is OCRed, so no fixture name can satisfy an assertion.
+//! [`close_tab_asks_the_tabs_neovim_under_cage`]: a tab's close, from its close button or the
+//! palette's Close Tab, asks the tab's own Neovim first, refuses while the tab has unsaved
+//! changes, and closes it once they are written; Close Tab on the last tab closes the window,
+//! and with it the app. Its launch restores one planted window of two tabs, and it pins
+//! `gtk-titlebar-style: native`, because its clicks are on the tab bar's own row.
 //!
-//! The pointer helper's files and every readback live under the runtime dir, never in the
-//! project the tabs are rooted at.
+//! [`close_tab_with_no_answer_on_the_last_tab_closes_the_window_under_cage`]: Close Tab on a
+//! modified last tab whose Neovim gives no answer closes the window, because the last page's
+//! close confirms its tab and the window's check does not ask it again. Its launch restores one
+//! planted window of one tab, and it clicks nothing.
 //!
-//! The smoke pins `gtk-titlebar-style: native`, because its clicks are on the tab bar's own row.
+//! Each launch's tabs are on files of the project. Every observable is a count of the app's live
+//! Neovims, a readback a Neovim writes about itself, or the app's exit. Nothing is OCRed, so no
+//! fixture name can satisfy an assertion. The pointer helper's files and every readback live
+//! under the runtime dir, never in the project the tabs are rooted at.
 
 use super::extras::{plant_window_state, planted_window, tab_bar_y, two_tab_x, EXTRAS_HELPERS};
 use super::open_folder::canonical;
@@ -22,6 +28,9 @@ const CT_FILE_A: &str = "ctosprey.md";
 
 /// Tab 2's file, the tab every refusal is made in. Its name is what tab 2's readbacks report.
 const CT_FILE_B: &str = "ctwren.md";
+
+/// The no-answer smoke's one tab's file. Its name is what the setup readback must report.
+const CTN_FILE: &str = "ctgrebe.md";
 
 /// The palette query that selects Close Tab; [`assert_close_tab_query_selects_close_tab`]
 /// checks that it ranks Close Tab first.
@@ -65,6 +74,21 @@ const CT_CODES: &str = "Exit 180: the launch did not restore exactly two Neovims
      Exit 189: leg D: Close Tab on the last tab did not end the app within the wait, or the \
      app exited non-zero; the cage log says which.";
 
+/// The exit codes [`CLOSE_TAB_NO_ANSWER_BODY`] adds to [`POINTER_PREAMBLE`]'s.
+const CTN_EXITS: std::ops::RangeInclusive<i32> = 220..=223;
+
+/// What each of the exit codes in [`CTN_EXITS`] means, for the failure message.
+const CTN_CODES: &str = "Exit 220: the launch did not restore exactly one Neovim, so the planted \
+     window was not restored as one tab.\n\
+     Exit 221: setup: the readback is missing or is not `1`, the tab's file and `string`. Keys \
+     do not reach the tab, `o` did not modify it, or the redefinition of `_G.wolf_close_tab` \
+     did not hold, so the tab would answer with a boolean. Fix the smoke, not the code.\n\
+     Exit 222: Close Tab on the modified last tab, whose `wolf_close_tab` answers no boolean, \
+     left the app alive. The window's check asked the tab again and refused, showing E37, so \
+     `on_close_page`'s `CloseWindow` arm no longer confirms its tab, or `close_page_now` kept a \
+     `NoAnswer` page.\n\
+     Exit 223: the app exited non-zero after Close Tab on the last tab; the cage log says why.";
+
 /// Shell helpers that read a Neovim's state back through files, for [`CLOSE_TAB_BODY`] and
 /// `close_pane::CLOSE_PANE_BODY`. They call `nvim_ex` and `wait_file`, so they follow
 /// [`EXTRAS_HELPERS`].
@@ -94,8 +118,21 @@ expect_e37() {
 }
 "#;
 
+/// `close_tab_from_palette`, the palette's Close Tab through [`CT_QUERY`], for both bodies.
+const PALETTE_CLOSE_TAB_HELPER: &str = r#"
+close_tab_from_palette() {
+    wtype -M ctrl -M shift -k p -m shift -m ctrl
+    sleep "$SETTLE"
+    wtype -- "$CT_QUERY"
+    sleep "$SETTLE"
+    wtype -k Return
+    sleep "$TABS_BAR_SETTLE"
+}
+"#;
+
 /// Body of [`close_tab_asks_the_tabs_neovim_under_cage`], appended to [`POINTER_PREAMBLE`],
-/// [`EXTRAS_HELPERS`], [`READBACK_HELPERS`] and `recovery::with_nvim_pid_helper`'s helper.
+/// [`EXTRAS_HELPERS`], [`READBACK_HELPERS`], [`PALETTE_CLOSE_TAB_HELPER`] and
+/// `recovery::with_nvim_pid_helper`'s helper.
 ///
 /// 1. Two restored Neovims, then the restore's and the bar's settles.
 /// 2. A click on tab 2's entry, `o` and Escape, and readback S2 from tab 2; a click on tab 1's
@@ -108,15 +145,6 @@ expect_e37() {
 ///    tab 1.
 /// 6. Leg D: Close Tab from the palette in tab 1, and the app's exit.
 const CLOSE_TAB_BODY: &str = r#"
-close_tab_from_palette() {
-    wtype -M ctrl -M shift -k p -m shift -m ctrl
-    sleep "$SETTLE"
-    wtype -- "$CT_QUERY"
-    sleep "$SETTLE"
-    wtype -k Return
-    sleep "$TABS_BAR_SETTLE"
-}
-
 wait_nvim_count 2 180 "at launch, with two restored tabs"
 sleep "$RESTORE_SETTLE"
 sleep "$TABS_BAR_SETTLE"
@@ -171,6 +199,48 @@ reap_app 189 189
 hsend quit
 exit 0
 "#;
+
+/// Body of [`close_tab_with_no_answer_on_the_last_tab_closes_the_window_under_cage`], appended
+/// to [`POINTER_PREAMBLE`], [`EXTRAS_HELPERS`], [`READBACK_HELPERS`],
+/// [`PALETTE_CLOSE_TAB_HELPER`] and `recovery::with_nvim_pid_helper`'s helper.
+///
+/// 1. One restored Neovim, then the restore's settle.
+/// 2. `o` and Escape, then `_G.wolf_close_tab` redefined to answer a string, and readback S of
+///    `&modified`, the file and the type the helper answers.
+/// 3. Close Tab from the palette, and the app's exit.
+const CLOSE_TAB_NO_ANSWER_BODY: &str = r#"
+wait_nvim_count 1 220 "at launch, with one restored tab"
+sleep "$RESTORE_SETTLE"
+
+wtype -- o
+wtype -k Escape
+sleep "$SETTLE"
+nvim_ex "lua _G.wolf_close_tab = function() return 'unanswered' end"
+nvim_ex "call writefile([&modified . ' ' . expand('%:t') . ' ' . luaeval('type(_G.wolf_close_tab())')], '$CTN_READ_S')"
+expect_read "$CTN_READ_S" "1 $CTN_FILE string" 221
+
+# --- Close Tab on the modified last tab, which answers no boolean -------------
+close_tab_from_palette
+reap_app 222 223
+
+hsend quit
+exit 0
+"#;
+
+/// One edit-pane tab on `name`, rooted at `project`.
+fn file_tab(project: &str, name: &str) -> Tab {
+    Tab {
+        directory: project.to_string(),
+        content: TabContent {
+            root: Some(Node::Pane(Pane::Edit {
+                path: Path::new(project).join(name).to_string_lossy().into_owned(),
+                cursor: None,
+                top_line: None,
+            })),
+            ..TabContent::default()
+        },
+    }
+}
 
 /// The second tab's close button's centre x; see [`CT_CLOSE_BUTTON_INSET_PX`].
 fn close_button_x() -> i64 {
@@ -238,24 +308,10 @@ fn close_tab_asks_the_tabs_neovim_under_cage() {
         std::fs::write(&path, format!("{heading}\n"))
             .unwrap_or_else(|e| panic!("{SMOKE}: failed to write {}: {e}", path.display()));
     }
-    let file_tab = |name: &str| Tab {
-        directory: project.clone(),
-        content: TabContent {
-            root: Some(Node::Pane(Pane::Edit {
-                path: Path::new(&project)
-                    .join(name)
-                    .to_string_lossy()
-                    .into_owned(),
-                cursor: None,
-                top_line: None,
-            })),
-            ..TabContent::default()
-        },
-    };
     let planted = WindowState {
         windows: vec![planted_window(
             0,
-            vec![file_tab(CT_FILE_A), file_tab(CT_FILE_B)],
+            vec![file_tab(&project, CT_FILE_A), file_tab(&project, CT_FILE_B)],
         )],
     };
     plant_window_state(SMOKE, &cwd, &planted);
@@ -278,7 +334,7 @@ fn close_tab_asks_the_tabs_neovim_under_cage() {
     let close_x = close_button_x();
 
     let body = with_nvim_pid_helper(&format!(
-        "{EXTRAS_HELPERS}\n{READBACK_HELPERS}\n{CLOSE_TAB_BODY}"
+        "{EXTRAS_HELPERS}\n{READBACK_HELPERS}\n{PALETTE_CLOSE_TAB_HELPER}\n{CLOSE_TAB_BODY}"
     ));
     let status = pointer_command(&body, &cwd, &runtime_dir, &out_png)
         .env(
@@ -320,4 +376,80 @@ fn close_tab_asks_the_tabs_neovim_under_cage() {
     ] {
         assert_inside_extents(SMOKE, label, point, extents);
     }
+}
+
+/// **Close Tab on a modified last tab that gives no answer closes the window.**
+///
+/// The planted window holds one tab on [`CTN_FILE`], rooted at the temp cwd `project`. The setup
+/// modifies it and redefines its Neovim's `_G.wolf_close_tab` to answer a string, so the ask in
+/// `on_close_page` gets `CloseTabAnswer::NoAnswer` while the tab holds a modified buffer.
+/// That page closes unchecked, and as the last page it takes `on_close_page`'s `CloseWindow`
+/// arm, whose confirm is what spares the tab the window's own check.
+///
+/// - With the confirm, the window's check counts the tab `Clean`, so the window closes and the
+///   app exits 0.
+/// - Without it, the window's check asks `wolf_has_unsaved`, which answers `Unsaved`: it shows
+///   E37 and keeps the window, so the app stays alive.
+///
+/// The exit codes are in [`CTN_CODES`].
+///
+/// Premises:
+///
+/// - Cited from code: a non-boolean answer is `NoAnswer`, since `NvimProcess::bool_helper` makes
+///   it an `NvimError::Rpc` and `WolfCore::request_close_tab` maps an error to `NoAnswer`; and
+///   `NoAnswer` closes the page, as `tab_close.rs`'s `close_page_now` table asserts.
+/// - Measured by the scenario: the redefinition holds, since the original helper answers a
+///   boolean (exit 221).
+/// - Unmeasured until the green run: the app exits 0 when its window closes over a modified
+///   buffer. `NvimProcess::shutdown` sends `qa!`, but no other smoke shows this end to end.
+///
+/// ## Assertions
+///
+/// | ID | assertion | falsifying edit | predicted red |
+/// | --- | --- | --- | --- |
+/// | — | precondition: one Neovim at launch, the tab modified, its `wolf_close_tab` answering a string | none | 220 or 221 |
+/// | CW22 | the app exits 0 within the wait | CW22a: delete the `confirm_close()` statement in `on_close_page`'s `CloseWindow` arm | 222, the app stays alive |
+#[test]
+fn close_tab_with_no_answer_on_the_last_tab_closes_the_window_under_cage() {
+    const SMOKE: &str = "close_tab_with_no_answer_on_the_last_tab_closes_the_window_under_cage";
+
+    let runtime_dir = require_smoke_env();
+    let cwd = make_temp_cwd();
+    let project = canonical(SMOKE, &cwd);
+    assert_close_tab_query_selects_close_tab(SMOKE, &project);
+    let path = cwd.join(CTN_FILE);
+    std::fs::write(&path, "# CT GREBE\n")
+        .unwrap_or_else(|e| panic!("{SMOKE}: failed to write {}: {e}", path.display()));
+    let planted = WindowState {
+        windows: vec![planted_window(0, vec![file_tab(&project, CTN_FILE)])],
+    };
+    plant_window_state(SMOKE, &cwd, &planted);
+
+    let rt: &Path = &runtime_dir;
+    let read_s = rt.join("ctn_read_s.txt");
+    let out_png = rt.join("wolf_gnome_close_tab_no_answer_unused.png");
+    clear_evidence(&read_s, SMOKE);
+
+    let body = with_nvim_pid_helper(&format!(
+        "{EXTRAS_HELPERS}\n{READBACK_HELPERS}\n{PALETTE_CLOSE_TAB_HELPER}\n\
+         {CLOSE_TAB_NO_ANSWER_BODY}"
+    ));
+    let status = pointer_command(&body, &cwd, &runtime_dir, &out_png)
+        .env("CMD_FIFO", rt.join(POINTER_CMD_FIFO_NAME))
+        .env("ACK_FILE", rt.join(POINTER_ACK_NAME))
+        .env("HELPER_ERR", pointer_err_path(rt))
+        .env("READY_FILE", pointer_ready_path(rt))
+        .env("CTN_FILE", CTN_FILE)
+        .env("CT_QUERY", CT_QUERY)
+        .env("CTN_READ_S", &read_s)
+        .status()
+        .expect("failed to spawn `cage` for the headless Close Tab no-answer scenario");
+
+    assert!(
+        !status.code().is_some_and(|code| CTN_EXITS.contains(&code)),
+        "{SMOKE}: the cage Close Tab no-answer scenario exited with one of its own codes \
+         ({status}). The cage log in the runtime dir carries the scenario's own lines.\n\
+         {CTN_CODES}"
+    );
+    assert_pointer_scenario_succeeded(SMOKE, status, rt, &out_png);
 }

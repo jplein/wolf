@@ -3014,6 +3014,9 @@ pub(crate) const OWNQUIT_READ_Q_NAME: &str = "qo_afterq.txt";
 /// After leg (d)'s `:qa`, the surviving Neovim writes the tail of `bufname('%')` here.
 pub(crate) const OWNQUIT_READ_QA_NAME: &str = "qo_afterqa.txt";
 
+/// After leg (d)'s `<C-w>v`, the second tab's Neovim writes `winnr('$')` here.
+pub(crate) const OWNQUIT_READ_WINS_NAME: &str = "qo_wins.txt";
+
 /// The own-tab quit scenario for [`quit_closes_only_its_own_tab_under_cage`], one `sh -c`
 /// string inside `cage`, keyboard only, composed with `recovery::with_nvim_pid_helper`.
 ///
@@ -3041,6 +3044,7 @@ pub(crate) const OWNQUIT_READ_QA_NAME: &str = "qo_afterqa.txt";
 /// | `27` | d | the app exited, or every Neovim went, on `:qa` in the split tab |
 /// | `28` | d | `:qa` did not leave exactly one live Neovim |
 /// | `29` | d | the Neovim left after `:qa` is not tab 1's |
+/// | `30` | d | `winnr('$')` is not `2` after `<C-w>v`, so `:qa` would quit a one-pane tab |
 const OWNQUIT_SCENARIO: &str = r#"
 set -eu
 
@@ -3148,6 +3152,16 @@ sleep "$SETTLE"
 wtype -M ctrl -k w -m ctrl
 wtype -k v
 sleep "$SETTLE"
+wtype -- ":call writefile([printf('%d', winnr('\$'))], '$OWNQUIT_READ_WINS')"
+wtype -k Return
+wait_file "$OWNQUIT_READ_WINS" || exit 14
+wins=$(cat "$OWNQUIT_READ_WINS")
+echo "wolf-gnome own-tab quit smoke: leg (d) winnr('\$')=$wins before :qa" >&2
+if [ "$wins" != "2" ]; then
+    echo "wolf-gnome own-tab quit smoke: after <C-w>v in the second tab, winnr('\$') is" >&2
+    echo "  '$wins', not 2: the split did not happen, so leg (d) would be a one-pane :qa." >&2
+    exit 30
+fi
 wtype -- ":qa"
 wtype -k Return
 await_close
@@ -3185,6 +3199,7 @@ exit 0
 /// | 3 | the Neovim left after `:q` shows [`OWNQUIT_FIRST_FILE`] | **discriminator** | G1c: `AppShell::close_tab` closes the first entry instead of the selected tab | scenario exit 25 |
 /// | 4 | (in-scenario) the app and a Neovim survive `:qa` in the split tab | **discriminator** | G1d: `do_quit` notifies `close_window` for `all` | scenario exit 27 |
 /// | 5 | one Neovim is left after `:qa`, and it shows [`OWNQUIT_FIRST_FILE`] | corroboration of 4 | none isolated | n/a |
+/// | 6 | (in-scenario) `winnr('$')` is `2` before `:qa`, the premise that leg (d) quits a split tab; `2` is `compose.rs`'s asserted `IMCHORD_WINDOWS_SPLIT` | premise | QA1a: `init.lua`'s `<C-w>v` mapping becomes `function() end` | scenario exit 30, reading `1` |
 #[test]
 fn quit_closes_only_its_own_tab_under_cage() {
     const SMOKE: &str = "quit_closes_only_its_own_tab_under_cage";
@@ -3202,7 +3217,8 @@ fn quit_closes_only_its_own_tab_under_cage() {
     );
     let read_q = cwd.join(OWNQUIT_READ_Q_NAME);
     let read_qa = cwd.join(OWNQUIT_READ_QA_NAME);
-    for path in [&read_q, &read_qa] {
+    let read_wins = cwd.join(OWNQUIT_READ_WINS_NAME);
+    for path in [&read_q, &read_qa, &read_wins] {
         clear_evidence(path, SMOKE);
     }
 
@@ -3213,6 +3229,7 @@ fn quit_closes_only_its_own_tab_under_cage() {
         .env("OWNQUIT_PROJECT_BASE", TEMP_CWD_BASENAME)
         .env("OWNQUIT_READ_Q", &read_q)
         .env("OWNQUIT_READ_QA", &read_qa)
+        .env("OWNQUIT_READ_WINS", &read_wins)
         .status()
         .expect("failed to spawn `cage` for the headless own-tab quit scenario");
     assert!(
@@ -3225,17 +3242,21 @@ fn quit_closes_only_its_own_tab_under_cage() {
          Exit 22 / 26: Ctrl+Shift+T did not leave two live Neovims, so there was no second tab \
          to quit in.\n\
          Exit 23: `:q` on the second tab's last pane closed the WINDOW: the app exited or every \
-         Neovim went. The drained `close_tab` reached `window.close()`, or `do_quit` still \
-         notifies `close_window` on the last pane.\n\
+         Neovim went. The drained `close_tab` reached `window.close()`. Look for a regression: \
+         `do_quit` notifying `close_window` on the last pane.\n\
          Exit 24: `:q` did not leave exactly one live Neovim. Two means nothing closed the tab: \
          `AppShell::close_tab` did nothing, or `do_quit` notified nothing.\n\
          Exit 25: one Neovim is left after `:q`, but it is not tab 1's: the close took a tab \
          other than the selected one, whose Neovim sent it.\n\
-         Exit 27: `:qa` in the split second tab closed the WINDOW: `do_quit` notifies \
-         `close_window` for the `:qa` family.\n\
+         Exit 27: `:qa` in the split second tab closed the WINDOW: the app exited or every \
+         Neovim went. Look for a regression: `do_quit` notifying `close_window` for the `:qa` \
+         family.\n\
          Exit 28: `:qa` did not leave exactly one live Neovim. Two means it closed a pane, or \
          nothing, instead of the tab.\n\
-         Exit 29: one Neovim is left after `:qa`, but it is not tab 1's."
+         Exit 29: one Neovim is left after `:qa`, but it is not tab 1's.\n\
+         Exit 30: `winnr('$')` was not 2 after `<C-w>v` in the second tab, so `:qa` would quit a \
+         one-pane tab and leg (d) would prove nothing about a split; the scenario's stderr names \
+         the value. `<C-w>v` did not reach the tab or did not split."
     );
 
     // Assertions 3 and 5, read back on this side too: each survivor is tab 1's Neovim.

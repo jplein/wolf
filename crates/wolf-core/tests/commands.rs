@@ -1050,7 +1050,7 @@ fn request_close_tab_answers_closing_and_notifies_close_tab() {
     expect_close_tab(
         &core,
         "request_close_tab() on an unmodified tab (Closing without it means wolf_close_tab \
-         answered true without running the quit's check and notify)",
+         answered true without notifying close_tab after wolf_refuse_unsaved's check)",
     );
 
     core.shutdown().expect("shutdown should be Ok");

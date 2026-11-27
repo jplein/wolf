@@ -207,7 +207,7 @@ while [ "$tries" -lt "$QUIT_TRIES" ]; do
 done
 if [ "$gone" -ne 1 ]; then
     echo "wolf-gnome relaunch smoke: run 1 (pid $app_pid) still alive after :qa." >&2
-    echo "  The drained close_window command never reached window.close()." >&2
+    echo "  The drained close_tab command never reached window.close()." >&2
     exit 12
 fi
 # `set -e` would abort before the status could be reported, so collect it through
@@ -1753,9 +1753,9 @@ fn pane_layout_survives_relaunch_under_cage() {
         status.success(),
         "{SMOKE}: the cage relaunch scenario exited unsuccessfully ({status}). Exit 11: run 1's \
          app died before it was ready for input. Exit 12: run 1 was still alive after `:qa` — the \
-         drained close_window never reached window.close(). Exit 13: run 1 exited NON-ZERO, i.e. \
-         it went away but not cleanly, which implicates a panic in \
-         `Coordinator::on_window_closing`, or a core.borrow() held across `wire_close`'s \
+         drained close_tab, which closes the one-tab window, never reached window.close(). \
+         Exit 13: run 1 exited NON-ZERO, i.e. it went away but not cleanly, which implicates a \
+         panic in `Coordinator::on_window_closing`, or a core.borrow() held across `wire_close`'s \
          core.borrow_mut().take(). \
          Exit 14: run 2's app died before it was ready for input. Exit 15: the Neovim readback never \
          appeared in run 2. Screenshot expected at {}; readback at {}.",

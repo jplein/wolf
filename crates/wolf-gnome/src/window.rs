@@ -808,7 +808,7 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     coordinator.register(&handle);
 
     // Every tab's first drain runs on the main loop after this, so after `wire_close` installs
-    // `close-request`: a drained `CloseWindow` before it would orphan every tab's nvim.
+    // `close-request`: a drained `CloseWindow` or last-tab `CloseTab` before it orphans every nvim.
     for tab in tabs.entries() {
         tab.wake();
     }

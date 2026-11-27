@@ -804,7 +804,8 @@ impl TabsInner {
             TabClose::CloseWindow => {
                 // Refused, so the page survives until the toplevel tears it down.
                 self.view.close_page_finish(page, false);
-                // Its check has passed, so the window's own check does not ask it again.
+                // Spares this tab the window's check: it passed its own, or gave no answer and
+                // closes unchecked.
                 if let Some(entry) = self.entry_for(page) {
                     entry.confirm_close();
                 }

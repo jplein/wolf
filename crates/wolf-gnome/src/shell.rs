@@ -40,8 +40,9 @@
 //!   follow the focus), and then drains that tab's
 //!   [`wolf_core::WolfCore::drain_commands`] and dispatches each command. A command
 //!   `wolf-gnome` does not implement is PRINTED with its recorded reason — never
-//!   silently dropped. The drain runs LAST because a drained `close_window` shuts
-//!   every core down, and the state commit must happen before that.
+//!   silently dropped. The drain runs LAST because a drained `close_window`, or a
+//!   `close_tab` on the window's last tab, shuts every core down, and the state
+//!   commit must happen before that.
 //!
 //! **Commands drain from the selected tab only**, so every drained command acts on
 //! the tab whose Neovim queued it: the window-level actions it reaches resolve the
@@ -93,7 +94,8 @@
 //! commands into a `Vec`, and drops the borrow before dispatching any of them.
 //! `UiAction::CloseWindow` / `UiAction::QuitApplication` synchronously run
 //! `window::wire_close`'s `close-request` handler, which first borrows each tab's core
-//! for its unsaved check and then takes every tab's core out with a `borrow_mut()`. `UiAction::CloseTab` borrows its tab's core for the ask, then
+//! for its unsaved check and, unless it refuses, then takes every tab's core out with
+//! a `borrow_mut()`. `UiAction::CloseTab` borrows its tab's core for the ask, then
 //! may take it out, and on the window's last tab it runs the same handler. An
 //! outstanding `borrow()` there is a `RefCell` panic, not a warning.
 //!
@@ -1781,8 +1783,8 @@ impl AppShell {
     /// navigation buttons, then drains and dispatches that tab's queued commands.
     ///
     /// Runs LAST on each wake (after the pane view and the tree), because a drained
-    /// `close_window` tears every core down. Unlike the paint, it runs in ALL THREE
-    /// liveness states — see the module docs.
+    /// `close_window`, or a `close_tab` on the window's last tab, tears every core down.
+    /// Unlike the paint, it runs in ALL THREE liveness states — see the module docs.
     pub fn on_render_wake(&self, tab: &TabHandle) {
         let selected = tab.is_selected();
         if selected {
@@ -1804,8 +1806,8 @@ impl AppShell {
             let _guard = frame_metrics::scope(Bucket::WakeState);
             coordinator.commit(self.inner.window_id);
         }
-        // LAST: a drained `close_window` tears every core down, so the state commit
-        // above must already have happened.
+        // LAST: a drained `close_window`, or `close_tab` on the last tab, tears every core down,
+        // so the state commit above must already have happened.
         if selected {
             self.drain_and_dispatch_commands(tab);
         }

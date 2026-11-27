@@ -478,7 +478,7 @@ impl PaletteInner {
     ///
     /// **That order is load-bearing.** A dispatched `CloseWindow` / `QuitApplication`, or a
     /// `CloseTab` on the window's last tab, synchronously runs `window::wire_close`'s
-    /// handler, which takes the core out and tears the window down, so nothing may touch
+    /// handler, which may take every core out and tear the window down, so nothing may touch
     /// palette widgets afterwards. The
     /// handler `Rc` is cloned OUT of its `RefCell` for the same reason: no borrow may
     /// be live across a call that can re-enter this widget.
