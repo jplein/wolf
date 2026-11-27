@@ -754,18 +754,14 @@ const LINK_SEARCH_INSET_Y_PX: f64 = 40.0;
 
 /// x of the point injected at the rendered link, in absolute output pixels.
 ///
-/// MEASURED 2026-08-06 under `cage` at a 1280x720 output, with GTK 4.22.4,
-/// libadwaita 1.9.0 and WebKitGTK 2.52.4, from a `grim` capture of this scenario: the
-/// blue-dominant pixels inside the preview pane form a bounding box of
-/// `x [788, 1002]`, `y [165, 176]` — 576 pixels in all, whose dominant colour is
-/// `#4ea1ff` at 265 of them. The centroid is `(900, 171)`.
+/// With [`LINK_CLICK_Y`], it is the centroid of the rendered link's [`is_link_blue`]
+/// cluster inside the preview pane, in capture A at the pinned output. Assertion 3 of
+/// [`preview_link_click_repoints_the_pane_under_cage`] re-derives that cluster from every
+/// run's own capture and checks that it contains this point, and assertion 4 checks that a
+/// click there moves the captive Neovim's `tabpagebuflist()` readback to the target.
 ///
-/// Clicking it moved the captive Neovim's `tabpagebuflist()` readback from the source's
-/// preview scratch to the target's, and the handler logged `nav=LinkClicked` with a
-/// `file:` URI naming the target.
-///
-/// The measurement run used the fixture FILENAMES `alpha.md` / `beta.md` at the
-/// project ROOT rather than [`LINK_SOURCE_FILE`] / [`LINK_TARGET_FILE`] under
+/// The run that measured the centroid used the fixture FILENAMES `alpha.md` / `beta.md` at
+/// the project ROOT rather than [`LINK_SOURCE_FILE`] / [`LINK_TARGET_FILE`] under
 /// [`LINK_FIXTURE_DIR`]. Neither difference can move the rectangle, and the reasons
 /// are structural rather than hopeful:
 ///
@@ -783,7 +779,7 @@ const LINK_SEARCH_INSET_Y_PX: f64 = 40.0;
 ///   a row's text cannot move it.
 ///
 /// It is recorded rather than smoothed over, because a reader comparing this note with
-/// the run log would otherwise wonder which fixture the numbers came from — and
+/// the run log would otherwise wonder which fixture the constants came from — and
 /// because the constant is RE-VERIFIED on every run by the calibration assertion,
 /// which re-derives the cluster from that run's own capture A. That assertion, not
 /// this note, is what makes the claim above checked rather than argued.
@@ -1750,17 +1746,11 @@ fn preview_burst_delay_stays_below_the_coalescer_trailing_delay() {
 ///
 /// ## The MEASUREMENT behind the click constants
 ///
-/// Taken 2026-08-06 under `cage` at a 1280x720 output (GTK 4.22.4, libadwaita 1.9.0,
-/// WebKitGTK 2.52.4, `cage` 0.3.0), against this scenario and this link text: the
-/// blue-dominant pixels (`b > 150 && b > r + 60`) inside the preview pane form a
-/// bounding box of `x [788, 1002]`, `y [165, 176]` — 576 pixels, dominant colour
-/// `#4ea1ff` at 265 of them, which is the dark theme's link colour. Its centroid is
-/// `(900, 171)`. Clicking there moved the readback from the source's preview scratch to
-/// the target's and logged `nav=LinkClicked` with a `file:` URI naming the target. See
-/// [`LINK_CLICK_X`] for the two differences between the measurement run and this smoke
-/// — the fixture FILENAMES and the subdirectory they were moved into — and for why
-/// neither can move the rectangle. Neither is taken on trust: assertion 3 re-derives
-/// the cluster from every run's own capture.
+/// The constants are the centroid of the link's [`is_link_blue`] cluster
+/// (`b > 150 && b > r + 60`) inside the preview pane; [`LINK_CLICK_X`] records it, with the
+/// two differences between the measurement run and this smoke — the fixture FILENAMES and
+/// the subdirectory they were moved into — and why neither can move the rectangle. Neither
+/// is taken on trust: assertion 3 re-derives the cluster from every run's own capture.
 ///
 /// **Do not tune a constant to make a run pass.** Assertion 3 exists precisely so a
 /// moved layout is a named failure rather than a silent miss; if it fires, re-measure
@@ -1993,10 +1983,11 @@ fn preview_link_click_repoints_the_pane_under_cage() {
         cluster.contains(LINK_CLICK_X, LINK_CLICK_Y),
         "{SMOKE}: the click constant ({LINK_CLICK_X}, {LINK_CLICK_Y}) is OUTSIDE the rendered \
          link, whose ink in capture A spans x [{}, {}] and y [{}, {}] ({} pixels). The constant \
-         was measured at that cluster's centroid on 2026-08-06 at a 1280x720 output; if the two \
+         was measured at that cluster's centroid at a 1280x720 output; if the two \
          no longer agree, the LAYOUT moved — a font size, the preview stylesheet, the pane \
          geometry or the output — and the click is landing on whatever is now at that pixel. \
-         RE-MEASURE and record the new rectangle in `LINK_CLICK_X`'s doc comment; do NOT nudge \
+         RE-MEASURE and set both constants to the new centroid, as `LINK_CLICK_X`'s doc \
+         comment describes; do NOT nudge \
          the constant until a run passes, and do not widen this assertion. Note this failure says \
          NOTHING about whether a click reaches WebKit: that is assertion 4's subject, and it is \
          evaluated after this one precisely so the two causes stay separable. PNG kept at {}.",
@@ -2369,22 +2360,13 @@ pub(crate) const PREVIEW_LIGHT_BG: (u8, u8, u8) = (0xf4, 0xf4, 0xf4);
 /// first block costs NO vertical space. It is an empty, zero-size inline anchor, so
 /// per CSS 2.1 §10.8 the anonymous block box around it holds a line box that must be
 /// treated as not existing — but specs/markdown-stylesheet.md#edge-rules calls that
-/// corner engine-dependent, so it is MEASURED rather than reasoned: against the
-/// real `render_html` output in WebKitGTK 2.52.4, `body` padding read `0px` on all
-/// four sides and the first block's top offset read `0`. If a leading anchor ever
-/// did cost a line box, the first ink would land at row 24 and this band would read
-/// empty on a good render.
+/// corner engine-dependent, so it is checked rather than reasoned: assertion 6 of
+/// [`preview_document_follows_the_configured_appearance_under_cage`] re-checks it on every
+/// run. If a leading anchor ever did cost a line box, the first ink would land at offset 24
+/// and this band would read empty on a good render.
 ///
-/// MEASURED (first-ink row inside the band, from a retained green-run capture, at
-/// GTK 4.22.4 / libadwaita 1.9.0 / WebKitGTK 2.52.4): the content's top is absolute
-/// row 159 on BOTH launches, and the first row carrying any non-theme pixel is
-/// absolute row 165 — OFFSET 6 into the band, with rows 0..5 pure background. The web
-/// view's own top, at the strip, is row 139, derived as 159 less
-/// `EDITOR_PADDING_PX` rather than re-measured. So
-/// the leading `.wolf-src` anchor costs no line box here: had it cost one, the first
-/// ink would have landed at offset 24 and this band would have read empty. Offset 6
-/// against a 24-row band leaves the whole rest of the first line box in hand, so 24
-/// stands and is NOT raised towards 48 — raising it would only weaken the
+/// The first line's ink falls well inside the band, leaving most of the first line box in
+/// hand, so 24 stands and is NOT raised towards 48 — raising it would only weaken the
 /// discrimination the falsifier depends on.
 const FLUSH_BAND_PX: f64 = 24.0;
 
@@ -2830,8 +2812,9 @@ exit 0
 /// the design: with `set_color_scheme` removed, both launches render whatever the
 /// ambient scheme happens to be, so one of the two launches still reads the colour it
 /// expected — the WEAK half — and the other reads the opposite one and fires. WHICH
-/// of the two is the weak half is not knowable from inside this binary, so both are
-/// required and neither may be dropped as redundant.
+/// of the two is the weak half is not knowable from inside this binary, because libadwaita
+/// resolves the ambient scheme off the session's own settings. Both are required, and a
+/// single green launch under that falsifier does not make the other one redundant.
 ///
 /// This is a DIFFERENT argument from the one
 /// `configured_appearance_reaches_neovims_background_under_cage` makes, and the two
@@ -2839,18 +2822,6 @@ exit 0
 /// Neovim's own default under `--embed`, so run 1 is weak on every host. Here the
 /// weak half is whichever one the host's ambient scheme happens to agree with, and it
 /// can differ between machines and between GTK versions.
-///
-/// MEASURED on the development host (GTK 4.22.4, libadwaita 1.9.0, WebKitGTK 2.52.4,
-/// `cage` 0.3.0), by deleting `set_color_scheme` and re-running: run 1 (`appearance:
-/// dark`) stayed GREEN and run 2 (`appearance: light`) fired, reading 1.0000 of
-/// [`PREVIEW_DARK_BG`] where its own [`PREVIEW_LIGHT_BG`] was required. So the
-/// ambient scheme reaching WebKit under `cage` here is DARK, run 1 is the weak half
-/// on this host, and run 2 is the one carrying the discrimination. This is a reading
-/// of one host at one moment, NOT a property of the harness — libadwaita resolves it
-/// off the session's own settings, so a machine whose desktop reads light swaps the
-/// two halves and the smoke is equally sound. It is recorded so a later reader knows
-/// which half went red when the falsifier was applied, and does not conclude from a
-/// single green launch that the other one is redundant.
 ///
 /// ## Why the preview is deterministically the RIGHT half
 ///
@@ -2910,22 +2881,21 @@ exit 0
 /// ## Assertions, classified
 ///
 /// A precondition gets NO revert: inventing one would manufacture a discriminator
-/// this smoke does not have. The `measured` column carries the readings from actual
+/// this smoke does not have. The `measured` column carries the outcomes of actual
 /// runs, per `crates/wolf-gnome/tests/smoke_headless/README.md#smoke-conventions`,
-/// "A red-run demonstration is a deliverable, not a formality", taken at GTK 4.22.4,
-/// libadwaita 1.9.0, WebKitGTK 2.52.4 and `cage` 0.3.0 on a 1280x720 output. A cell
-/// reading `n/a` is a precondition with no red run by design; the three
-/// discriminators each carry both their green and their red reading.
+/// "A red-run demonstration is a deliverable, not a formality". A cell reading `n/a` is a
+/// precondition with no red run by design; each discriminator carries both its green and
+/// its red outcome.
 ///
 /// | # | assertion | kind | falsifying edit | measured |
 /// | --- | --- | --- | --- | --- |
 /// | 1 | `status.success()` | precondition — the two-launch cage scenario ran to completion | none; do not invent one | n/a |
 /// | 2 | both PNGs present, and each decodes at exactly `CAGE_OUTPUT_W_EXPECTED` x `CAGE_OUTPUT_H_EXPECTED` | precondition — and the one that makes every derived rectangle below mean what it says | none; do not invent one | n/a |
 /// | 3 | each launch's `tabpagebuflist()` readback, sorted, is the preview scratch plus the source | precondition — a preview pane exists at all, and exactly two panes do | none; do not invent one. Without it, assertions 5 and 6 would be describing a pane that never became a preview. | n/a |
-/// | 4 | fewer than [`CONTROL_MAX_THEME_FRACTION`] of the CONTROL band is this launch's theme colour | **control, self-checking** | none. Its failure means the EDITOR's background collides with the preview theme's, and the response is to RE-DERIVE the two colours against the real render — never to raise the fraction, which would disarm the premise assertion 6's `web_top` scan rests on. | green: EXACTLY 0.0000 on both launches — 0 of the control band's 76,680 pixels, not merely fewer than the ceiling. The editor pane's own background reads `(20, 22, 27)` in run 1 and `(224, 226, 234)` in run 2, so it follows the appearance too and collides with NEITHER theme colour at either setting. That the margin is the whole ceiling rather than a sliver is what makes assertion 6's `web_top` scan safe. |
-/// | 5 | at least [`SAMPLE_MIN_THEME_FRACTION`] of the SAMPLE band is this launch's own theme colour, and at most [`SAMPLE_MAX_OTHER_FRACTION`] is the other appearance's | **discriminator** — the configured appearance reaches the rendered document | delete `manager.set_color_scheme(decided.color_scheme);` from `appearance::apply_at_launch`. Isolated: the whole fast suite and every other smoke stay green, because nothing else in the repository observes that call. | green: 1.0000 own / 0.0000 other on BOTH launches — the sample band is uniformly one colour, all 76,464 pixels of it. Red: RUN 2 (light) fired, reading `0.0000 its own PREVIEW_LIGHT_BG … and 1.0000 the other appearance's PREVIEW_DARK_BG`; run 1 (dark) stayed green. So the ambient scheme under `cage` on this host is DARK and run 1 is the weak half — see the pair-discriminates section above. Isolation CONFIRMED by a full `cargo test --workspace` under the falsifier: 49 of the target's 50 tests and every other target passed, this smoke alone failed. |
-/// | 5b | the same, with the theme's own light palette removed | **discriminator** — the light palette is what `prefers-color-scheme: light` selects | delete the `@media (prefers-color-scheme: light)` block from `wolf-core`'s `markdown/themes/default.css`; run 2 reddens. | red: run 2 (light) fired with the same 0.0000 own / 1.0000 other reading as 5's. `markdown_render.rs` REDDENED alongside — 43 passed, 2 failed: `default_theme_carries_dark_and_light_palettes` ("the light media query must mirror the light-mode link color `#0969da`") and `hr_occupies_whole_baselines_and_is_painted_by_its_border` ("the LIGHT (`prefers-color-scheme: light`) theme must color the hr via `border-top-color: #d0d0d0`"). Red smoke over a RED fast suite, so this pairing reads as the THEME being wrong rather than the applier — which is the diagnostic separating 5b from 5, where the fast suite stayed fully green. |
-/// | 6 | with `web_top` self-located from the pixels, the first [`FLUSH_BAND_PX`] rows from `web_top + EDITOR_PADDING_PX` carry at least [`MIN_FLUSH_INK_PX`] non-theme pixels | **discriminator** — the document is flush against the top of its root padding | add `padding-top: 48px;` to `body.wolf-markdown` in `wolf-core`'s `markdown/base.css`; both launches redden. | green: 1,987 non-theme pixels in the band on run 1 and 1,987 on run 2, against the 200 floor, with the content's top at row 159 on both and the first ink 6 rows into the band. Red: 0 on BOTH launches (the harness reports run 1 and stops, so run 2's 0 is read out of its own retained capture — the scenario runs both launches before any assertion). The fast suite STAYED GREEN under the falsifier: `markdown_render.rs` 45 passed, `wolf-core` unit tests 223 passed, exactly as predicted — 48 is a multiple of 24, so the grid sweep accepts it and the `padding` shorthand assertion is untouched. No fallback to `padding: 48px 40px` was needed. |
+/// | 4 | fewer than [`CONTROL_MAX_THEME_FRACTION`] of the CONTROL band is this launch's theme colour | **control, self-checking** | none. Its failure means the EDITOR's background collides with the preview theme's, and the response is to RE-DERIVE the two colours against the real render — never to raise the fraction, which would disarm the premise assertion 6's `web_top` scan rests on. | green on both launches. The editor pane's own background follows the appearance too and collides with NEITHER theme colour at either setting, which is what makes assertion 6's `web_top` scan safe. |
+/// | 5 | at least [`SAMPLE_MIN_THEME_FRACTION`] of the SAMPLE band is this launch's own theme colour, and at most [`SAMPLE_MAX_OTHER_FRACTION`] is the other appearance's | **discriminator** — the configured appearance reaches the rendered document | delete `manager.set_color_scheme(decided.color_scheme);` from `appearance::apply_at_launch`. Isolated: the whole fast suite and every other smoke stay green, because nothing else in the repository observes that call. | green on BOTH launches. Red: the launch whose appearance the ambient scheme disagrees with fires, reading the other appearance's theme colour where its own was required, and the other launch stays green — see the pair-discriminates section above. Isolation CONFIRMED by a full `cargo test --workspace` under the falsifier: this smoke alone failed. |
+/// | 5b | the same, with the theme's own light palette removed | **discriminator** — the light palette is what `prefers-color-scheme: light` selects | delete the `@media (prefers-color-scheme: light)` block from `wolf-core`'s `markdown/themes/default.css`; run 2 reddens. | red: run 2 (light) fired, reading the dark theme colour where its own was required, as in 5's red. `markdown_render.rs` REDDENED alongside, in `default_theme_carries_dark_and_light_palettes` ("the light media query must mirror the light-mode link color `#0969da`") and `hr_occupies_whole_baselines_and_is_painted_by_its_border` ("the LIGHT (`prefers-color-scheme: light`) theme must color the hr via `border-top-color: #d0d0d0`"). Red smoke over a RED fast suite, so this pairing reads as the THEME being wrong rather than the applier — which is the diagnostic separating 5b from 5, where the fast suite stayed fully green. |
+/// | 6 | with `web_top` self-located from the pixels, the first [`FLUSH_BAND_PX`] rows from `web_top + EDITOR_PADDING_PX` carry at least [`MIN_FLUSH_INK_PX`] non-theme pixels | **discriminator** — the document is flush against the top of its root padding | add `padding-top: 48px;` to `body.wolf-markdown` in `wolf-core`'s `markdown/base.css`; both launches redden. | green on both launches, with the first ink inside the band. Red: the band is empty of ink on BOTH launches (the harness reports run 1 and stops, so run 2's is read out of its own retained capture — the scenario runs both launches before any assertion). The fast suite STAYED GREEN under the falsifier, `markdown_render.rs` and the `wolf-core` unit tests included, exactly as predicted — 48 is a multiple of 24, so the grid sweep accepts it and the `padding` shorthand assertion is untouched. No fallback to `padding: 48px 40px` was needed. |
 ///
 /// ## The conventions it obeys
 ///

@@ -4769,8 +4769,8 @@ struct LeafFields<'a> {
 
 /// A persisted pane's [`LeafFields`].
 ///
-/// The one place the smokes destructure a `Pane`, so a kind or field added to it touches
-/// this function and no smoke.
+/// Destructures a `Pane` on the smokes' behalf, so a kind or field added to it touches this
+/// function and no smoke.
 fn pane_fields(pane: &Pane) -> LeafFields<'_> {
     let (cursor, top_line, scroll) = match pane {
         Pane::Edit {
@@ -4907,7 +4907,7 @@ fn pane_tails(node: &Node) -> Vec<Option<String>> {
         .collect()
 }
 
-/// The fifth compositor-free guard: `editor_inset`'s content-width cap CANNOT bind
+/// A compositor-free guard: `editor_inset`'s content-width cap CANNOT bind
 /// at the geometry the OCR smokes run at, which is the unstated premise every one of
 /// them rests on.
 ///

@@ -42,7 +42,7 @@ Inline code costs the grid through font metrics, not padding. The inherited 24px
 
 The excess is 2px for a paragraph and for a list and 3px for `pre`, whose UA stylesheet gives it its own monospace family, and because every later block shifts with it, the error accumulates.
 
-`line-height: 0` on the code element removes that union term. Measured against the rendered document in WebKitGTK 2.52.4, border-box heights of 26 for a paragraph carrying inline code, 74 for a list and 123 for `pre` become 24, 72 and 120. Overriding the code element's `font-family` to `inherit` gives 25, 73 and 120 and loses the monospace face, so it is rejected.
+`line-height: 0` on the code element removes that union term, so a block carrying inline code keeps the body's line height and stays on the grid. `preview_inline_code_keeps_the_baseline_grid_under_cage` asserts the resulting grid against a real render. Overriding the code element's `font-family` to `inherit` instead is rejected: it loses the monospace face, and it falls short anyway, because the code element's `0.875em` size still gives its box an A − D different from the body's.
 
 The chip's background survives, because an inline box's content area comes from its font metrics rather than from line-height: chip pixels occupy a 20-row band inside each 24px line box. Glyphs do not overflow their line, even with deliberate descenders and tall ascenders. `preview_inline_code_keeps_the_baseline_grid_under_cage` pins both from a real render. The rule changes the document macOS renders too, and every number here is a Linux WebKitGTK reading; macOS is unmeasured.
 

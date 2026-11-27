@@ -133,17 +133,20 @@ use super::*;
 /// fixture bug.
 ///
 /// [`RESTART_OCR_HEADING`] is listed once, against the smoke that asserts it is
-/// PRESENT, but BOTH crash smokes assert on it — the crash-overlay smoke needs it
-/// present after the button click and ABSENT during the overlay dwell, which is how
-/// it proves the overlay is opaque. A filler row carrying it would break both.
+/// PRESENT, but `crash_overlay_and_restart_button_recover_under_cage` asserts on it too: it
+/// needs it present after the button click and ABSENT during the overlay dwell, which is how
+/// it proves the overlay is opaque. A filler row carrying it would break that smoke as well
+/// as `nvim_crash_recovers_and_reopens_the_file_under_cage`.
 ///
-/// The two BUFPICK terms are the same shape reached differently: each is listed once,
-/// against the smoke that asserts it PRESENT, and the OTHER buffer-picker smoke
-/// asserts the same term ABSENT. [`BUFPICK_OCR_PRESENT`] is present after the query
+/// [`BUFPICK_OCR_PRESENT`] and [`BUFPICK_OCR_ABSENT`] are the same shape reached
+/// differently: each is listed once, against the query smoke,
+/// `buffer_picker_chord_switches_to_the_queried_buffer_under_cage`, and
+/// `buffer_picker_bare_enter_switches_to_the_previous_buffer_under_cage` asserts the same
+/// term in the opposite direction. [`BUFPICK_OCR_PRESENT`] is present after the query
 /// smoke's typed query and absent after the bare-Enter smoke's preselection;
 /// [`BUFPICK_OCR_ABSENT`] is the reverse. A filler row, a temp-cwd component or a
 /// fixture name carrying either would break one smoke and vacuously satisfy the
-/// other, which is why one row per term is enough to guard both.
+/// other, which is why one row per term guards the bare-Enter smoke too.
 ///
 /// [`RESTART_OCR_UNSAVED`] is likewise asserted in BOTH directions by the SAME smoke:
 /// present in the post-recovery capture (the unsaved edit came back out of the dead
@@ -152,9 +155,9 @@ use super::*;
 /// the second, i.e. it would turn a real proof into a spurious red — the same fixture
 /// bug either way, which is why it belongs here.
 ///
-/// The three STATE-PERSISTENCE terms that are asserted ABSENT
-/// ([`SOLO_OCR_ABSENT`], [`TITLE_OCR_ABSENT`]) are listed for the same reason as
-/// the other must-NOT-contain rows. [`TITLE_OCR_ABSENT`] is the one whose fixture
+/// The STATE-PERSISTENCE terms that are asserted ABSENT, [`SOLO_OCR_ABSENT`] and
+/// [`TITLE_OCR_ABSENT`], are listed for the same reason as the other must-NOT-contain
+/// rows. [`TITLE_OCR_ABSENT`] is the one whose fixture
 /// deliberately CONTAINS it — the smoke's HOME directory is named after it, and
 /// the assertion is precisely that the home segment is abbreviated to `~` and
 /// therefore never drawn. That is why
@@ -162,43 +165,46 @@ use super::*;
 /// explicit, documented exemption for the two title directory names rather than
 /// widening this table's guards to cover them.
 ///
-/// [`OPENRECENT_OCR_PRESENT`] is the one term in this table whose SUBJECT is a
-/// fixture FILENAME rather than a file's content — the sidebar row for
-/// [`OPENRECENT_TARGET_FILE`] is the observable that proves the new window's sidebar
-/// is rooted at the opened folder,
-/// the same shape [`TREE_OCR`] has. That is why that file is deliberately absent
-/// from [`RELAUNCH_FIXTURE_NAMES`], and why
-/// [`restore_fixture_names_cannot_satisfy_their_own_assertions`] carries a second
-/// documented exemption block for it and for the target DIRECTORY the header bar
-/// draws beside it.
+/// [`OPENRECENT_OCR_PRESENT`]'s SUBJECT is a fixture FILENAME rather than a file's
+/// content, the shape [`TREE_OCR`] has: the sidebar row for [`OPENRECENT_TARGET_FILE`] is
+/// the observable that proves the new window's sidebar is rooted at the opened folder.
+/// That is why that file is deliberately absent from [`RELAUNCH_FIXTURE_NAMES`], and why
+/// [`restore_fixture_names_cannot_satisfy_their_own_assertions`] carries a documented
+/// Open Recent exemption block for it and for the target DIRECTORY the header bar draws
+/// beside it.
 ///
-/// [`SIDEBARTOGGLE_OCR_ABSENT`] is the third of that kind and the only one asserted
-/// in BOTH directions by the SAME smoke: its subject is the sidebar ROW for
-/// [`SIDEBARTOGGLE_FILE`], present in the first capture (the tree was populated) and
-/// absent from the second (the toggle hid it). That file is therefore likewise
-/// absent from [`RELAUNCH_FIXTURE_NAMES`], with its own exemption block.
+/// [`SIDEBARTOGGLE_OCR_ABSENT`] is of that kind too, and
+/// `sidebar_toggle_chord_hides_the_file_tree_under_cage` asserts it in BOTH directions: its
+/// subject is the sidebar ROW for [`SIDEBARTOGGLE_FILE`], present in the first capture (the
+/// tree was populated) and absent from the second (the toggle hid it). That file is
+/// therefore likewise absent from [`RELAUNCH_FIXTURE_NAMES`], with its own sidebar-toggle
+/// exemption block.
 /// [`SIDEBARTOGGLE_OCR_KEEP`] is an ordinary content term and follows the ordinary
 /// rule.
 ///
-/// [`PROJSEARCH_OCR_TREE_ROW`] is the fourth: the sidebar row for
+/// [`PROJSEARCH_OCR_TREE_ROW`] is of that kind for the project-search smokes: the sidebar
+/// row for
 /// [`PROJSEARCH_FILE_START`], absent while the Search page is up and present once the
 /// Files page is back, so that file has an exemption block too.
 /// [`PROJSEARCH_OCR_RESULT`] is content, the last word of the target's match line.
 ///
-/// [`TG_OCR_TREE_ROW`] is the fifth: the sidebar row for [`TG_TREE_FILE`], which the
-/// toggle-group smokes read as "the Files page is up", so that file has an exemption block
-/// as well. [`TG_OCR_KEEP`] is content, the heading the sidebar band reads only while the
-/// sidebar is hidden. The chord smoke asserts on the same terms as the click smoke, so it is
-/// covered through the click smoke's rows.
+/// [`TG_OCR_TREE_ROW`] is of that kind for the toggle-group smokes: the sidebar row for
+/// [`TG_TREE_FILE`], which they read as "the Files page is up", so that file has an
+/// exemption block as well. [`TG_OCR_KEEP`] is content, the heading the sidebar band reads
+/// only while the sidebar is hidden. `sidebar_chords_move_the_toggle_group_under_cage`
+/// asserts on the same terms as `toggle_clicks_show_switch_and_hide_the_sidebar_under_cage`,
+/// so it is covered through that smoke's rows.
 ///
-/// [`ABOVE_TERMS`], [`CURRENT_TERM`] and [`TRIGGER_TERM`] are the sixth: the tree rows the
-/// sidebar's launch reveal must bring into view, so their generated files carry their terms and
-/// stay out of [`RELAUNCH_FIXTURE_NAMES`]. `tree_reveal.rs`'s own guard checks that each term
+/// [`ABOVE_TERMS`], [`CURRENT_TERM`] and [`TRIGGER_TERM`] are of that kind for
+/// `restored_editor_reveal_draws_the_rows_above_the_current_file_under_cage`: the tree rows
+/// the sidebar's launch reveal must bring into view, so their generated files carry their
+/// terms and stay out of [`RELAUNCH_FIXTURE_NAMES`]. `tree_reveal.rs`'s own guard checks that each term
 /// names its one row and no other.
 ///
-/// [`TB_OCR_A`], [`TB_OCR_B`] and [`TB_OCR_C`] are the seventh: the tab bar smoke reads each
-/// tab's title, which is its directory, so [`TB_DIR_A`], [`TB_DIR_B`] and [`TB_DIR_C`] carry
-/// their terms and stay out of [`RELAUNCH_FIXTURE_NAMES`], with an exemption block of their own.
+/// [`TB_OCR_A`], [`TB_OCR_B`] and [`TB_OCR_C`] are of that kind for the tab bar smoke,
+/// `each_tab_is_titled_by_its_own_directory_under_cage`. It reads each tab's title, which is
+/// its directory, so [`TB_DIR_A`], [`TB_DIR_B`] and [`TB_DIR_C`] carry their terms and stay
+/// out of [`RELAUNCH_FIXTURE_NAMES`], with an exemption block of their own.
 ///
 /// [`HT_OCR_DIR`] is the second tab's title in the `gtk-titlebar-style` smokes, so [`HT_DIR`]
 /// carries it, with an exemption block as well; `native_keeps_the_tab_bar_row_under_cage`
@@ -207,8 +213,10 @@ use super::*;
 /// guard would refuse it.
 ///
 /// Every smoke that OCRs a capture registers each term it asserts on here, and a
-/// smoke that OCRs nothing registers none; the second project-search smoke is covered
-/// through the first's rows, since it asserts on the same terms. The smokes that
+/// smoke that OCRs nothing registers none;
+/// `search_chord_reveals_the_sidebar_and_escape_returns_to_the_editor_under_cage` is covered
+/// through the rows of `search_panel_streams_results_and_opens_the_match_under_cage`, since it
+/// asserts on the same terms. The smokes that
 /// contribute no rows do so on purpose, and it is worth being explicit about which
 /// and why:
 ///
@@ -221,7 +229,7 @@ use super::*;
 ///   state database, and `getcwd()` / `bufname('%')` strings the captive
 ///   Neovims write about themselves — none of which a rendered row can move. Its
 ///   fixtures are registered in [`RELAUNCH_FIXTURE_NAMES`] all the same, and carry
-///   the one exemption in this file that goes the other way; see the eighth block of
+///   an exemption that goes the other way; see the two-window block of
 ///   [`restore_fixture_names_cannot_satisfy_their_own_assertions`].
 /// * `three_tabs_survive_a_relaunch_under_cage` captures no PNG and could not use
 ///   one: a background tab's pane view is never drawn at all, and a tab TITLE is the
@@ -251,7 +259,7 @@ use super::*;
 ///   its own grid, so no fixture filename can help or hurt it.
 /// * `column_cap_and_full_width_toggle_change_the_grid_under_cage` for the same
 ///   reason: two `winwidth(0)` integers either side of `:WolfFullWidth`, no capture
-///   at all. It is also the one smoke that could not use OCR even if it wanted to —
+///   at all. It could not use OCR even if it wanted to —
 ///   what it measures is a COLUMN COUNT and a horizontal offset, and tesseract's
 ///   `contains` is position-agnostic by construction.
 /// * `click_positions_the_cursor_under_cage`,
@@ -306,8 +314,8 @@ use super::*;
 ///   — that sentence is true with the picker CLOSED.
 /// * `preview_created_after_launch_renders_without_a_portal_under_cage` is
 ///   another: two captures, OCRed neither, and its observables are the preview's
-///   background and heading-ink counts inside that background's extent on each frame. It reuses the picker smoke's two fixtures
-///   and registers only its three readbacks, whose paths the cmdline strip echoes.
+///   background and heading-ink counts inside that background's extent on each frame. It reuses the picker smoke's fixtures
+///   and registers only its readbacks, whose paths the cmdline strip echoes.
 /// * `preview_in_another_pane_reuses_the_other_pane_under_cage` and
 ///   `edit_in_another_pane_reuses_the_other_pane_under_cage` capture nothing: their
 ///   observables are the window handles and buffer names the captive Neovim writes
@@ -325,19 +333,19 @@ use super::*;
 ///   `the_save_dialog_writes_a_named_file_under_cage` capture nothing either: each
 ///   asserts on the BYTES its chord put in a file, read by the Rust side. A sidebar
 ///   row cannot write a file, so no fixture filename can reach either half — though
-///   their four names ARE registered in [`RELAUNCH_FIXTURE_NAMES`], which is the
+///   their names ARE registered in [`RELAUNCH_FIXTURE_NAMES`], which is the
 ///   table that keeps them clear of everybody else's terms.
 /// * `composed_text_reaches_neovim_under_cage` the same way, and it could not use
 ///   OCR even if it wanted to: its claim is an EQUALITY over three composed glyphs,
 ///   where `tesseract`'s output is a `contains` on a lowercased page — which could
 ///   not tell a doubled or reordered line from a correct one, and reads `é` against
-///   `e` worst of all. Its three names are registered in
+///   `e` worst of all. Its names are registered in
 ///   [`RELAUNCH_FIXTURE_NAMES`] for the generic loop's sake.
 /// * `a_control_chord_while_composing_is_claimed_by_the_input_method_under_cage`
 ///   likewise: its observables are `winnr('$')` counts the captive Neovim writes
 ///   about its own window layout, one per arm, and a rendered row cannot add or
 ///   remove a window. It reads no buffer text on purpose — see its scenario — so
-///   there is not even a page for a term to sit on. Its six names are registered in
+///   there is not even a page for a term to sit on. Its names are registered in
 ///   [`RELAUNCH_FIXTURE_NAMES`] for the generic loop's sake.
 /// * `header_bar_and_tab_bar_take_the_editor_background_dark_under_cage` and its light
 ///   twin capture four PNGs each and OCR none: their observables are exact-colour shares
@@ -518,7 +526,8 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
         "PROJSEARCH_OCR_ABSENT",
         "search_panel_streams_results_and_opens_the_match_under_cage",
     ),
-    // The project-search smokes share these two terms; each row names the first.
+    // The project-search smokes share these terms; each row names
+    // `search_panel_streams_results_and_opens_the_match_under_cage`.
     (
         PROJSEARCH_OCR_RESULT,
         "PROJSEARCH_OCR_RESULT",
@@ -654,7 +663,8 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
         "SIDEBARTOGGLE_OCR_KEEP",
         "sidebar_toggle_chord_hides_the_file_tree_under_cage",
     ),
-    // The toggle-group smokes share these two terms; each row names the first.
+    // The toggle-group smokes share these terms; each row names
+    // `toggle_clicks_show_switch_and_hide_the_sidebar_under_cage`.
     (
         TG_OCR_TREE_ROW,
         "TG_OCR_TREE_ROW",
@@ -916,11 +926,11 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
 ///
 /// The tree sidebar renders every cwd entry BY NAME, so each of these is page text
 /// in its own smoke's capture — the same hazard [`SIDEBAR_FILLER_FILES`] carries,
-/// aimed at a THIRD fixture. The readback files are listed too: they land in the
+/// aimed at the smokes' own fixtures. The readback files are listed too: they land in the
 /// temp cwd alongside the markdown, so the sidebar draws them as well.
 ///
-/// The state-persistence smokes were the first entries here and the name records
-/// that, but the table is not limited to them: any smoke whose own fixture could
+/// The table is named for the state-persistence smokes, but it is not limited to
+/// them: any smoke whose own fixture could
 /// satisfy — or spuriously break — an [`ASSERTED_OCR_TERMS`] entry belongs in it,
 /// and the command-palette smoke's base file is registered here for exactly that
 /// reason. A smoke whose fixture is absent from this table is a smoke whose fixture
@@ -1387,7 +1397,7 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         "PICKOVER_WINS_NAME",
         "file_picker_covers_the_live_preview_under_cage",
     ),
-    // The new-view smoke reuses the two PICKOVER fixtures above, so only its readbacks are new.
+    // The new-view smoke reuses the PICKOVER fixtures above, so only its readbacks are new.
     (
         NEWVIEW_WINS_BEFORE_NAME,
         "NEWVIEW_WINS_BEFORE_NAME",
@@ -2021,11 +2031,11 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 ///
 /// Both are fixed, and the convention they now follow is the one to apply to any
 /// new smoke: **when a smoke asserts on a file's CONTENT, the file's NAME must not
-/// contain the asserted word.** There are two deliberate exceptions, and both are
-/// smokes whose whole subject IS the rendered NAME:
-/// `tree_sidebar_shows_files_under_cage` (so [`TREE_OCR`] is a filename word on
-/// purpose) and `window_title_shows_the_working_directory_under_cage` (whose two
-/// DIRECTORY names are its asserted terms). That is why this guard cannot simply be
+/// contain the asserted word.** The deliberate exceptions are smokes whose whole subject
+/// IS the rendered NAME, such as `tree_sidebar_shows_files_under_cage` (so [`TREE_OCR`] is
+/// a filename word on purpose) and `window_title_shows_the_working_directory_under_cage`
+/// (whose two DIRECTORY names are its asserted terms); the exemptions section of
+/// [`restore_fixture_names_cannot_satisfy_their_own_assertions`] holds the rest. That is why this guard cannot simply be
 /// widened to cover fixture names without an opt-out list, and why the
 /// state-persistence fixtures got their own guard with the exemption written down.
 ///
@@ -2079,7 +2089,7 @@ fn sidebar_filler_names_cannot_satisfy_any_smoke_assertion() {
 }
 
 /// The same invariant as [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`],
-/// aimed at a SECOND fixture: the two fixed parts of every [`make_temp_cwd`] path —
+/// aimed at another fixture: the two fixed parts of every [`make_temp_cwd`] path —
 /// [`TEMP_CWD_BASENAME`], which the header bar actually draws, and
 /// [`TEMP_CWD_PREFIX`], which it draws only if the home abbreviation regresses.
 ///
@@ -2120,15 +2130,15 @@ fn sidebar_filler_names_cannot_satisfy_any_smoke_assertion() {
 /// ## What it does not cover
 ///
 /// Only the two fixed components. The variable part of the path is the process id, a
-/// nanosecond timestamp and a sequence number — ASCII digits and `-` — which the third loop below proves
-/// cannot contain any asserted term rather than merely asserting it in prose. The
+/// nanosecond timestamp and a sequence number — ASCII digits and `-` — which the digits-and-`-`
+/// loop below proves cannot contain any asserted term rather than merely asserting it in prose. The
 /// PARENT of the unique directory (`std::env::temp_dir()`, i.e. `TMPDIR` or `/tmp`)
 /// is NOT checked, because it is a property of the host rather than of this fixture;
 /// it is abbreviated away today, but a `TMPDIR` containing an asserted term would
 /// show up as a mysterious pass or failure if the abbreviation ever broke, and this
 /// note is the place to start looking.
 ///
-/// PURE, like its two siblings: no compositor, no `require_smoke_env`, no
+/// PURE, like the other fixture guards: no compositor, no `require_smoke_env`, no
 /// cage slot, no subprocess.
 #[test]
 fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
@@ -2207,9 +2217,9 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
     }
 }
 
-/// The same invariant again, aimed at a THIRD fixture: the SMOKE-OWNED files listed
+/// The same invariant again, aimed at another fixture: the SMOKE-OWNED files listed
 /// in [`RELAUNCH_FIXTURE_NAMES`] — the ones a smoke writes into its own working
-/// directory, of which the state-persistence smokes' were the first — plus the two
+/// directory, in a table named for the state-persistence smokes — plus the two
 /// directory names the title smoke builds.
 ///
 /// ## Why these fixtures need their own guard
@@ -2224,12 +2234,12 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// `paneright.md` against `paneleft` / `paneright`. Every smoke in this table
 /// asserts on FILE CONTENT (a rendered heading) while dropping its fixture into a
 /// cwd the tree sidebar lists BY NAME, so each is in precisely that hazard class —
-/// the state-persistence smokes, which brought the table into being, and the
+/// the state-persistence smokes, which the table is named for, and the
 /// command-palette smoke, whose `pbase.md` must never come to contain `palcmdbase`.
 /// Both directions matter: a must-CONTAIN term in a fixture name makes its smoke
 /// pass vacuously, and a must-NOT-CONTAIN term makes it fail spuriously.
 ///
-/// ## The nine deliberate, documented exemptions
+/// ## The deliberate, documented exemptions
 ///
 /// The title smoke's two DIRECTORY names are not files and are not in
 /// [`RELAUNCH_FIXTURE_NAMES`], because they are the assertion's subject rather
@@ -2238,7 +2248,7 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// [`TITLE_HOME_DIR`] must contain [`TITLE_OCR_ABSENT`] (the assertion is that
 /// the home segment is abbreviated to `~` and therefore NOT drawn). This is the
 /// same shape as `tree_sidebar_shows_files_under_cage`'s exemption from the
-/// filler guard. Rather than leave that as prose, the third block below asserts
+/// filler guard. Rather than leave that as prose, the title block below asserts
 /// the exemption's PRECONDITIONS — including the crossed pair, where a mistake
 /// really would be fatal.
 ///
@@ -2251,25 +2261,24 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// `~/`[`OPENRECENT_TARGET_DIR`] on every capture of that smoke, so a target
 /// DIRECTORY carrying the asserted term would satisfy its OCR assertion from the
 /// title alone — with the new window in the empty state and no sidebar drawn
-/// at all. The fourth block below asserts both halves, plus that neither
+/// at all. The Open Recent block below asserts both halves, plus that neither
 /// name carries any OTHER asserted term.
 ///
-/// The sidebar-toggle smoke is the third, and its crossed pair is the sharpest of
-/// the three because both halves are asserted by the SAME smoke on the SAME pair of
-/// captures. [`SIDEBARTOGGLE_FILE`]'s NAME is the observable — the file is never
+/// The sidebar-toggle smoke's crossed pair has both halves asserted by the SAME smoke on
+/// the SAME pair of captures. [`SIDEBARTOGGLE_FILE`]'s NAME is the observable — the file is never
 /// opened, so only a tree row can draw it — and it must therefore contain
 /// [`SIDEBARTOGGLE_OCR_ABSENT`], which the generic loop forbids; it is likewise
 /// absent from [`RELAUNCH_FIXTURE_NAMES`]. The crossed half is that it must NOT
 /// contain [`SIDEBARTOGGLE_OCR_KEEP`]: that term is the ANTI-VACUITY assertion on
 /// the second capture, so it has to come from the EDITOR rather than the sidebar,
 /// or hiding the sidebar would remove the proof-of-life along with the subject and
-/// the two assertions would contradict each other on a correct run. The fifth block
-/// below asserts both halves, that the editor fixture carries neither term in its
+/// the two assertions would contradict each other on a correct run. The sidebar-toggle
+/// block below asserts both halves, that the editor fixture carries neither term in its
 /// NAME, that its heading carries the keep-term, and that
 /// [`SIDEBARTOGGLE_FILE`] carries no OTHER asserted term.
 ///
-/// The typed-`:cd` smoke is the fourth, and it needs the widest block of the five
-/// because THREE of its fixed path components are page text at once.
+/// The typed-`:cd` smoke needs a wide block, because THREE of its fixed path components
+/// are page text at once.
 /// [`CD_TARGET_FILE`]'s NAME is the subject of assertion 4 — it lives only inside the
 /// `:cd` target, so a sidebar row is the sole thing that can draw it — and it must
 /// therefore contain [`CD_OCR_ROOTED`], which the generic loop forbids; it is
@@ -2278,14 +2287,13 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// root row, which draws that basename) and must NOT contain [`CD_OCR_ROOTED`] or
 /// [`CD_OCR_UNABBREVIATED`]. [`CD_OUTER_DIR`] must contain [`CD_OCR_UNABBREVIATED`]
 /// (or assertion 5 is vacuous) and must NOT contain [`CD_OCR_ROOT_NODE`] — that is
-/// the sharpest crossed pair here, because a failed title abbreviation draws the
+/// the crossed pair that matters, because a failed title abbreviation draws the
 /// whole path and assertion 5 is what tells that apart from a real root row.
 /// [`CD_START_DIR`] is the launch cwd: the header bar draws `~/startdir` before the
 /// `:cd` and a sidebar `Dir` row draws it after, so it must neither carry nor be
-/// carried by any asserted term. The sixth block below asserts all of that.
+/// carried by any asserted term. The typed-`:cd` block below asserts all of that.
 ///
-/// The per-pane statusbar smoke is the fifth, and its crossed pair is the only one
-/// whose two halves are both must-CONTAIN terms. [`STATUS_FILE_A`] and
+/// The per-pane statusbar smoke's crossed pair has two must-CONTAIN halves. [`STATUS_FILE_A`] and
 /// [`STATUS_FILE_B`] are each the subject of their own assertion — the strip above a
 /// pane drawing THAT pane's filename is the whole feature — so each must contain its
 /// own term, which the generic loop forbids, and both are absent from
@@ -2295,63 +2303,70 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// revert — drawing the ACTIVE pane's status in every strip — would leave the smoke
 /// green. Beside them sit two more names. [`STATUS_FIXTURE_DIR`] is drawn by the
 /// strip's second line (the display path) and by the typed `:e` command line, and
-/// [`STATUS_FIXTURE_BODY`] is drawn by the editor grid itself, since these are the
-/// only exempt fixtures this binary OPENS; either one carrying an asserted term would
-/// satisfy that term from a place the filename line never drew. The seventh block
+/// [`STATUS_FIXTURE_BODY`] is drawn by the editor grid itself, since this smoke OPENS
+/// its exempt fixtures; either one carrying an asserted term would
+/// satisfy that term from a place the filename line never drew. The statusbar block
 /// below asserts all of that, plus that neither filename carries
 /// [`STATUS_OCR_MARKER`] — which is the capture's proof of life and must not be
 /// satisfiable by the very thing it is proving was drawn.
 ///
-/// The two-window smoke is the sixth and the only one of a different KIND. The five
-/// above are fixtures that must CARRY an asserted OCR term; its five fixtures are
-/// named after the strings its assertions compare against, which the rule at the top
+/// The two-window smoke's exemption is of a different KIND. The exemptions above are of
+/// fixtures that must CARRY an asserted OCR term; its fixtures are named after the strings its assertions compare against, which the rule at the top
 /// of this file forbids outright. It is exempt because it takes no capture at all —
 /// it invokes `grim` nowhere and `tesseract` nowhere — and what it compares are pane
 /// paths out of a frozen window state and `getcwd()` / `bufname('%')` strings the
 /// captive Neovim writes about itself. A sidebar row cannot write a saved pane and an
 /// `:e` toast cannot either, so the hazard the rule exists for has no route in. The
 /// names are registered in [`RELAUNCH_FIXTURE_NAMES`] regardless, so the generic loop
-/// still keeps them clear of every other smoke's terms; what the eighth block adds is
-/// the CROSSING — every one of the five against every other — without which "each
-/// window and tab was saved and restored in its place" is satisfied by a window or
-/// tab standing in for another.
+/// still keeps them clear of every other smoke's terms; what the two-window block adds
+/// is the CROSSING — every fixture against every other — without which "each window and
+/// tab was saved and restored in its place" is satisfied by a window or tab standing in
+/// for another. The tab-persistence block, for `three_tabs_survive_a_relaunch_under_cage`,
+/// has the same shape.
 ///
-/// The two project-search smokes are the seventh. [`PROJSEARCH_FILE_START`]'s NAME
+/// The project-search smokes, `search_panel_streams_results_and_opens_the_match_under_cage`
+/// and `search_chord_reveals_the_sidebar_and_escape_returns_to_the_editor_under_cage`, need
+/// one too. [`PROJSEARCH_FILE_START`]'s NAME
 /// carries [`PROJSEARCH_OCR_TREE_ROW`], because a tree row is what says which sidebar
 /// page is up, so it is absent from [`RELAUNCH_FIXTURE_NAMES`]. The crossed half is
 /// everything the Search page draws: the target's name, the query and the match
 /// line must not carry the tree-row term, or the panel itself would draw it. The
-/// block after the project-search fixture checks asserts that, the loop's own checks
+/// panel tree-row block below asserts that, the loop's own checks
 /// on that one name, and that [`PROJSEARCH_HEADING_START`], on screen beside the
 /// panel, lacks [`PROJSEARCH_OCR_RESULT`].
 ///
-/// The two toggle-group smokes add one more. [`TG_TREE_FILE`]'s NAME carries
+/// The toggle-group smokes, `toggle_clicks_show_switch_and_hide_the_sidebar_under_cage` and
+/// `sidebar_chords_move_the_toggle_group_under_cage`, need one as well. [`TG_TREE_FILE`]'s
+/// NAME carries
 /// [`TG_OCR_TREE_ROW`], the reading "the Files page is up", so it is absent from
 /// [`RELAUNCH_FIXTURE_NAMES`]. Their sidebar band reads three states from two terms, so both
 /// cross everything else the band can show: the Search page's target name, query and match
 /// line, and, once a hidden sidebar lets the pane slide under the band, [`TG_OPEN_FILE`]'s
 /// name and [`TG_HEADING`]. The tree-row term in any of those makes Search or Hidden read as
 /// Files; the keep term anywhere but the heading makes Files or Search read as Hidden. The
-/// block after the project-search one asserts all of that.
+/// toggle-group tree-row block below asserts all of that.
 ///
-/// The tab bar smoke is the ninth. Its three directories, [`TB_DIR_A`], [`TB_DIR_B`] and
+/// The tab bar smoke, `each_tab_is_titled_by_its_own_directory_under_cage`, needs one as
+/// well. Its three directories, [`TB_DIR_A`], [`TB_DIR_B`] and
 /// [`TB_DIR_C`], are the titles it reads, so each carries its own term and all three are absent
 /// from [`RELAUNCH_FIXTURE_NAMES`]. The crossing is what makes the smoke prove that each tab is
 /// titled by its own directory: every capture draws two of the three, in the bar and in the
 /// header, so a directory carrying another's term would satisfy a must-contain with the retitle
-/// never drawn. The block after the toggle-group one asserts that, and that no term is in
+/// never drawn. The tab bar block below asserts that, and that no term is in
 /// `project`, the temp cwd's prefixes, a filler or a readback name the cmdline strip draws.
 ///
-/// The `gtk-titlebar-style` smokes add one more. [`HT_DIR`] is the second tab's title, so it
+/// The `gtk-titlebar-style` smokes, `tabs_join_the_header_bar_from_the_second_tab_under_cage`
+/// and `native_keeps_the_tab_bar_row_under_cage`, need one as well. [`HT_DIR`] is the second
+/// tab's title, so it
 /// carries [`HT_OCR_DIR`] and is absent from [`RELAUNCH_FIXTURE_NAMES`]. Their header band holds
 /// the first tab's `project` beside it under `tabs` and must not under `native`, so neither name
-/// may carry the other's term. The block after the tab bar one asserts that, and that no prefix
+/// may carry the other's term. The `gtk-titlebar-style` block below asserts that, and that no prefix
 /// or filler the header could draw carries [`HT_OCR_DIR`].
 ///
 /// ## The fixtures whose CONTENT is checked too
 ///
 /// Most relaunch fixtures are a bare heading, so the name is the only thing that
-/// can collide with an assertion. Four carry a built body, and each body renders in
+/// can collide with an assertion. Some carry a built body, and each body renders in
 /// the same pane as a heading its smoke asserts on — so a body line carrying an
 /// asserted term would satisfy that assertion with the heading never drawn, which is
 /// the `PICKER_FILE_NAME` failure reached through CONTENT instead of through a
@@ -2360,15 +2375,16 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// [`DIVIDER_FILE_RIGHT`] carries [`divider_right_fixture_body`]: page density for a
 /// 15-cell pane, see [`DIVIDER_BODY_LINE_COUNT`].
 /// [`PROJSEARCH_FILE_TARGET`] carries [`search_target_fixture_body`], and its
-/// content is load-bearing in a stronger sense than page density — the first
-/// project-search smoke's three exact assertions (the file, the LINE and the COLUMN
-/// the cursor landed on) are all properties of that body, and the result word both
-/// smokes read in the sidebar is its match line's last word, so the block below pins
+/// content is load-bearing in a stronger sense than page density —
+/// `search_panel_streams_results_and_opens_the_match_under_cage`'s three exact assertions
+/// (the file, the LINE and the COLUMN the cursor landed on) are all properties of that body,
+/// and the result word the project-search smokes read in the sidebar is its match line's
+/// last word, so the block below pins
 /// the match's line index, its byte offset and that word as well as the vocabulary.
 /// [`PREVIEW_SOURCE_FILE`] carries [`PREVIEW_SOURCE_HEADING`] plus
-/// [`PREVIEW_SOURCE_PARAGRAPH`], and it is the only one of the three whose body
-/// reaches a pixel through WebKit rather than through the editor grid. Three rules
-/// there, and the other two fixtures need none of them. [`PREVIEW_OCR_STATUS`] is an
+/// [`PREVIEW_SOURCE_PARAGRAPH`], and its body reaches a pixel through WebKit rather than
+/// through the editor grid, which brings rules an editor-grid body needs none of.
+/// [`PREVIEW_OCR_STATUS`] is an
 /// ordinary English word, so every string that smoke puts on screen — both headings,
 /// the paragraph and the live marker — is checked against it. The live marker is
 /// checked NOT to be in the source already, or the capture that discriminates the
@@ -2377,8 +2393,8 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// heading carrying the web view's term would satisfy a web-view assertion from the
 /// grid beside it.
 ///
-/// [`DRAWER_FIXTURE_FILE`] carries [`drawer_fixture_body`], and it is the one body
-/// here whose job is to be ABSENT from what its smoke reads: the terminal-drawer
+/// [`DRAWER_FIXTURE_FILE`] carries [`drawer_fixture_body`], and that body's job is to be
+/// ABSENT from what its smoke reads: the terminal-drawer
 /// smoke OCRs a band inside the drawer strip, so the editor rows that would occupy
 /// those pixels with no drawer painted have to be recognisable. Hence a LINE COUNT
 /// check (too short a body and the band's rows are wordless, so the must-NOT-contain
@@ -2387,11 +2403,11 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// painter, and each carrying the other's term would let one satisfy the other's
 /// assertion.
 ///
-/// The native-tabs smoke's two fixtures are checked here as well, and they are the
-/// plainest case in the list: their content is a bare heading, neither is exempt
+/// The native-tabs smoke's two fixtures are checked here as well, and they are a plain
+/// case: their content is a bare heading, neither is exempt
 /// from anything, and both go through the generic loop above like any ordinary
 /// fixture — because both of that smoke's asserted terms are file CONTENT rather
-/// than a name. What the ninth block adds is the one thing the generic loop cannot
+/// than a name. What the native-tabs block adds is what the generic loop cannot
 /// reach, the CROSSING between [`TABS_FIRST_HEADING`] and [`TABS_SECOND_HEADING`].
 /// That crossing is the whole discriminator: the smoke claims exactly ONE page's
 /// pane view is on screen at a time, states it as two must-NOT-contain halves on two
@@ -2411,7 +2427,7 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 ///
 /// ## Measured red run
 ///
-/// The fifth exemption block was demonstrated RED by renaming [`SIDEBARTOGGLE_FILE`]
+/// The sidebar-toggle exemption block was demonstrated RED by renaming [`SIDEBARTOGGLE_FILE`]
 /// to `"zzmikeleaf.md"`, i.e. by making the sidebar-toggle smoke's fixture stop
 /// carrying the term that smoke reads off it. The guard failed with
 /// `SIDEBARTOGGLE_FILE = "zzmikeleaf.md" no longer contains SIDEBARTOGGLE_OCR_ABSENT
@@ -2420,7 +2436,7 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// nothing. Recorded here because this guard has no `measured` table of its own, and
 /// evidence that lives only in a run log is evidence that is about to be lost.
 ///
-/// PURE, like its two siblings: no compositor, no `require_smoke_env`, no
+/// PURE, like the other fixture guards: no compositor, no `require_smoke_env`, no
 /// cage slot, no subprocess.
 #[test]
 fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
@@ -2839,7 +2855,7 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
     }
 
     // Every OTHER asserted term still applies to the two exempted filenames, exactly
-    // as it does to the three exemptions above.
+    // as it does to the exemptions above.
     for &(term, term_const, smoke) in ASSERTED_OCR_TERMS {
         for (name, name_const, exempt) in [
             (STATUS_FILE_A, "STATUS_FILE_A", STATUS_OCR_A),
@@ -3137,7 +3153,7 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
     assert!(
         lowercased_match.ends_with(&result_tail),
         "the match line {match_line:?} does not end with {result_tail:?}. PROJSEARCH_OCR_RESULT \
-         must be ON the match line, or no result row draws it and both panel smokes fail their \
+         must be ON the match line, or no result row draws it and the panel smokes fail their \
          first sidebar assertion with no visible cause; and it must sit right after the query, \
          because `context_window` centres a long line on the match, so a word far from it is \
          the first thing a narrow panel trims away."
@@ -3164,7 +3180,7 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
          SearchOptions restricts the search to those two globs, so a Markdown target would be \
          searched whatever `search_panel::search_options_for` set `all_files` to — and a build \
          whose `All` toggle never reaches `search_options_for`, which leaves the panel empty and \
-         reddens both panel smokes' first sidebar assertion, would stop reddening anything."
+         reddens the panel smokes' first sidebar assertion, would stop reddening anything."
     );
 
     // The panel smokes' tree-row exemption: PROJSEARCH_FILE_START's NAME is the subject, so it is
@@ -3248,14 +3264,14 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         "TG_TREE_FILE = {TG_TREE_FILE:?} no longer contains TG_OCR_TREE_ROW = \
          {TG_OCR_TREE_ROW:?}. That file's tree row is the only thing in the sidebar band that \
          draws the term, and the toggle-group smokes read it as \"the Files page is up\". If the \
-         two stop agreeing, every Files capture reads as Search and both smokes fail at their \
+         two stop agreeing, every Files capture reads as Search and the toggle-group smokes fail at their \
          launch capture with no visible cause."
     );
     assert!(
         TG_HEADING.to_lowercase().contains(TG_OCR_KEEP),
         "TG_HEADING = {TG_HEADING:?} does not contain TG_OCR_KEEP = {TG_OCR_KEEP:?}. That \
          heading is the only place the term exists, so a hidden sidebar would read as Search \
-         and both toggle-group smokes would fail at their first hide."
+         and the toggle-group smokes would fail at their first hide."
     );
     for (name, name_const) in [
         (TG_OPEN_FILE, "TG_OPEN_FILE"),
@@ -3602,7 +3618,7 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
             !drawer_fixture.to_lowercase().contains(term),
             "`drawer_fixture_body` contains {term_const} = {term:?}. It is EDITOR text in the \
              terminal-drawer smoke's capture, so it would satisfy — or, for a must-NOT-contain \
-             term, spuriously break — `{smoke}`'s OCR assertion. The sharpest case is \
+             term, spuriously break — `{smoke}`'s OCR assertion. One such case is \
              DRAWER_OCR_MARKER itself: the marker is asserted PRESENT in the sampled band on the \
              grounds that only the drawer's shell can draw it, and a fixture line carrying it would satisfy that \
              from the editor pane with no drawer on screen at all."

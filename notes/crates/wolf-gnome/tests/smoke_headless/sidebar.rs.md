@@ -20,7 +20,7 @@ The folder MRU is seeded with the target, then the launch cwd, so the launch cwd
 
 `SIDEBAR_FILLER_FILES` go into both directories, because the capture shows the new window, whose sidebar lists the target. The subject is `ortango.md`'s name, the sidebar row, so that file is the one deliberate exception to "put the asserted word in the content", and like `TREE_FILE_NAME` it is absent from `RELAUNCH_FIXTURE_NAMES`.
 
-The header draws `~/orzulu` on every capture, so a target directory named after the asserted term would pass from the title alone, even with the new tab in the empty state. The third fixture guard's exemption block asserts both halves. Assertion 5 reads the sidebar because only a folder tab rooted at the target draws that row; the title proves no more than assertion 3's readback.
+The header draws `~/orzulu` on every capture, so a target directory named after the asserted term would pass from the title alone, even with the new tab in the empty state. `restore_fixture_names_cannot_satisfy_their_own_assertions`'s Open Recent block asserts both halves. Assertion 5 reads the sidebar because only a folder tab rooted at the target draws that row; the title proves no more than assertion 3's readback.
 
 The scenario parks no block cursor: an `o` in the new tab would modify its buffer before the quit, and the asserted term is a sidebar row the cursor never covers.
 

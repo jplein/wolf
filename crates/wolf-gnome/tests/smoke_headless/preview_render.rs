@@ -56,28 +56,23 @@ const CODEHL_SOURCE_FILE: &str = "cbhl.md";
 /// highlighter. The theme's five dark palette entries are all neutral (r = g = b), so
 /// plain prose contributes no chroma at any threshold.
 ///
-/// MEASURED (GTK 4.22.4, libadwaita 1.9.0, WebKitGTK 2.52.4, `cage` 0.3.0, 1280x720):
-/// this paragraph WRAPS to two lines, so the first `pre` block starts 72 rows below the
-/// content's top rather than 48, and 92 below `web_top`, the root padding above it. Nothing asserts that offset — the blocks are located
-/// from the pixels — but a longer paragraph pushes both blocks down, and the scan
-/// only reaches [`preview_theme_band_rows`]'s last row (600 at the pinned output).
+/// At the pinned output this paragraph WRAPS, which pushes both `pre` blocks down. Nothing
+/// asserts that offset — the blocks are located from the pixels — but a longer paragraph
+/// pushes them further, and the scan only reaches [`preview_theme_band_rows`]'s last row
+/// (600 at the pinned output).
 ///
-/// ## The 57-row margin, and what it rules out
+/// ## The scan margin, and what it rules out
 ///
-/// The measured second block ends at absolute row 543, so 57 rows remain before that
-/// bound binds: two more wrapped lines here still fit (543 + 48 = 591 < 600) and a
-/// third does not.
+/// The rows left between the second block's end and that bound are the margin this
+/// paragraph and [`CODEHL_FENCE_BODY`] share. The fence carries FOUR code lines because a
+/// taller fence spends the margin below the second block, and a wrapped line more HERE
+/// would then clip it. A clipped control block is not a missing block: it is still exactly
+/// one run, so the run count cannot see it, and the smaller rectangle can only LOWER the
+/// control's chroma count. That silent under-count is what the equal-height check in
+/// assertion 5 of [`preview_highlights_a_fenced_code_block_under_cage`] exists to catch.
 ///
-/// The same margin is why [`CODEHL_FENCE_BODY`] carries FOUR code lines rather than
-/// five. A five-line fence makes each block 168 rows instead of 144, so the second one
-/// would end at 591 and leave 9 rows — and one extra wrapped line HERE would then clip
-/// it. A clipped control block is not a missing block: it is still exactly one run, so
-/// the run count cannot see it, and the smaller rectangle can only LOWER the control's
-/// chroma count, which is the silent under-count the equal-height guard in
-/// [`preview_highlights_a_fenced_code_block_under_cage`] exists to catch. MEASURED on a
-/// six-line candidate: two runs, the second truncated to 153 rows against the first's
-/// 192, with 20 % of the control never sampled. Growing this paragraph or that fence
-/// spends the margin, so re-measure both if either changes.
+/// Growing this paragraph or that fence spends the margin, so re-check it if either
+/// changes.
 const CODEHL_PARAGRAPH: &str =
     "alfa bravo charlie delta echo foxtrot golf hotel india juliett kilo lima.";
 
@@ -657,8 +652,9 @@ exit 0
 /// ## Assertions, classified
 ///
 /// A precondition gets NO revert: inventing one would manufacture a discriminator this
-/// smoke does not have. Readings are from actual runs at GTK 4.22.4, libadwaita 1.9.0,
-/// WebKitGTK 2.52.4 and `cage` 0.3.0 on a 1280x720 output.
+/// smoke does not have. The `measured` column gives each row's green or red outcome. This
+/// smoke prints no readings, and the figures a threshold rests on are in that constant's own
+/// doc.
 ///
 /// | # | assertion (0–5) or claim (6–8) | kind | falsifying edit | measured |
 /// | --- | --- | --- | --- | --- |
@@ -666,10 +662,10 @@ exit 0
 /// | 1 | `status.success()` | precondition — the cage scenario ran to completion | none; do not invent one | n/a |
 /// | 2 | the PNG is present and decodes at exactly `CAGE_OUTPUT_W_EXPECTED` x `CAGE_OUTPUT_H_EXPECTED` | precondition — and what makes every derived rectangle mean what it says | none; do not invent one | n/a |
 /// | 3 | `tabpagebuflist()`, sorted, is the preview scratch plus the source | precondition — a preview pane exists, and exactly two panes do | none; do not invent one | green: `Preview: cbhl.md,cbhl.md` |
-/// | 4 | `web_top` is locatable | precondition — the web view's own top edge, self-located from the pixels | none; do not invent one | green: absolute row 159 measured, at the content's top; 139 by derivation, the view's top above the root padding, not re-measured |
-/// | 5 | exactly TWO majority-[`CODEHL_PRE_BG`] runs of at least [`CODEHL_MIN_BLOCK_ROWS`] rows, of EQUAL height | precondition — BOTH fences rendered as `pre` blocks, and NEITHER was clipped by the scan limit. The run COUNT cannot see a clipped block: a truncated run is still exactly one run, and a control rect short of its subject can only LOWER claim 7's count, which would make the control read stronger than it is. | none; do not invent one | green: rows 231..375 and 399..543, both 144 tall, 24-row gap at 0 % `CODEHL_PRE_BG`, 57 rows of margin below. MEASURED on a rejected six-line fixture: two runs, the second clipped to 153 rows against 192, 20 % of the control unsampled. |
-/// | 6 | run 1 carries at least [`CODEHL_MIN_CHROMA_PX`] chromatic pixels | **discriminator** — the vendored parsers reach the rendered document (feat-list row "Syntax-highlighted code blocks") | in `runtime/nvim/init.lua`, revert the PARSERS probe to a bare sibling `uv.fs_stat` (leave the queries fallback). `parser/go.so` is then off the runtimepath, the block renders plain, and this count collapses to the control's level. ISOLATED against the FFI suite, and this is not obvious: all three `wolf-ffi` treesitter tests stay GREEN, because none of them reaches `init.lua`'s environment fallback — two stage real siblings in a temp directory and the third loads the `.so` by absolute path. It is NOT isolated from claim 8, which reddens with it. | green: 1209 at threshold 32, max chroma 108, over 50,976 pixels |
-/// | 7 | run 2 carries at most [`CODEHL_MAX_CHROMA_PX`] chromatic pixels | **in-capture control** — the chroma in run 1 comes from the highlighter and not from the renderer | none of its own. On a host with subpixel antialiasing it would fire in the GREEN run if `CODEHL_CHROMA_MIN` were ever set too low; on this host, whose antialiasing is grayscale, that failure mode is invisible and the threshold's legal window is what guards it instead. | green: **0**, at every threshold down to `>= 1`, over all 50,976 pixels |
+/// | 4 | `web_top` is locatable | precondition — the web view's own top edge, self-located from the pixels | none; do not invent one | green: `web_top` is the view's top edge, above the root padding |
+/// | 5 | exactly TWO majority-[`CODEHL_PRE_BG`] runs of at least [`CODEHL_MIN_BLOCK_ROWS`] rows, of EQUAL height | precondition — BOTH fences rendered as `pre` blocks, and NEITHER was clipped by the scan limit. The run COUNT cannot see a clipped block: a truncated run is still exactly one run, and a control rect short of its subject can only LOWER claim 7's count, which would make the control read stronger than it is. | none; do not invent one | green, inside the scan margin [`CODEHL_PARAGRAPH`] records |
+/// | 6 | run 1 carries at least [`CODEHL_MIN_CHROMA_PX`] chromatic pixels | **discriminator** — the vendored parsers reach the rendered document (feat-list row "Syntax-highlighted code blocks") | in `runtime/nvim/init.lua`, revert the PARSERS probe to a bare sibling `uv.fs_stat` (leave the queries fallback). `parser/go.so` is then off the runtimepath, the block renders plain, and this count collapses to the control's level. ISOLATED against the FFI suite, and this is not obvious: all three `wolf-ffi` treesitter tests stay GREEN, because none of them reaches `init.lua`'s environment fallback — two stage real siblings in a temp directory and the third loads the `.so` by absolute path. It is NOT isolated from claim 8, which reddens with it. | green, with the headroom [`CODEHL_MIN_CHROMA_PX`] records |
+/// | 7 | run 2 carries at most [`CODEHL_MAX_CHROMA_PX`] chromatic pixels | **in-capture control** — the chroma in run 1 comes from the highlighter and not from the renderer | none of its own. On a host with subpixel antialiasing it would fire in the GREEN run if `CODEHL_CHROMA_MIN` were ever set too low; on this host, whose antialiasing is grayscale, that failure mode is invisible and the threshold's legal window is what guards it instead. | green: zero, as [`CODEHL_MAX_CHROMA_PX`] records |
 /// | 8 | the langtree readback's first token is [`CODEHL_LANGTREE_OK`] | **discriminator** — the vendored trees fire `init.lua`'s gate inside the running application (feat-list row "Vendored treesitter plugins and parsers", its editor half) | in `runtime/nvim/init.lua`, delete the environment fallback from the QUERIES probe (leave the parsers one). The outer gate then does not fire, so NEITHER tree lands on the runtimepath and this reads NO. Claim 6 reddens under this edit too, and claim 6's OWN falsifier reddens this one — MEASURED, the parsers-probe edit also reads `NO src=2`, because an injected child langtree needs the parser as well as the injections query. Neither falsifier isolates it, which is exactly why the three claims are accumulated instead of chained. | green: `OK src=2` |
 ///
 /// ## The conventions it obeys
@@ -1931,9 +1927,9 @@ exit 0
 ///
 /// ## Assertions, classified
 ///
-/// A precondition gets NO revert. Readings are from actual runs at GTK 4.22.4,
-/// libadwaita 1.9.3, WebKitGTK 2.54.1 and `cage` 0.3.1 on a 1280x720 output, or are
-/// marked derived. Every row range is half-open, as [`BlockRun`] prints it: 162..182 is rows
+/// A precondition gets NO revert. Green readings are what this smoke's `{SMOKE} readings:`
+/// lines print, red ones are the named falsifier's failure message, and the rest are marked
+/// derived, all on a 1280x720 output. Every row range is half-open, as [`BlockRun`] prints it: 162..182 is rows
 /// 162 to 181. The IDs name the falsifying edits, so a run's report can cite them.
 ///
 /// | # | assertion | kind | falsifying edit | measured |

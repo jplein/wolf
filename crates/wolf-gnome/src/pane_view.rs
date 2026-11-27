@@ -2948,20 +2948,20 @@ impl PaneInner {
     /// ## The documented "an absolute path kills the web process" hazard does NOT fire
     ///
     /// `webkit_web_view_load_html`'s own documentation — still shipped in the pinned
-    /// 2.52.4 GIR — says that when `base_uri` is non-null, "absolute local paths that
-    /// are not children of @base_uri will cause the web process to terminate". Core
-    /// passes `Tag::Image` and raw HTML blocks through verbatim, so an ordinary user
-    /// document arrives here carrying whatever absolute path its author wrote. Were
-    /// that sentence true on this front-end, a base URI would be WORSE than none: merely
-    /// previewing a file would kill the pane.
+    /// WebKitGTK's `WebKit-6.0.gir` — says that when `base_uri` is non-null, "absolute
+    /// local paths that are not children of @base_uri will cause the web process to
+    /// terminate". Core passes `Tag::Image` and raw HTML blocks through verbatim, so an
+    /// ordinary user document arrives here carrying whatever absolute path its author
+    /// wrote. Were that sentence true on this front-end, a base URI would be WORSE than
+    /// none: merely previewing a file would kill the pane.
     ///
-    /// MEASURED under `cage` against webkitgtk 2.52.4 on 2026-08-06, one run per
-    /// document, each read from a temporarily connected `web-process-terminated`
-    /// handler: an `<img>` naming a real file by absolute path OUTSIDE the base's
-    /// directory (it rendered), an absolute path that does not exist,
-    /// `<img src="/etc/hosts">`, `/etc/passwd`, `file:///etc/shadow`, a `../`
-    /// traversal, an out-of-base `<link rel=stylesheet>` and `<script src>` (both
-    /// applied), an out-of-base `<iframe>`, and the relative and in-base controls.
+    /// MEASURED under `cage`, one run per document, each read from a temporarily
+    /// connected `web-process-terminated` handler: an `<img>` naming a real file by
+    /// absolute path OUTSIDE the base's directory (it rendered), an absolute path that
+    /// does not exist, `<img src="/etc/hosts">`, `/etc/passwd`, `file:///etc/shadow`,
+    /// a `../` traversal, an out-of-base `<link rel=stylesheet>` and `<script src>`
+    /// (both applied), an out-of-base `<iframe>`, and the relative and in-base
+    /// controls.
     ///
     /// **The signal fired in none of the eleven.** Every run reached
     /// `LoadEvent::Finished` with the preview still bound and the app alive. The
@@ -2972,6 +2972,10 @@ impl PaneInner {
     /// Pixels are NOT a reading of this and a re-measurement must not use them: after
     /// that deliberate kill the capture was byte-identical to the healthy one, because
     /// the last committed frame stays on screen. Connect the signal.
+    ///
+    /// No smoke repeats this measurement, so a WebKitGTK bump owes it again by the
+    /// same method: a connected `web-process-terminated` handler over the same
+    /// documents.
     ///
     /// ## The one behavioural asymmetry between the two paths
     ///

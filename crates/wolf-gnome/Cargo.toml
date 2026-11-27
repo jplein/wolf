@@ -24,7 +24,7 @@ gdk = { version = "0.11", package = "gdk4", features = ["v4_8"] }
 # adw's `v1_7` is for `adw::ToggleGroup`, the header bar's sidebar control; the flake pins 1.9.
 gtk = { version = "0.11", package = "gtk4", features = ["v4_12"] }
 adw = { version = "0.9", package = "libadwaita", features = ["v1_7"] }
-# `v2_52` matches the flake's webkitgtk; gtk4 must keep `v4_10` or above for `gtk::Accessible`.
+# `v2_52` must not pass the flake's webkitgtk; gtk4 keeps `v4_10` or above for `gtk::Accessible`.
 # See notes/crates/wolf-gnome/Cargo.toml.md#webkit6-features
 webkit6 = { version = "0.6", features = ["v2_52"] }
 # `png` is load-bearing: a cage smoke run by every `cargo test` decodes its `grim` captures with
