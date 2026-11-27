@@ -615,8 +615,7 @@ const PS_EXITS: std::ops::RangeInclusive<i32> = 120..=129;
 const PS_CODES: &str = "Exit 120: Neovim did not answer after the wheel, so keys went to the \
      web view. 122: run 1 outlived `:WolfCloseWindow`. 123: run 1 exited non-zero. 124: no \
      wolf.sqlite after the close. 125: run 2 died before it was ready. 126: run 2's Neovim did \
-     not answer after the wheel. 127: run 2 outlived `:qa`. 128: run 2 exited non-zero. 129: \
-     no wolf.sqlite after run 2's quit.";
+     not answer after the wheel. 129: no wolf.sqlite after run 2's quit.";
 
 /// Body of [`preview_scroll_survives_a_close_and_relaunch_under_cage`], appended to
 /// [`POINTER_PREAMBLE`] and [`EXTRAS_HELPERS`].
@@ -631,8 +630,6 @@ const PS_CODES: &str = "Exit 120: Neovim did not answer after the wheel, so keys
 /// | `124` | no `wolf.sqlite` to freeze after the close |
 /// | `125` | run 2 died before it was ready |
 /// | `126` | run 2's Neovim did not answer after the wheel |
-/// | `127` | run 2 was still alive after `:qa` |
-/// | `128` | run 2 exited non-zero |
 /// | `129` | no `wolf.sqlite` to freeze after run 2's quit |
 const PS_BODY: &str = r#"
 # A cold preview open, and the page's own layout; see PREVIEW_SETTLE in preview.rs.
@@ -662,7 +659,7 @@ wtype -k Return
 reap_app 122 123
 freeze_or_exit "$STATE_C" 124
 
-# --- Q: relaunch, let the page load and scroll, wheel it further, then :qa --------------
+# --- Q: relaunch, let the page load and scroll, wheel it further, then quit -------------
 "$WOLF_BIN" &
 app_pid=$!
 wait_ready "$app_pid" 125 "wolf-gnome preview scroll smoke, run 2"
@@ -677,9 +674,7 @@ sleep "$SCROLL_SETTLE"
 wtype -- ":call writefile([bufname('%')], '$READ_Q')"
 wtype -k Return
 wait_file "$READ_Q" || exit 126
-wtype -- ":qa"
-wtype -k Return
-reap_app 127 128
+quit_app "wolf-gnome preview scroll smoke, run 2"
 freeze_or_exit "$STATE_Q" 129
 
 hsend quit
@@ -722,8 +717,9 @@ pub(crate) fn saved_preview_scroll(
 /// Neovim, and closes the window with `:WolfCloseWindow`. That is the close path's
 /// `KeepSubtree` arm, the last window, and C is frozen. Run 2 waits while the restored preview
 /// loads and scrolls, wheels it [`PS_RESTORE_DETENTS`] more detents at the probe point, reads
-/// the buffer name back so the keys still reach Neovim after the wheel, quits with `:qa`, the
-/// same arm, and Q is frozen.
+/// the buffer name back so the keys still reach Neovim after the wheel, ends with the prelude's
+/// `quit_app`, whose `Coordinator::quit` captures and commits the same lone window, and Q is
+/// frozen.
 ///
 /// Q is checked against run 1's per-detent fraction `δ = s1 / PS_WHEEL_DETENTS`: it must lie
 /// within `PS_RESTORE_DETENTS / 2 · δ` of `s1 + PS_RESTORE_DETENTS · δ`. A seed that was never
@@ -846,7 +842,7 @@ const SB_QUERY_ONE: &str = "sbpbravo";
 const SB_MIN_CHANGED_PIXELS: usize = 40;
 
 /// The inclusive band of exit codes [`SB_BODY`] adds to [`POINTER_PREAMBLE`]'s 11-15 and 40.
-const SB_EXITS: std::ops::RangeInclusive<i32> = 131..=133;
+const SB_EXITS: std::ops::RangeInclusive<i32> = 133..=133;
 
 /// Body of [`each_tab_keeps_its_sidebar_page_under_cage`], appended to [`POINTER_PREAMBLE`] and
 /// [`EXTRAS_HELPERS`].
@@ -855,8 +851,6 @@ const SB_EXITS: std::ops::RangeInclusive<i32> = 131..=133;
 ///
 /// | code | meaning |
 /// | --- | --- |
-/// | `131` | the app was still alive after `:WolfCloseWindow` |
-/// | `132` | the app exited non-zero |
 /// | `133` | no `wolf.sqlite` to freeze after the quit |
 const SB_BODY: &str = r#"
 # The tree's FileSearch streams the cwd listing in once its page shows.
@@ -874,10 +868,7 @@ sleep "$TREE_SETTLE"
 grim "$SB_SHOT_1"
 
 click_tab "$TAB1_X" "$TAB_Y"
-# Close Window, since `:qa` closes only the selected tab of two.
-wtype -- ":WolfCloseWindow"
-wtype -k Return
-reap_app 131 132
+quit_app "wolf-gnome sidebar page smoke"
 freeze_or_exit "$STATE_Q" 133
 
 hsend quit
@@ -916,7 +907,7 @@ fn search_tab(project: &str, query: &str) -> Tab {
 /// One launch through [`POINTER_PREAMBLE`], over a planted window of two tabs on the project,
 /// both on their Search page, tab 0 selected. After the launch, a click on the header bar's
 /// Files toggle shows tab 0's Files page, with a capture of the sidebar band either side. A
-/// click on tab 1 selects it, `:WolfCloseWindow` quits through the close path, and Q is frozen.
+/// click on tab 1 selects it, the prelude's `quit_app` quits, and Q is frozen.
 ///
 /// The page changes by the toggle rather than by `:WolfSidebarShowProject`: a typed command
 /// drains on a render wake, and the record of the selected tab's page on later wakes could then
@@ -1003,8 +994,8 @@ fn each_tab_keeps_its_sidebar_page_under_cage() {
     );
 
     // --- E18a and E18b: each tab saved its own page ---------------------------------------
-    let q_codes = "Exit 131: the app outlived `:WolfCloseWindow`, so the keys after the tab click \
-                   reached no Neovim. 132: it exited non-zero. 133: it left no wolf.sqlite.";
+    let q_codes = "Exit 133: the app left no wolf.sqlite. An exit 241 from `quit_app` means the \
+                   keys after the tab click reached no Neovim.";
     require(SMOKE, status, &[&state_q], "Q", q_codes);
     let saved = frozen_window_state(&state_q, SMOKE, "Q, frozen after the quit");
     let window = only_window(&saved, SMOKE, "Q", &state_q);
@@ -1332,8 +1323,8 @@ const RV_FONT_PT: &str = "10";
 /// | `40` | the app never reported ready |
 /// | `150` | the app died before it was ready for input |
 /// | `151` | Neovim did not answer after the launch |
-/// | `152` | the app was still alive after `:qa` |
-/// | `153` | the app exited non-zero |
+///
+/// The prelude's `quit_app` ends the run, with its own 241 and 242.
 const RV_SCENARIO: &str = r#"
 set -eu
 
@@ -1377,9 +1368,7 @@ wtype -- ":call writefile([printf('%s %d %d %d %d', expand('%:t'), line('w0'), l
 wtype -k Return
 wait_file "$READ_V" || exit 151
 
-wtype -- ":qa"
-wtype -k Return
-reap_app 152 153
+quit_app "wolf-gnome restored view smoke"
 exit 0
 "#;
 
@@ -1392,8 +1381,8 @@ exit 0
 /// root weighted `[0.75, 0.25]`, the upper pane on [`RV_A_FILE`] at [`RV_CURSOR`] with
 /// [`RV_TOP_LINE`], the lower on [`RV_B_FILE`] with no view, and `focused` on pane 0. Both
 /// files hold S1's 200 numbered lines. After the launch, and a settle, the current window
-/// writes back its buffer, `line('w0')`, `line('.')`, `col('.')` and `winheight(0)`, and `:qa`
-/// quits.
+/// writes back its buffer, `line('w0')`, `line('.')`, `col('.')` and `winheight(0)`, and the
+/// prelude's `quit_app` quits.
 ///
 /// ## Assertions
 ///
@@ -1467,10 +1456,12 @@ fn a_restored_top_line_survives_its_grid_resize_under_cage() {
         .env("READ_V", &read_v)
         .status()
         .expect("failed to spawn `cage` for the headless restored view scenario");
-    let codes = "Exit 40: the app never reported ready. 150: it died before it was ready. 151: \
-                 no Neovim answered after the launch. 152 or 153: the quit hung or was not clean.";
+    let codes = format!(
+        "Exit 40: the app never reported ready. 150: it died before it was ready. 151: no \
+         Neovim answered after the launch. {QUIT_APP_EXITS}"
+    );
 
-    require(SMOKE, status, &[&read_v], "V", codes);
+    require(SMOKE, status, &[&read_v], "V", &codes);
     let (file, v) = read_named(&read_v, 4, SMOKE);
     let (w0, line, col, height) = (v[0], v[1], v[2], v[3]);
 
@@ -1504,5 +1495,10 @@ fn a_restored_top_line_survives_its_grid_resize_under_cage() {
          all.",
         RV_CURSOR.line,
         RV_CURSOR.col + 1
+    );
+    assert!(
+        status.success(),
+        "{SMOKE}: the view read back as planted, but the scenario exited {status}, so the run \
+         did not end cleanly after the readback. {codes}"
     );
 }

@@ -1895,6 +1895,26 @@ const SMOKE_GTK_IM_MODULE: &str = "gtk-im-context-simple";
 /// `-wal` alone; SQLite replays that file when the copy is opened. The main file is
 /// copied first: a checkpoint that lands between the two copies is then covered by
 /// the frames the `-wal` still holds.
+///
+/// `quit_app <label>` ends the app `$app_pid` names, which must be the scenario
+/// shell's own child because it reaps that pid with `wait`; it clears `app_pid` once
+/// the app is reaped. It types a `:lua` line that clears `modified` on every buffer,
+/// then `:WolfQuitApplication`, which is `Coordinator::quit`: the one route that ends
+/// the app however many tabs and windows are open, where `:qa` closes only its own tab
+/// and Quit asks about unsaved changes (`specs/application-state.md` §9). The discard
+/// clears exactly what Quit's check reads (`first_unsaved` in `runtime/nvim/init.lua`),
+/// and unlike `:bufdo set nomodified` or `:wa` it leaves the panes and files a save
+/// records alone. It reaches only the Neovim of the tab the keys go to, so a
+/// modified buffer in another tab still refuses the quit; it does not retry, since a
+/// refused quit and a slow one look the same until the budget runs out.
+///
+/// It exits `QUIT_APP_TIMEOUT_EXIT` (241), killing the app first as `wait_ready`
+/// does, when the app outlives `QUIT_APP_TRIES × QUIT_APP_INTERVAL` (15 s), and
+/// `QUIT_APP_STATUS_EXIT` (242) when it exits non-zero; [`QUIT_APP_EXITS`] spells both
+/// out for a failure message. Its variables are `QUIT_APP_`- and `_quit_`-prefixed so
+/// that it cannot clobber a scenario's `QUIT_TRIES`, `tries` or `rc`. A scenario must
+/// not use it when its subject is a quit or close route, or when its keys are in a
+/// terminal pane, where the typed lines would reach a shell.
 const READINESS_PRELUDE: &str = r#"
 # A non-interactive bash as sh drops an inherited PS1, so a terminal smoke's prompt
 # arrives as SMOKE_PS1 and is exported here for the shells the app starts.
@@ -1988,7 +2008,45 @@ freeze_state() {
         fi
     done
 }
+
+QUIT_APP_TRIES=300
+QUIT_APP_INTERVAL=0.05
+QUIT_APP_TIMEOUT_EXIT=241
+QUIT_APP_STATUS_EXIT=242
+
+quit_app() {
+    wtype -- ":lua for _, b in ipairs(vim.api.nvim_list_bufs()) do pcall(vim.api.nvim_set_option_value, 'modified', false, { buf = b }) end"
+    wtype -k Return
+    wtype -- ":WolfQuitApplication"
+    wtype -k Return
+    _quit_n=0
+    while kill -0 "$app_pid" 2>/dev/null; do
+        if [ "$_quit_n" -ge "$QUIT_APP_TRIES" ]; then
+            echo "$1: the app (pid $app_pid) was still alive $QUIT_APP_TRIES x ${QUIT_APP_INTERVAL}s after :WolfQuitApplication;" >&2
+            echo "  no Neovim got the keys, or a modified buffer in a tab they did not reach refused the quit" >&2
+            kill "$app_pid" 2>/dev/null || true
+            exit "$QUIT_APP_TIMEOUT_EXIT"
+        fi
+        _quit_n=$((_quit_n + 1))
+        sleep "$QUIT_APP_INTERVAL"
+    done
+    _quit_rc=0
+    wait "$app_pid" || _quit_rc=$?
+    if [ "$_quit_rc" -ne 0 ]; then
+        echo "$1: the app (pid $app_pid) exited $_quit_rc after :WolfQuitApplication, not 0" >&2
+        exit "$QUIT_APP_STATUS_EXIT"
+    fi
+    app_pid=
+}
 "#;
+
+/// A failure-message fragment naming the exit codes of the prelude's `quit_app`. It
+/// must match [`READINESS_PRELUDE`]'s `QUIT_APP_TIMEOUT_EXIT` and
+/// `QUIT_APP_STATUS_EXIT` assignments.
+const QUIT_APP_EXITS: &str = "Exit 241: the app was still alive after `quit_app`'s wait on \
+     `:WolfQuitApplication`: no Neovim got the keys, or a modified buffer in a tab they did not \
+     reach refused the quit. Exit 242: it exited non-zero after that quit; suspect a panic in \
+     `Coordinator::quit` or in a window's close.";
 
 /// Distinguishes the runtime directories of one test process's cages.
 static SMOKE_RUNTIME_SEQ: AtomicUsize = AtomicUsize::new(0);
@@ -4361,6 +4419,7 @@ fn assert_pointer_scenario_succeeded(smoke: &str, status: ExitStatus, cwd: &Path
          Exit 40: the app stayed up but never wrote its readiness file within `wait_ready`'s \
          budget; the app's `wolf-ready: waiting on …` stderr lines name the unmet condition. \
          Also a launch failure, not a pointer one.\n\
+         {QUIT_APP_EXITS}\n\
          Exit 12: `wolf-pointer-inject` never printed its `ready …` line. Check its own exit code \
          in the stderr below: 3 = cage does not advertise `zwlr_virtual_pointer_manager_v1` at \
          all, 4 = no `wl_seat`, 5 = no `wl_output` and no `-e`, 6 = more than one output, 7 = zero \

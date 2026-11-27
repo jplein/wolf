@@ -2679,18 +2679,18 @@ struct ThemeLaunch<'a> {
 /// consequence of sharing is written out.
 ///
 /// The launch body is a shell FUNCTION rather than two copies, because the two runs
-/// must differ in nothing but their four paths and their four exit codes: a preview
+/// must differ in nothing but their four paths and their two exit codes: a preview
 /// leg duplicated by hand is a preview leg that can be edited on one side only, and
 /// this smoke's whole design is that the two launches are the same run at two
-/// settings. Its nine positional parameters are saved into named variables
+/// settings. Its seven positional parameters are saved into named variables
 /// immediately, since `wait_ready` and `quit_app` rebind `$1`.
 ///
 /// Exit codes are PER LAUNCH, `APPEARANCE_SCENARIO`'s scheme exactly: `11` run 1's
-/// app died before it was ready for input; `12` run 1 was still alive after `:qa!`; `13`
-/// run 1 exited non-zero; `14` run 1's window-list readback never appeared; `15`–`18`
-/// the same four for run 2. Eight and not four, for the reason that smoke gives: "an
-/// app died before it was ready for input" is a different investigation depending on which
-/// appearance it was reading.
+/// app died before it was ready for input; `14` run 1's window-list readback never
+/// appeared; `15` and `18` the same two for run 2. Per-launch codes, for the reason that
+/// smoke gives: "an app died before it was ready for input" is a different investigation
+/// depending on which appearance it was reading. The prelude's `quit_app` ends each run,
+/// with its own 241 and 242, and its stderr label names the run.
 ///
 /// A `grim` failure has no code of its own: it aborts under `set -eu` and the cage
 /// status carries grim's own. That is deliberate — a capture that did not happen is
@@ -2701,7 +2701,6 @@ set -eu
 # SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
-QUIT_TRIES=75
 FILE_TRIES=100
 # PREVIEW_SETTLE -- budgeted FROM THE CALL, not from the web view's Started event.
 # PREVIEW_SCENARIO's doc comment carries the measurement behind it (~255 ms for a
@@ -2733,53 +2732,20 @@ wait_file() {
     return 1
 }
 
-# $1 is the exit code for "still alive after :qa!", $2 for "exited non-zero", and
-# $3 is the run label.
-quit_app() {
-    wtype -- ":qa!"
-    wtype -k Return
-
-    tries=0
-    gone=0
-    while [ "$tries" -lt "$QUIT_TRIES" ]; do
-        if ! kill -0 "$app_pid" 2>/dev/null; then
-            gone=1
-            break
-        fi
-        tries=$((tries + 1))
-        sleep "$WAIT_INTERVAL"
-    done
-    if [ "$gone" -ne 1 ]; then
-        echo "wolf-gnome preview-appearance smoke: $3 app (pid $app_pid) still alive after :qa!." >&2
-        exit "$1"
-    fi
-    # `set -e` would abort before the status could be reported, so collect it
-    # through `||`, which is exempt from it.
-    rc=0
-    wait "$app_pid" || rc=$?
-    if [ "$rc" -ne 0 ]; then
-        echo "wolf-gnome preview-appearance smoke: $3 app (pid $app_pid) exited $rc, not 0." >&2
-        exit "$2"
-    fi
-    app_pid=
-}
-
 # ONE launch, end to end. The two runs call it with different paths and different
 # exit codes and are otherwise the same run -- which is the whole design of this
 # smoke, so the body must never be duplicated.
 #
-# The nine parameters are saved into named variables FIRST: wait_ready and
-# quit_app below rebind $1..$3 for their own calls.
+# The seven parameters are saved into named variables FIRST: wait_ready and
+# quit_app below rebind the positional parameters for their own calls.
 run_launch() {
     cfg=$1
     state=$2
     png=$3
     wins=$4
     code_died=$5
-    code_alive=$6
-    code_status=$7
-    code_file=$8
-    label=$9
+    code_file=$6
+    label=$7
 
     # Both exports deliberately override what `cage_command` set: the helper's
     # directories are shared, and this smoke needs the appearance to be the one
@@ -2827,14 +2793,14 @@ run_launch() {
     wtype -k Return
     wait_file "$wins" || exit "$code_file"
 
-    quit_app "$code_alive" "$code_status" "$label"
+    quit_app "wolf-gnome preview-appearance smoke $label"
 }
 
 run_launch "$CONFIG_DIR_DARK" "$STATE_DIR_DARK" "$OUT_PNG_DARK" "$WINS_DARK" \
-    11 12 13 14 "run 1 (appearance: dark)"
+    11 14 "run 1 (appearance: dark)"
 
 run_launch "$CONFIG_DIR_LIGHT" "$STATE_DIR_LIGHT" "$OUT_PNG_LIGHT" "$WINS_LIGHT" \
-    15 16 17 18 "run 2 (appearance: light)"
+    15 18 "run 2 (appearance: light)"
 
 exit 0
 "#;
@@ -3058,11 +3024,9 @@ fn preview_document_follows_the_configured_appearance_under_cage() {
          code names ONE cause in ONE launch. Exit 11: run 1's app (`appearance: \
          {APPEARANCE_FORCED_DARK}`) died before it was ready for input — `appearance::apply_at_launch` \
          runs before any widget is built and takes the whole launch with it, so a panic there is \
-         the first thing to look at. Exit 12: run 1 was still alive after `:qa!`. Exit 13: run 1 \
-         exited NON-ZERO — it went away, but not cleanly, which is a separate code from 12 because \
-         a panic in the GTK main loop makes a process vanish exactly as a clean shutdown does. \
-         Exit 14: run 1's window-list readback never appeared at {}. Exit 15/16/17/18: the same \
-         four for run 2 (`appearance: {APPEARANCE_FORCED_LIGHT}`), whose readback is at {}. Any \
+         the first thing to look at. Exit 14: run 1's window-list readback never appeared at {}. \
+         Exit 15/18: the same two for run 2 (`appearance: {APPEARANCE_FORCED_LIGHT}`), whose \
+         readback is at {}. {QUIT_APP_EXITS} The label on stderr names the run. Any \
          OTHER status is `grim` or `wtype` failing under `set -eu`, and a grim failure has no code \
          of its own on purpose: a capture that did not happen is not a preview finding. Note this \
          assertion says nothing about whether a preview ever opened — the scenario exits 0 whatever \

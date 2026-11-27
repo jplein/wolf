@@ -1,18 +1,20 @@
 # `crates/wolf-gnome/tests/smoke_headless/restore.rs`
 
-Last verified at commit `cc9c7daaaa226139ecbabc36df92df9cefe63016`.
+Last verified at commit `85345f08cccfe62ec543e1663b284ec79fa5e749`.
 
 ## Relaunch smoke exit codes
 
 The relaunch smokes run two sequential app launches inside one `cage`, so each holds one cage slot. Three share the codes below; the divider smoke keeps `POINTER_PREAMBLE`'s codes for the helpers it copies and carries its own table, and the three-tab smoke carries its own.
 
 - `11`: run 1's app died before it was ready for input.
-- `12`: run 1 was still alive after the quit poll budget, so the drain and close path failed.
-- `13`: run 1 exited non-zero. That implicates a panic in `Coordinator::on_window_closing` (gather, commit and blocking flush) or a `RefCell` double borrow against `window::wire_close`'s `tabs.shutdown_all()`.
+- `12`: run 1 was still alive after the `Ctrl+Shift+Q` poll budget.
+- `13`: run 1 exited non-zero after `Ctrl+Shift+Q`. That implicates a panic in `Coordinator::quit` (capture, commit and blocking flush) or in a window's close, such as a `RefCell` double borrow against `window::wire_close`'s `tabs.shutdown_all()`.
 - `14`: run 2's app died before it was ready for input.
 - `15`: the Neovim readback file never appeared in run 2.
 - `16`: run 1 wrote no `wolf.sqlite` (the single-pane and two-window smokes).
 - `21` to `31`: the two-window smoke's own, in `TWOWIN_SCENARIO`'s table.
+
+`12` and `13` remain only for the two-window and three-window smokes, which quit with the chord. The pane-layout, single-pane, three-tab, divider and stale-state smokes end each run with the prelude's `quit_app`, whose `241` and `242` replace their still-alive and non-zero codes, and whose stderr label names the run.
 
 The three-window smoke runs one launch, so its `11`, `12`, `13` and `16` are run 1's codes above, with `12` and `13` for the `Ctrl+Shift+Q` quit. Its own `21` is a count other than three live `nvim` children once the app is ready, and `wait_ready`'s `40` covers a chain of presents that stalls, since readiness waits for every launch window to paint.
 

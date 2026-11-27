@@ -1244,16 +1244,14 @@ const ST_RESTORE_SEARCH_SETTLE: &str = "2.0";
 /// | code | meaning |
 /// | --- | --- |
 /// | `11` | the app died before it was ready for input |
-/// | `12` | the app was still alive after `:qa` |
-/// | `13` | the app exited non-zero |
 /// | `16` | no `wolf.sqlite` to freeze at M or at the quit |
 /// | `40` | the app never reported ready |
+///
+/// The prelude's `quit_app` ends the run, with its own 241 and 242.
 const ST_RESTORE_SCENARIO: &str = r#"
 set -eu
 
-WAIT_INTERVAL=0.2
 SETTLE=1.0
-QUIT_TRIES=75
 
 cleanup() {
     set +e
@@ -1278,7 +1276,7 @@ if ! freeze_state "$STATE_SRC" "$STATE_M"; then
     exit 16
 fi
 
-# --- Q: the field's text replaced, never run, then :qa --------------------------------------
+# --- Q: the field's text replaced, never run, then the quit --------------------------------
 wtype -M ctrl -M shift -k f -m shift -m ctrl
 sleep "$SETTLE"
 wtype -k End
@@ -1291,25 +1289,7 @@ wtype -- "$ST_REPLACEMENT"
 sleep "$SETTLE"
 wtype -k Escape
 sleep "$SETTLE"
-wtype -- ":qa"
-wtype -k Return
-
-tries=0
-while kill -0 "$app_pid" 2>/dev/null; do
-    tries=$((tries + 1))
-    if [ "$tries" -ge "$QUIT_TRIES" ]; then
-        echo "wolf-gnome restored search smoke: the app (pid $app_pid) is still alive after :qa." >&2
-        exit 12
-    fi
-    sleep "$WAIT_INTERVAL"
-done
-rc=0
-wait "$app_pid" || rc=$?
-if [ "$rc" -ne 0 ]; then
-    echo "wolf-gnome restored search smoke: the app (pid $app_pid) exited $rc, not 0." >&2
-    exit 13
-fi
-app_pid=
+quit_app "wolf-gnome restored search smoke"
 
 if ! freeze_state "$STATE_SRC" "$STATE_Q"; then
     echo "wolf-gnome restored search smoke: no wolf.sqlite in $STATE_SRC after the quit." >&2
@@ -1328,8 +1308,8 @@ exit 0
 /// The fixtures are the case smoke's two `.txt` files, so only the case and all-files toggles
 /// decide what is found: with all files off neither is searched, and with case off both are.
 /// After the launch the sidebar band is captured and M frozen. Ctrl+Shift+F, the field's text
-/// replaced with [`ST_RESTORE_REPLACEMENT`] and no Enter, Escape and `:qa` follow, and Q is
-/// frozen.
+/// replaced with [`ST_RESTORE_REPLACEMENT`] and no Enter, Escape and the prelude's `quit_app`
+/// follow, and Q is frozen.
 ///
 /// ## Assertions
 ///
@@ -1409,8 +1389,8 @@ fn a_restored_search_sidebar_runs_its_query_under_cage() {
         status.success(),
         "{SMOKE}: the cage scenario exited unsuccessfully ({status}). Exit 11: the app died \
          before it was ready, as a panic in the sidebar's restore would. Exit 40: it never \
-         reported ready. Exit 12: the app outlived `:qa`, so the keys after the field's Escape \
-         reached no Neovim. Exit 13: it exited non-zero. Exit 16: no wolf.sqlite to freeze."
+         reported ready. Exit 16: no wolf.sqlite to freeze. {QUIT_APP_EXITS} A 241 here most \
+         likely means the keys after the field's Escape reached no Neovim."
     );
 
     assert_band_reads(

@@ -97,7 +97,8 @@ const RESTORE_READBACK_EXPECTED: &str = "rleft.md rmid.md rright.md";
 /// `VSPLIT_SCENARIO` / `FOCUS_SCENARIO` use:
 /// `<C-w>v` (new pane RIGHT, focused) → `:e rright.md` → `<C-w>h` (focus back
 /// LEFT) → `<C-w>s` (new pane BELOW the left one, focused) → `:e rmid.md`. It then
-/// types `:qa`, POLLS for the process to go, and REAPS it to check the status.
+/// ends with the prelude's `quit_app`, which polls for the process to go and reaps it
+/// to check the status.
 ///
 /// **Run 2** launches the SAME binary in the SAME working directory with the SAME
 /// `WOLF_STATE_DIR` (both inherited from `cage_command`), waits until it is ready for
@@ -112,9 +113,7 @@ set -eu
 # SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
-# How many WAIT_INTERVAL polls to allow for run 1 to EXIT after :qa, and for the
-# run-2 readback file to appear.
-QUIT_TRIES=75
+# How many WAIT_INTERVAL polls to allow for the run-2 readback file to appear.
 FILE_TRIES=100
 
 # Teardown, installed BEFORE anything starts so every `exit NN` below runs it.
@@ -185,44 +184,9 @@ wtype -- ":e $RESTORE_FILE_MID"
 wtype -k Return
 sleep "$SETTLE"
 
-# Quit the whole application. `Coordinator::on_window_closing` is the FIRST statement
-# in the close-request handler -- while the core and the panes are still alive -- and
-# it gathers this window's tabs, commits the window state and blocks on
-# `AppStateStore::flush`, so wolf.sqlite holds it before the process goes.
-wtype -- ":qa"
-wtype -k Return
-
-# POLL (never sleep-and-hope) for run 1 to go away, then REAP it and check its
-# EXIT STATUS. `wait` can still report it: the shell retains a background child's
-# status until a `wait` asks for it.
-tries=0
-gone=0
-while [ "$tries" -lt "$QUIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        gone=1
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-if [ "$gone" -ne 1 ]; then
-    echo "wolf-gnome relaunch smoke: run 1 (pid $app_pid) still alive after :qa." >&2
-    echo "  The drained close_tab command never reached window.close()." >&2
-    exit 12
-fi
-# `set -e` would abort before the status could be reported, so collect it through
-# `||` (which is exempt from `set -e`).
-rc=0
-wait "$app_pid" || rc=$?
-if [ "$rc" -ne 0 ]; then
-    echo "wolf-gnome relaunch smoke: run 1 (pid $app_pid) exited $rc, not 0." >&2
-    echo "  It went away, but NOT cleanly. That implicates the close path:" >&2
-    echo "  Coordinator::on_window_closing either panicked, or it holds a core.borrow()" >&2
-    echo "  across wire_close's core.borrow_mut().take() (a RefCell double-borrow), or" >&2
-    echo "  AppStateStore::flush blocked past its timeout." >&2
-    exit 13
-fi
-app_pid=
+# Quit the whole application. `Coordinator::quit` captures and commits this window and
+# blocks on `AppStateStore::flush`, so wolf.sqlite holds it before the process goes.
+quit_app "wolf-gnome relaunch smoke run 1"
 
 # =========================================================================
 # RUN 2 -- relaunch in the SAME cwd with the SAME state dir, and read back.
@@ -303,7 +267,6 @@ set -eu
 # SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
-QUIT_TRIES=75
 FILE_TRIES=100
 
 cleanup() {
@@ -342,33 +305,7 @@ wtype -- ":e $SOLO_FILE"
 wtype -k Return
 sleep "$SETTLE"
 
-wtype -- ":qa"
-wtype -k Return
-
-tries=0
-gone=0
-while [ "$tries" -lt "$QUIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        gone=1
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-if [ "$gone" -ne 1 ]; then
-    echo "wolf-gnome single-pane smoke: run 1 (pid $app_pid) still alive after :qa." >&2
-    exit 12
-fi
-rc=0
-wait "$app_pid" || rc=$?
-if [ "$rc" -ne 0 ]; then
-    echo "wolf-gnome single-pane smoke: run 1 (pid $app_pid) exited $rc, not 0." >&2
-    echo "  It went away, but NOT cleanly -- suspect Coordinator::on_window_closing" >&2
-    echo "  panicking or holding a core.borrow() across wire_close's" >&2
-    echo "  core.borrow_mut().take()." >&2
-    exit 13
-fi
-app_pid=
+quit_app "wolf-gnome single-pane smoke run 1"
 
 # --- Freeze RUN 1'S SAVE before run 2 can write over it --------------------
 #
@@ -468,11 +405,7 @@ pub(crate) const TABS_RESTORE_READBACK_NAME: &str = "tabs_run2.txt";
 /// | code | meaning |
 /// | --- | --- |
 /// | `11` | run 1's app died before it was ready for input |
-/// | `12` | run 1 was still alive after `:WolfCloseWindow` |
-/// | `13` | run 1 exited NON-ZERO — it went away, but not cleanly |
 /// | `14` | run 2's app died before it was ready for input |
-/// | `16` | run 2 was still alive after `:WolfCloseWindow` |
-/// | `17` | run 2 exited NON-ZERO |
 /// | `21` | run 1 did not reach THREE live Neovims, so Ctrl+Shift+T failed and nothing below is about persistence |
 /// | `22` | run 1 wrote no `wolf.sqlite` at all |
 /// | `23` | run 2 wrote no `wolf.sqlite` at all |
@@ -481,6 +414,9 @@ pub(crate) const TABS_RESTORE_READBACK_NAME: &str = "tabs_run2.txt";
 /// **A map short of three rows is deliberately not an exit code.** The map is re-read
 /// until it holds three rows or `READBACK_TRIES` is spent, and a map that settled
 /// short is left standing for the Rust side's assertion 2 to name, row by row.
+///
+/// The prelude's `quit_app` ends each run, with its own 241 and 242; every tab is unmodified,
+/// so the quit's unsaved check passes whichever tab the keys reach.
 const RESTORE_TABS_SCENARIO: &str = r#"
 set -eu
 
@@ -488,7 +424,6 @@ set -eu
 # `wait_nvim_count`'s budget, since that function reads it.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
-QUIT_TRIES=75
 FILE_TRIES=100
 
 # How long to wait after each Ctrl+Shift+T. The adw::TabBar ANIMATES its height in
@@ -572,37 +507,10 @@ sleep "$SETTLE"
 # which the chord never opened a tab.
 wait_nvim_count 3 21 "after two Ctrl+Shift+T chords in run 1"
 
-# Quit. `Coordinator::on_window_closing` gathers this window -- once per TAB, each
-# from its own Neovim -- commits the window state and blocks on
-# `AppStateStore::flush`, so wolf.sqlite holds it before the process goes. Close Window,
-# since `:qa` closes only the selected tab of three.
-wtype -- ":WolfCloseWindow"
-wtype -k Return
-
-tries=0
-gone=0
-while [ "$tries" -lt "$QUIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        gone=1
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-if [ "$gone" -ne 1 ]; then
-    echo "wolf-gnome three-tab smoke: run 1 (pid $app_pid) still alive after :WolfCloseWindow." >&2
-    exit 12
-fi
-rc=0
-wait "$app_pid" || rc=$?
-if [ "$rc" -ne 0 ]; then
-    echo "wolf-gnome three-tab smoke: run 1 (pid $app_pid) exited $rc, not 0." >&2
-    echo "  It went away, but NOT cleanly. Three tabs close in sequence here, each shutting" >&2
-    echo "  its own Neovim down, so a borrow discipline that held at one tab is the first" >&2
-    echo "  suspect: the close path gathers every tab while its core is alive." >&2
-    exit 13
-fi
-app_pid=
+# Quit. `Coordinator::quit` gathers this window -- once per TAB, each from its own
+# Neovim -- commits the window state and blocks on `AppStateStore::flush`, so wolf.sqlite
+# holds it before the process goes.
+quit_app "wolf-gnome three-tab smoke run 1"
 
 # --- Freeze RUN 1'S SAVE before run 2 can write over it --------------------
 if ! freeze_state "$TABS_STATE_SRC" "$TABS_STATE_COPY_1"; then
@@ -643,34 +551,8 @@ echo "wolf-gnome three-tab smoke: run 2 swap map has $rows row(s) after $rb read
 cat "$TABS_READBACK" >&2
 
 # NOTHING selects another tab: no chord, no click. Tabs 1 and 2 keep whatever the
-# restore gave them, which is the whole subject of the third assertion. Close Window, since
-# `:qa` closes only the selected tab.
-wtype -- ":WolfCloseWindow"
-wtype -k Return
-
-tries=0
-gone=0
-while [ "$tries" -lt "$QUIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        gone=1
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-if [ "$gone" -ne 1 ]; then
-    echo "wolf-gnome three-tab smoke: run 2 (pid $app_pid) still alive after :WolfCloseWindow." >&2
-    exit 16
-fi
-rc=0
-wait "$app_pid" || rc=$?
-if [ "$rc" -ne 0 ]; then
-    echo "wolf-gnome three-tab smoke: run 2 (pid $app_pid) exited $rc, not 0." >&2
-    echo "  It went away, but NOT cleanly. Run 2 is the one that RESTORED tabs, so suspect" >&2
-    echo "  window::build opening the planned tabs, each starting a core of its own." >&2
-    exit 17
-fi
-app_pid=
+# restore gave them, which is the whole subject of the third assertion.
+quit_app "wolf-gnome three-tab smoke run 2"
 
 if ! freeze_state "$TABS_STATE_SRC" "$TABS_STATE_COPY_2"; then
     echo "wolf-gnome three-tab smoke: run 2 left no wolf.sqlite in $TABS_STATE_SRC." >&2
@@ -822,12 +704,12 @@ pub(crate) const DIVIDER_W2_NAME: &str = "dv_widths_two.txt";
 /// | `13` | a helper command was never acked within budget |
 /// | `14` | a Neovim readback file never appeared |
 /// | `15` | the helper died mid-scenario |
-/// | `16` | run 1 was still alive after the `:qa` poll budget |
-/// | `17` | run 1 exited NON-ZERO — it went away, but not cleanly |
 /// | `18` | run 1 wrote no `wolf.sqlite` at all |
 /// | `19` | run 2's app died before it was ready for input |
 /// | `21` | the bisection seeds did not straddle the divider |
 /// | `22` | run 1's park did not leave `dvleft.md` focused with its cursor at column 1 |
+///
+/// The prelude's `quit_app` ends run 1, with its own 241 and 242.
 const DIVIDER_RELAUNCH_SCENARIO: &str = r#"
 set -eu
 
@@ -837,7 +719,6 @@ SETTLE=1.0
 ACK_TRIES=75
 FILE_TRIES=100
 POINTER_STEP=0.2
-QUIT_TRIES=75
 
 # Teardown, installed BEFORE anything is started. The HELPER dies first: it is the
 # only process that can still inject, so killing it first means neither run's
@@ -1114,36 +995,9 @@ if [ "$parked" != "$DIVIDER_FILE_LEFT:1" ]; then
     exit 22
 fi
 
-# Quit the whole application. `Coordinator::on_window_closing` is the FIRST statement
-# in the close-request handler and blocks on `AppStateStore::flush`, so wolf.sqlite
-# holds the window state before the process goes.
-wtype -- ":qa"
-wtype -k Return
-
-tries=0
-gone=0
-while [ "$tries" -lt "$QUIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        gone=1
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-if [ "$gone" -ne 1 ]; then
-    echo "wolf-gnome divider relaunch smoke: run 1 (pid $app_pid) still alive after :qa." >&2
-    exit 16
-fi
-rc=0
-wait "$app_pid" || rc=$?
-if [ "$rc" -ne 0 ]; then
-    echo "wolf-gnome divider relaunch smoke: run 1 (pid $app_pid) exited $rc, not 0." >&2
-    echo "  It went away, but NOT cleanly -- suspect Coordinator::on_window_closing" >&2
-    echo "  panicking or holding a core.borrow() across wire_close's" >&2
-    echo "  core.borrow_mut().take()." >&2
-    exit 17
-fi
-app_pid=
+# Quit the whole application. `Coordinator::quit` commits the window state and blocks on
+# `AppStateStore::flush`, so wolf.sqlite holds it before the process goes.
+quit_app "wolf-gnome divider relaunch smoke run 1"
 
 # --- Freeze RUN 1'S SAVE before run 2 can write over it --------------------
 if ! freeze_state "$DIV_STATE_SRC" "$DIV_STATE_COPY"; then
@@ -1249,8 +1103,8 @@ pub(crate) const TWOWIN_READBACK_R2_NAME: &str = "wtwo_run2.txt";
 /// Structurally [`RESTORE_TABS_SCENARIO`] — two launches, a poll-and-reap of each,
 /// a frozen state database after each — with three differences that are the
 /// subject: a second window is opened from the palette inside run 1, the quit is
-/// the `Ctrl+Shift+Q` chord rather than `:qa`, and the window focused last in run 1
-/// is the one opened second, so the saved stacking order differs from the order the
+/// the `Ctrl+Shift+Q` chord rather than a typed command, and the window focused last in
+/// run 1 is the one opened second, so the saved stacking order differs from the order the
 /// windows were opened in.
 ///
 /// Run 1 builds window A with two tabs, the second split and zoomed, then opens
@@ -1262,11 +1116,11 @@ pub(crate) const TWOWIN_READBACK_R2_NAME: &str = "wtwo_run2.txt";
 /// ## Ctrl+Shift+Q is not a stylistic choice
 ///
 /// It is the ONLY exercise `app.quit` gets anywhere in this suite. Every other
-/// quit-shaped smoke here (`:q`, `:qa`, Ctrl+Shift+W) reaches Neovim or the
-/// `win.close-window` action, so the `app.`/`win.` install split — the coordinator
-/// installing the two `app.` rows exactly once per process while every window's
-/// shell installs only `win.` rows — and `Coordinator::quit`'s ordering are
-/// otherwise executed by nothing. Delete the body of
+/// quit-shaped smoke here (`:q`, `:qa`, the prelude's `quit_app`, Ctrl+Shift+W) reaches
+/// Neovim or the `win.close-window` action, so the `app.`/`win.` install split — the
+/// coordinator installing the two `app.` rows exactly once per process while every
+/// window's shell installs only `win.` rows — and `Coordinator::quit`'s ordering across
+/// two windows are otherwise executed by nothing. Delete the body of
 /// `Coordinator::install_app_actions` and the chord finds no action to activate,
 /// falls through to Neovim as a plain `<C-Q>`, the app stays alive, and the exit-12
 /// guard below fires.
@@ -1344,7 +1198,7 @@ nvim_ex() {
 # then REAPS it and checks its EXIT STATUS: a process that vanished because the GTK
 # main loop panicked is just as gone as one that shut down cleanly. $1 is the exit
 # code for "still alive", $2 for "exited non-zero", $3 the run's label.
-quit_app() {
+quit_by_chord() {
     wtype -M ctrl -M shift -k q -m shift -m ctrl
     tries=0
     gone=0
@@ -1509,7 +1363,7 @@ wait_nvim_count 4 28 "after Ctrl+Shift+T in window B"
 # shutting_down, refreshes EVERY window's tabs while every core and every pane is
 # still alive, commits the window state, blocks on the flush, and only then closes
 # the windows -- so wolf.sqlite holds both windows before the process goes.
-quit_app 12 13 "run 1"
+quit_by_chord 12 13 "run 1"
 
 # --- Step 7: freeze run 1's save before run 2 can write over it --------------
 if ! freeze_state "$TWOWIN_STATE_SRC" "$TWOWIN_STATE_COPY"; then
@@ -1541,7 +1395,7 @@ wtype -k Return
 wait_file "$TWOWIN_R2_READBACK" || exit 15
 
 # --- Step 10: quit again, and freeze run 2's save ----------------------------
-quit_app 29 30 "run 2"
+quit_by_chord 29 30 "run 2"
 if ! freeze_state "$TWOWIN_STATE_SRC" "$TWOWIN_STATE_COPY_2"; then
     echo "wolf-gnome two-window smoke: run 2 left no wolf.sqlite in $TWOWIN_STATE_SRC." >&2
     exit 31
@@ -1752,11 +1606,7 @@ fn pane_layout_survives_relaunch_under_cage() {
     assert!(
         status.success(),
         "{SMOKE}: the cage relaunch scenario exited unsuccessfully ({status}). Exit 11: run 1's \
-         app died before it was ready for input. Exit 12: run 1 was still alive after `:qa` — the \
-         drained close_tab, which closes the one-tab window, never reached window.close(). \
-         Exit 13: run 1 exited NON-ZERO, i.e. it went away but not cleanly, which implicates a \
-         panic in `Coordinator::on_window_closing`, or a core.borrow() held across `wire_close`'s \
-         core.borrow_mut().take(). \
+         app died before it was ready for input. {QUIT_APP_EXITS} \
          Exit 14: run 2's app died before it was ready for input. Exit 15: the Neovim readback never \
          appeared in run 2. Screenshot expected at {}; readback at {}.",
         out_png.display(),
@@ -1980,10 +1830,7 @@ fn single_pane_file_survives_relaunch_under_cage() {
     assert!(
         status.success(),
         "{SMOKE}: the cage single-pane relaunch scenario exited unsuccessfully ({status}). Exit \
-         11: run 1's app died before it was ready for input. Exit 12: run 1 was still alive after \
-         `:qa`. Exit 13: run 1 exited NON-ZERO — it went away but not cleanly, which implicates a \
-         panic in `Coordinator::on_window_closing` or a core.borrow() held across `wire_close`'s \
-         core.borrow_mut().take(). Exit 14: run 2's app died before it was ready for input. Exit 15: \
+         11: run 1's app died before it was ready for input. {QUIT_APP_EXITS} Exit 14: run 2's app died before it was ready for input. Exit 15: \
          the Neovim readback never appeared in run 2. Exit 16: run 1 wrote NO wolf.sqlite at all \
          in {} — not the arity guard (which still writes the window state, with a null root) but \
          something upstream of it. Screenshot expected at {}.",
@@ -2455,13 +2302,10 @@ fn three_tabs_survive_a_relaunch_under_cage() {
         "{SMOKE}: the cage three-tab relaunch scenario exited unsuccessfully ({status}). Read the \
          exit code FIRST; each names a different half of the claim.\n\
          Exit 11: run 1's app died before it was ready for input — a LAUNCH failure.\n\
-         Exit 12: run 1 was still alive after `:WolfCloseWindow`.\n\
-         Exit 13: run 1 exited NON-ZERO — it went away, but not cleanly. Three tabs close in \
-         sequence here, so a borrow discipline that held at one tab is the first suspect.\n\
          Exit 14: run 2's app died before it was ready for input.\n\
-         Exit 16: run 2 was still alive after `:WolfCloseWindow`.\n\
-         Exit 17: run 2 exited NON-ZERO — it RESTORED tabs, so suspect `window::build` opening \
-         the planned tabs.\n\
+         {QUIT_APP_EXITS} The label on stderr names the run. Three tabs close in sequence here, \
+         so for a 242 a borrow discipline that held at one tab is the first suspect; in run 2, \
+         which RESTORED tabs, suspect `window::build` opening the planned tabs.\n\
          Exit 21: run 1 never reached three live Neovims, so Ctrl+Shift+T failed and nothing \
          here is about persistence. That is deliberately separated from the Rust side's \
          assertions, because a one-tab window state and a chord that never fired look identical \
@@ -2601,11 +2445,11 @@ fn window_summary(window: &Window) -> WindowSummary {
 ///
 /// ## Step 6 is `app.quit`'s ONLY coverage in this suite
 ///
-/// Every other quit-shaped smoke here goes through Neovim (`:q`, `:qa`) or through
-/// `win.close-window`, so the `app.`/`win.` install split — the coordinator
-/// installing the two `app.` rows exactly once per process while every window's
-/// shell installs only `win.` rows — and `Coordinator::quit`'s ordering are executed
-/// by nothing else. Its falsifier is named in the table below.
+/// Every other quit-shaped smoke here goes through Neovim (`:q`, `:qa`, the prelude's
+/// `quit_app`) or through `win.close-window`, so the `app.`/`win.` install split — the
+/// coordinator installing the two `app.` rows exactly once per process while every
+/// window's shell installs only `win.` rows — and `Coordinator::quit`'s ordering across
+/// two windows are executed by nothing else. Its falsifier is named in the table below.
 ///
 /// ## What it asserts
 ///
@@ -2961,17 +2805,16 @@ const STALE_STATE_NAMES: [&str; 2] = ["state.json", "state.json.tmp"];
 /// | code | meaning |
 /// | --- | --- |
 /// | `11` | the app died before it was ready for input |
-/// | `12` | the app was still alive after `:qa` |
-/// | `13` | the app exited non-zero |
 /// | `15` | the Neovim readback never appeared |
 /// | `16` | the app left no `wolf.sqlite` |
 /// | `21` | `state.json` still exists once the app is ready |
 /// | `22` | `state.json.tmp` still exists once the app is ready |
+///
+/// The prelude's `quit_app` ends the run, with its own 241 and 242.
 const STALE_STATE_SCENARIO: &str = r#"
 set -eu
 
 WAIT_INTERVAL=0.2
-QUIT_TRIES=75
 FILE_TRIES=100
 
 cleanup() {
@@ -3018,29 +2861,7 @@ wtype -- ":call writefile([printf('%d', winnr('\$')), fnamemodify(bufname('%'), 
 wtype -k Return
 wait_file "$STALE_READBACK" || exit 15
 
-wtype -- ":qa"
-wtype -k Return
-tries=0
-gone=0
-while [ "$tries" -lt "$QUIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        gone=1
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-if [ "$gone" -ne 1 ]; then
-    echo "wolf-gnome stale-state smoke: the app (pid $app_pid) is still alive after :qa." >&2
-    exit 12
-fi
-rc=0
-wait "$app_pid" || rc=$?
-if [ "$rc" -ne 0 ]; then
-    echo "wolf-gnome stale-state smoke: the app (pid $app_pid) exited $rc, not 0." >&2
-    exit 13
-fi
-app_pid=
+quit_app "wolf-gnome stale-state smoke"
 
 if ! freeze_state "$STALE_STATE_DIR" "$STALE_STATE_COPY"; then
     echo "wolf-gnome stale-state smoke: the app left no wolf.sqlite in $STALE_STATE_DIR." >&2
@@ -3131,9 +2952,9 @@ fn a_stale_state_json_is_deleted_at_launch_under_cage() {
          state.json was still in {} once the app was ready, so the store's open did not delete \
          it. Exit 22: state.json.tmp was, while state.json was not, so the open deletes one and \
          not the other. Exit 11: the app died before it was ready, which a launch that tried to \
-         read the planted file and failed would also do. Exit 12 or 13: the quit hung or was \
-         not clean. Exit 15: the Neovim readback never appeared. Exit 16: the app left no \
-         wolf.sqlite. Exit 40: the app never reported ready.",
+         read the planted file and failed would also do. Exit 15: the Neovim readback never \
+         appeared. Exit 16: the app left no wolf.sqlite. Exit 40: the app never reported ready. \
+         {QUIT_APP_EXITS}",
         smoke_state.display()
     );
 
@@ -3655,9 +3476,7 @@ fn dragged_divider_weights_survive_relaunch_under_cage() {
          Exit 14: a readback file the captive Neovim was told to write never appeared — a KEYBOARD \
          failure, not a pointer one.\n\
          Exit 15: the helper died mid-scenario.\n\
-         Exit 16: run 1 was still alive after `:qa`.\n\
-         Exit 17: run 1 exited NON-ZERO — it went away, but not cleanly, which implicates \
-         `Coordinator::on_window_closing`.\n\
+         {QUIT_APP_EXITS}\n\
          Exit 18: run 1 wrote NO wolf.sqlite at all in {}, which is upstream of anything about \
          weights.\n\
          Exit 19: run 2's app died before it was ready for input.\n\

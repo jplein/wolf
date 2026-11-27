@@ -1504,20 +1504,19 @@ const RELAUNCH_ZOOMED_FILE: &str = "zb.md";
 /// | code | meaning |
 /// | --- | --- |
 /// | `11` | run 1's app died before it was ready for input |
-/// | `12` | run 1 was still alive after `:qa` |
-/// | `13` | run 1 exited non-zero |
 /// | `14` | run 2's app died before it was ready for input |
 /// | `15` | a run-2 readback never appeared: the keys reached no Neovim |
 /// | `16` | run 1 wrote no `wolf.sqlite` |
 /// | `18` | run 1's L1 readback never appeared, after `:e` |
 /// | `19` | run 1's Z1 readback never appeared, after `:WolfZoomPane` |
 /// | `40` | an app never reported ready: `wait_ready`'s timeout in the readiness prelude |
+///
+/// The prelude's `quit_app` ends run 1, with its own 241 and 242.
 const ZOOM_RELAUNCH_SCENARIO: &str = r#"
 set -eu
 
 WAIT_INTERVAL=0.2
 SETTLE=1.0
-QUIT_TRIES=75
 FILE_TRIES=100
 
 cleanup() {
@@ -1570,30 +1569,7 @@ nvim_ex "e $RELAUNCH_ZOOMED_FILE"
 nvim_ex "WolfZoomPane"
 nvim_size "$READ_Z1" 19
 
-wtype -- ":qa"
-wtype -k Return
-
-tries=0
-gone=0
-while [ "$tries" -lt "$QUIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        gone=1
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-if [ "$gone" -ne 1 ]; then
-    echo "wolf-gnome zoom relaunch smoke: run 1 (pid $app_pid) still alive after :qa." >&2
-    exit 12
-fi
-rc=0
-wait "$app_pid" || rc=$?
-if [ "$rc" -ne 0 ]; then
-    echo "wolf-gnome zoom relaunch smoke: run 1 (pid $app_pid) exited $rc, not 0." >&2
-    exit 13
-fi
-app_pid=
+quit_app "wolf-gnome zoom relaunch smoke run 1"
 
 # Run 2 saves on every render wake, so run 1's save is frozen before it starts.
 if ! freeze_state "$STATE_SRC" "$STATE_COPY"; then
@@ -1624,7 +1600,7 @@ exit 0
 /// Two launches in one cage through [`cage_command`], sharing the cwd and the state dir.
 /// Run 1 opens [`RELAUNCH_LEFT_FILE`], reads its size back as L1, splits with `<C-w>v`,
 /// opens [`RELAUNCH_ZOOMED_FILE`] in the new right pane, zooms it with `:WolfZoomPane` and
-/// reads its size back as Z1, then quits with `:qa`. The scenario copies run 1's state
+/// reads its size back as Z1, then quits with the prelude's `quit_app`. The scenario copies run 1's state
 /// database before run 2 can write over it. Run 2 waits until it is ready, then reads back its window
 /// count, the current window's size and buffer, and the other window's width.
 ///
@@ -1690,9 +1666,8 @@ fn a_zoomed_pane_survives_relaunch_under_cage() {
     assert!(
         status.success(),
         "{SMOKE}: the cage zoom relaunch scenario exited unsuccessfully ({status}). Exit 11: run \
-         1's app died before it was ready. Exit 12: run 1 was still alive after `:qa`. Exit 13: \
-         run 1 exited non-zero, which implicates the close path's gather of a zoomed tab. Exit \
-         14: run 2's app died before it was ready, as a panic in the restore's re-zoom would. \
+         1's app died before it was ready. {QUIT_APP_EXITS} In run 1 a 242 implicates \
+         `Coordinator::quit`'s gather of a zoomed tab. Exit 14: run 2's app died before it was ready, as a panic in the restore's re-zoom would. \
          Exit 15: a run-2 readback never appeared, so the keys reached no Neovim: the focused \
          widget may be a hidden pane's. Exit 16: run 1 wrote no wolf.sqlite in {}. Exit 18 or \
          19: a run-1 readback never appeared, after `:e` or after `:WolfZoomPane`. Exit 40: an \

@@ -2258,15 +2258,13 @@ pub(crate) const TABCRASH_READ_NAME: &str = "cr_after.txt";
 /// tab, which a `:cd` makes a folder tab on the project before it opens [`TABCRASH_FILE_B`].
 /// With tab 2 selected, tab 1's Neovim is SIGKILLed. A third pid
 /// must appear, tab 2's must stay live and the app with it; then tab 2's buffer is read back,
-/// `:WolfCloseWindow` saves the session and the state database is frozen.
+/// the prelude's `quit_app` saves the session and the state database is frozen.
 ///
 /// ## Exit codes
 ///
 /// | code | meaning |
 /// | --- | --- |
 /// | `11` | the app died before it was ready for input |
-/// | `12` | the app was still alive after `:WolfCloseWindow` |
-/// | `13` | the app exited non-zero after `:WolfCloseWindow` |
 /// | `14` | the readback never appeared |
 /// | `16` | THE APP DIED after the kill (see [`FIND_NVIM_PID_HELPER`]) |
 /// | `17` | tab 1's Neovim could not be identified as the one live `nvim` child |
@@ -2276,13 +2274,14 @@ pub(crate) const TABCRASH_READ_NAME: &str = "cr_after.txt";
 /// | `23` | no new Neovim appeared after the kill: the background tab was not restarted |
 /// | `24` | tab 2's Neovim died with tab 1's, or was closed by its restart |
 /// | `25` | the app wrote no `wolf.sqlite` |
+///
+/// The prelude's `quit_app` ends the run, with its own 241 and 242.
 const TABCRASH_SCENARIO: &str = r#"
 set -eu
 
 # SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
-QUIT_TRIES=75
 FILE_TRIES=100
 # The adw::TabBar animates its height in over about a second; see POINTER_TABS_BODY.
 TABS_BAR_SETTLE=2.0
@@ -2408,30 +2407,7 @@ wtype -- ":call writefile([fnamemodify(bufname('%'), ':t')], '$TABCRASH_READ')"
 wtype -k Return
 wait_file "$TABCRASH_READ" || exit 14
 
-# Close Window, since `:qa` closes only the selected tab of two.
-wtype -- ":WolfCloseWindow"
-wtype -k Return
-tries=0
-gone=0
-while [ "$tries" -lt "$QUIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        gone=1
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-if [ "$gone" -ne 1 ]; then
-    echo "wolf-gnome per-tab crash smoke: the app (pid $app_pid) is still alive after :WolfCloseWindow." >&2
-    exit 12
-fi
-rc=0
-wait "$app_pid" || rc=$?
-app_pid=
-if [ "$rc" -ne 0 ]; then
-    echo "wolf-gnome per-tab crash smoke: the app exited $rc after :WolfCloseWindow, not 0." >&2
-    exit 13
-fi
+quit_app "wolf-gnome per-tab crash smoke"
 
 if ! freeze_state "$TABCRASH_STATE_SRC" "$TABCRASH_STATE_COPY"; then
     echo "wolf-gnome per-tab crash smoke: the app wrote no wolf.sqlite in $TABCRASH_STATE_SRC." >&2
@@ -2497,7 +2473,7 @@ fn one_tabs_neovim_crash_restarts_only_that_tab_under_cage() {
         "{SMOKE}: the cage per-tab crash scenario exited unsuccessfully ({status}). Read the exit \
          code first; the scenario's stderr names the pids it saw.\n\
          Exit 11: the app died before it was ready for input.\n\
-         Exit 12 / 13: the app did not quit cleanly on `:WolfCloseWindow`.\n\
+         {QUIT_APP_EXITS}\n\
          Exit 14: the readback never appeared: keys did not reach the selected tab's Neovim.\n\
          Exit 16: THE APP DIED after one tab's Neovim was killed; a crash must cost only its own \
          tab.\n\

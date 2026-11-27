@@ -59,15 +59,14 @@ const CONFIG_GRID_MIN_COLUMN_GAP: i64 = 5;
 /// layout width, which is blind to it.
 ///
 /// Exit codes, each naming one cause: `11` run 1's app died before it was
-/// ready for input; `12` run 1 was still alive after `:qa!`; `13` run 1 exited non-zero;
-/// `14` run 1's width readback never appeared; `15`–`18` the same four for run 2.
+/// ready for input; `14` run 1's width readback never appeared; `15` and `18` the same
+/// two for run 2. The prelude's `quit_app` ends each run, with its own 241 and 242.
 const CONFIG_GRID_SCENARIO: &str = r#"
 set -eu
 
 # SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
-QUIT_TRIES=75
 FILE_TRIES=100
 
 cleanup() {
@@ -93,36 +92,6 @@ wait_file() {
     return 1
 }
 
-# $1 is the exit code for "still alive after :qa!", $2 for "exited non-zero".
-quit_app() {
-    wtype -- ":qa!"
-    wtype -k Return
-
-    tries=0
-    gone=0
-    while [ "$tries" -lt "$QUIT_TRIES" ]; do
-        if ! kill -0 "$app_pid" 2>/dev/null; then
-            gone=1
-            break
-        fi
-        tries=$((tries + 1))
-        sleep "$WAIT_INTERVAL"
-    done
-    if [ "$gone" -ne 1 ]; then
-        echo "wolf-gnome config-grid smoke: app (pid $app_pid) still alive after :qa!." >&2
-        exit "$1"
-    fi
-    # `set -e` would abort before the status could be reported, so collect it
-    # through `||`, which is exempt from it.
-    rc=0
-    wait "$app_pid" || rc=$?
-    if [ "$rc" -ne 0 ]; then
-        echo "wolf-gnome config-grid smoke: app (pid $app_pid) exited $rc, not 0." >&2
-        exit "$2"
-    fi
-    app_pid=
-}
-
 # =========================================================================
 # RUN 1 -- the SMALL configured font size.
 #
@@ -144,7 +113,7 @@ wtype -- ":call writefile([printf('%d', winwidth(0))], '$WIDTH_SMALL')"
 wtype -k Return
 wait_file "$WIDTH_SMALL" || exit 14
 
-quit_app 12 13
+quit_app "wolf-gnome config-grid smoke run 1"
 
 # =========================================================================
 # RUN 2 -- the LARGE configured font size, same cwd, same window.
@@ -160,7 +129,7 @@ wtype -- ":call writefile([printf('%d', winwidth(0))], '$WIDTH_LARGE')"
 wtype -k Return
 wait_file "$WIDTH_LARGE" || exit 18
 
-quit_app 16 17
+quit_app "wolf-gnome config-grid smoke run 2"
 
 exit 0
 "#;
@@ -267,10 +236,9 @@ fn config_font_size_changes_the_grid_under_cage() {
         "{SMOKE}: the cage configured-font-size scenario exited unsuccessfully ({status}). Exit \
          11: run 1's app died before it was ready for input — with WOLF_FONT_PT removed, a panic in \
          the config path (`load_config`, `resolve_font_pt`, or a non-positive size reaching \
-         `for_font`) is the first thing to look at. Exit 12: run 1 was still alive after `:qa!`. \
-         Exit 13: run 1 exited NON-ZERO — it went away, but not cleanly. Exit 14: run 1's width \
-         readback never appeared at {}. Exit 15/16/17/18: the same four for run 2, whose readback \
-         is at {}.",
+         `for_font`) is the first thing to look at. Exit 14: run 1's width readback never \
+         appeared at {}. Exit 15/18: the same two for run 2, whose readback is at {}. \
+         {QUIT_APP_EXITS}",
         width_small.display(),
         width_large.display()
     );
@@ -363,30 +331,26 @@ const APPEARANCE_LIGHT_READBACK_NAME: &str = "wolf_gnome_appearance_background_2
 /// crate's.
 ///
 /// Exit codes are PER LAUNCH, [`CONFIG_GRID_SCENARIO`]'s scheme exactly: `11` run
-/// 1's app died before it was ready for input; `12` run 1 was still alive after `:qa!`;
-/// `13` run 1 exited non-zero; `14` run 1's `&background` readback never appeared
-/// (or stayed empty); `15`–`18` the same four for run 2.
+/// 1's app died before it was ready for input; `14` run 1's `&background` readback
+/// never appeared (or stayed empty); `15` and `18` the same two for run 2. The
+/// prelude's `quit_app` ends each run, with its own 241 and 242 shared by both.
 ///
-/// Eight codes and not five, because a code shared between the launches folds two
-/// causes into one: "an app died before it was ready for input" is a different
+/// Per-launch codes, because a code shared between the launches folds two causes
+/// into one: "an app died before it was ready for input" is a different
 /// investigation depending on whether it was the launch reading a forced `dark` or
 /// the one reading a forced `light`, and the convention
 /// `crates/wolf-gnome/tests/README.md` states is about the CODE carrying the
-/// meaning rather than about the cause being recoverable by other means. `12` and
-/// `13` are separate for the reason that convention gives directly: a process that
-/// panicked in the GTK main loop and one that shut down cleanly are equally GONE,
-/// and only the status tells them apart.
+/// meaning rather than about the cause being recoverable by other means.
 ///
-/// Each of the three process-level codes additionally prints the run's LABEL on
-/// stderr, which costs nothing and makes a truncated log readable without the
-/// code table.
+/// `wait_ready` and `quit_app` additionally print the run's LABEL on stderr, which
+/// costs nothing, makes a truncated log readable without the code table, and is what
+/// tells which run a shared 241 or 242 came from.
 const APPEARANCE_SCENARIO: &str = r#"
 set -eu
 
 # SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
-QUIT_TRIES=75
 FILE_TRIES=100
 
 cleanup() {
@@ -412,37 +376,6 @@ wait_file() {
     return 1
 }
 
-# $1 is the exit code for "still alive after :qa!", $2 for "exited non-zero", and
-# $3 is the run label.
-quit_app() {
-    wtype -- ":qa!"
-    wtype -k Return
-
-    tries=0
-    gone=0
-    while [ "$tries" -lt "$QUIT_TRIES" ]; do
-        if ! kill -0 "$app_pid" 2>/dev/null; then
-            gone=1
-            break
-        fi
-        tries=$((tries + 1))
-        sleep "$WAIT_INTERVAL"
-    done
-    if [ "$gone" -ne 1 ]; then
-        echo "wolf-gnome appearance smoke: $3 app (pid $app_pid) still alive after :qa!." >&2
-        exit "$1"
-    fi
-    # `set -e` would abort before the status could be reported, so collect it
-    # through `||`, which is exempt from it.
-    rc=0
-    wait "$app_pid" || rc=$?
-    if [ "$rc" -ne 0 ]; then
-        echo "wolf-gnome appearance smoke: $3 app (pid $app_pid) exited $rc, not 0." >&2
-        exit "$2"
-    fi
-    app_pid=
-}
-
 # =========================================================================
 # RUN 1 -- appearance: dark.
 #
@@ -463,7 +396,7 @@ wtype -- ":call writefile([&background], '$BG_DARK')"
 wtype -k Return
 wait_file "$BG_DARK" || exit 14
 
-quit_app 12 13 "run 1 (appearance: dark)"
+quit_app "wolf-gnome appearance smoke run 1 (appearance: dark)"
 
 # =========================================================================
 # RUN 2 -- appearance: light, same cwd, same window.
@@ -479,7 +412,7 @@ wtype -- ":call writefile([&background], '$BG_LIGHT')"
 wtype -k Return
 wait_file "$BG_LIGHT" || exit 18
 
-quit_app 16 17 "run 2 (appearance: light)"
+quit_app "wolf-gnome appearance smoke run 2 (appearance: light)"
 
 exit 0
 "#;
@@ -648,14 +581,12 @@ fn configured_appearance_reaches_neovims_background_under_cage() {
          code names ONE cause in ONE launch. Exit 11: run 1's app (`appearance: \
          {APPEARANCE_FORCED_DARK}`) died before it was ready for input — a panic while resolving the \
          appearance is the first thing to look at, since `appearance::apply_at_launch` runs before \
-         any widget is built and takes the whole launch with it. Exit 12: run 1 was still alive \
-         after `:qa!`. Exit 13: run 1 exited NON-ZERO — it went away, but not cleanly, and that is \
-         a separate code from 12 because a panic in the GTK main loop makes a process vanish \
-         exactly as a clean shutdown does. Exit 14: run 1's `&background` readback never appeared \
-         at {}. Exit 15/16/17/18: the same four for run 2 (`appearance: \
+         any widget is built and takes the whole launch with it. Exit 14: run 1's `&background` \
+         readback never appeared at {}. Exit 15/18: the same two for run 2 (`appearance: \
          {APPEARANCE_FORCED_LIGHT}`), whose readback is at {}. A run-2 code with run 1's readback \
          already written means the front-end handled the forced-dark launch and fell over on the \
-         forced-light one, which is a much narrower finding than the code alone suggests.",
+         forced-light one, which is a much narrower finding than the code alone suggests. \
+         {QUIT_APP_EXITS} The label on stderr names the run a 241 or 242 came from.",
         bg_dark.display(),
         bg_light.display()
     );
@@ -733,7 +664,7 @@ const FULLWIDTH_FULL_READBACK_NAME: &str = "wolf_gnome_fullwidth_full.txt";
 ///
 /// Exit codes, each naming one cause: `11` the app died before it was ready for input;
 /// `12` the CAPPED readback never appeared; `13` the FULL-WIDTH readback never
-/// appeared; `14` the app was still alive after `:qa!`; `15` the app exited non-zero.
+/// appeared; the prelude's `quit_app` ends the run, with its own 241 and 242.
 /// 12 and 13 are separate on purpose — the first says the app never got as far as
 /// answering at all, the second says it answered once and then stopped, and the two
 /// have different first suspects.
@@ -751,7 +682,6 @@ SETTLE=1.0
 # resize_grid -> Neovim's flush. Every hop is a separate main-loop turn, and the
 # resize is fire-and-forget, so nothing here is observable to poll for.
 TOGGLE_SETTLE=2.0
-QUIT_TRIES=75
 FILE_TRIES=100
 
 cleanup() {
@@ -777,36 +707,6 @@ wait_file() {
     return 1
 }
 
-# $1 is the exit code for "still alive after :qa!", $2 for "exited non-zero".
-quit_app() {
-    wtype -- ":qa!"
-    wtype -k Return
-
-    tries=0
-    gone=0
-    while [ "$tries" -lt "$QUIT_TRIES" ]; do
-        if ! kill -0 "$app_pid" 2>/dev/null; then
-            gone=1
-            break
-        fi
-        tries=$((tries + 1))
-        sleep "$WAIT_INTERVAL"
-    done
-    if [ "$gone" -ne 1 ]; then
-        echo "wolf-gnome column-cap smoke: app (pid $app_pid) still alive after :qa!." >&2
-        exit "$1"
-    fi
-    # `set -e` would abort before the status could be reported, so collect it
-    # through `||`, which is exempt from it.
-    rc=0
-    wait "$app_pid" || rc=$?
-    if [ "$rc" -ne 0 ]; then
-        echo "wolf-gnome column-cap smoke: app (pid $app_pid) exited $rc, not 0." >&2
-        exit "$2"
-    fi
-    app_pid=
-}
-
 "$WOLF_BIN" &
 app_pid=$!
 wait_ready "$app_pid" 11 "wolf-gnome column-cap smoke"
@@ -829,7 +729,7 @@ wtype -- ":call writefile([printf('%d', winwidth(0))], '$WIDTH_FULL')"
 wtype -k Return
 wait_file "$WIDTH_FULL" || exit 13
 
-quit_app 14 15
+quit_app "wolf-gnome column-cap smoke"
 
 exit 0
 "#;
@@ -938,8 +838,7 @@ fn column_cap_and_full_width_toggle_change_the_grid_under_cage() {
          measurement or in `min_pane_size` is the first thing to look at. Exit 12: the CAPPED \
          readback never appeared at {}, so the app never answered at all. Exit 13: the FULL-WIDTH \
          readback never appeared at {} — it answered once and then stopped, which is what a panic \
-         on the `:WolfFullWidth` drain path looks like from out here. Exit 14: still alive after \
-         `:qa!`. Exit 15: it went away, but not cleanly.",
+         on the `:WolfFullWidth` drain path looks like from out here. {QUIT_APP_EXITS}",
         width_capped.display(),
         width_full.display()
     );

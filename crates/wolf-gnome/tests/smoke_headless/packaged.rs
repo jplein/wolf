@@ -576,16 +576,17 @@ fn packaged_band_colour(
 ///
 /// ## Exit codes
 ///
-/// Four per launch, derived from a base so the function takes seven parameters
-/// rather than ten (a tenth positional needs `${10}`, which is a trap this file does
+/// Two per launch, derived from a base so the function takes seven parameters
+/// rather than more (a tenth positional needs `${10}`, which is a trap this file does
 /// not need). The BASE itself means the app died before it was ready for input; base plus
-/// one, still alive after `:qa!`; base plus two, exited non-zero; base plus three,
-/// the readback never appeared. The offsets are spelled in words on purpose: written
+/// three, the readback never appeared. Base plus one and plus two are unused: the
+/// prelude's `quit_app` ends each launch with its own 241 and 242, and its stderr label
+/// names the launch. The offsets are spelled in words on purpose: written
 /// as `+ 1` at the start of a line they open a Markdown list, and
 /// `clippy::doc_lazy_continuation` then errors on every line that follows.
 ///
-/// Launch A's base is 11 and launch B's is 15 — so `11`-`14` and `15`-`18`, the scheme
-/// `APPEARANCE_SCENARIO` already uses. Eight codes and not four, for that smoke's
+/// Launch A's base is 11 and launch B's is 15 — so `11`, `14`, `15` and `18`, the scheme
+/// `APPEARANCE_SCENARIO` already uses. Per-launch codes, for that smoke's
 /// stated reason: "the app died before it was ready for input" is a different investigation
 /// depending on which binary it was.
 ///
@@ -597,7 +598,6 @@ set -eu
 # SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
-QUIT_TRIES=75
 FILE_TRIES=100
 
 cleanup() {
@@ -623,43 +623,12 @@ wait_file() {
     return 1
 }
 
-# $1 is the exit code for "still alive after :qa!", $2 for "exited non-zero", and
-# $3 is the label.
-quit_app() {
-    wtype -- ":qa!"
-    wtype -k Return
-
-    tries=0
-    gone=0
-    while [ "$tries" -lt "$QUIT_TRIES" ]; do
-        if ! kill -0 "$app_pid" 2>/dev/null; then
-            gone=1
-            break
-        fi
-        tries=$((tries + 1))
-        sleep "$WAIT_INTERVAL"
-    done
-    if [ "$gone" -ne 1 ]; then
-        echo "wolf-gnome packaged-plugins smoke: $3 app (pid $app_pid) still alive after :qa!." >&2
-        exit "$1"
-    fi
-    # `set -e` would abort before the status could be reported, so collect it
-    # through `||`, which is exempt from it.
-    rc=0
-    wait "$app_pid" || rc=$?
-    if [ "$rc" -ne 0 ]; then
-        echo "wolf-gnome packaged-plugins smoke: $3 app (pid $app_pid) exited $rc, not 0." >&2
-        exit "$2"
-    fi
-    app_pid=
-}
-
 # ONE launch, end to end. The two runs call it with different binaries, different
 # state directories and different exit-code bases, and are otherwise the same run
 # -- which is the whole design of this smoke, so the body must never be duplicated.
 #
 # The seven parameters are saved into named variables FIRST: wait_ready and
-# quit_app below rebind $1..$3 for their own calls.
+# quit_app below rebind the positional parameters for their own calls.
 run_launch() {
     app_bin=$1
     state=$2
@@ -670,8 +639,6 @@ run_launch() {
     label=$7
 
     code_died=$base
-    code_alive=$((base + 1))
-    code_status=$((base + 2))
     code_file=$((base + 3))
 
     # The state directory is per launch, deliberately overriding what
@@ -722,7 +689,7 @@ run_launch() {
     wtype -k Return
     wait_file "$readback" || exit "$code_file"
 
-    quit_app "$code_alive" "$code_status" "$label"
+    quit_app "wolf-gnome packaged-plugins smoke $label"
 }
 
 run_launch "$CONTROL_BIN" "$CONTROL_STATE_DIR" "$CONTROL_PNG" "$CONTROL_READBACK" \
@@ -962,15 +929,14 @@ fn the_packaged_binary_loads_the_vendored_lighthouse_and_orlando_under_cage() {
         "{SMOKE}: the cage scenario exited unsuccessfully ({status}). Every code names ONE cause \
          in ONE launch. 11: launch A (the checkout binary at {control_bin}) died before it was \
          ready for input — it runs with the devShell's XDG_DATA_DIRS and GSETTINGS_SCHEMA_DIR kept \
-         deliberately, so this is about the binary rather than the environment. 12: launch A was \
-         still alive after `:qa!`. 13: launch A exited NON-ZERO — it went away, but not cleanly, \
-         which is a separate code because a panic in the GTK main loop makes a process vanish \
-         exactly as a clean shutdown does. 14: launch A's readback never appeared at {}. 15: \
+         deliberately, so this is about the binary rather than the environment. 14: launch A's \
+         readback never appeared at {}. 15: \
          launch B (the store binary at {}) died before it was ready for input, and this is the \
          interesting one — launch B runs with WOLF_NVIM_BIN genuinely UNSET, so the wrapper is the \
          only thing that can supply it, and `failed to start core` is what it looks like when it \
-         does not. 16/17/18: the same three for launch B, whose readback is at {}. Any other \
-         status is `wtype` or `grim` failing under `set -eu`.",
+         does not. 18: the same for launch B, whose readback is at {}. {QUIT_APP_EXITS} The \
+         label on stderr names the launch. Any other status is `wtype` or `grim` failing under \
+         `set -eu`.",
         control_readback.display(),
         store_bin.display(),
         store_readback.display()
@@ -1317,15 +1283,14 @@ fn packaged_preview_ink_band() -> SampleRect {
 /// `run_launch` body with one launch and no per-launch config directory, since the
 /// appearance is not the variable here.
 ///
-/// Exit codes: `11` the app died before it was ready for input, `12` still alive after
-/// `:qa!`, `13` exited non-zero, `14` the window-list readback never appeared.
+/// Exit codes: `11` the app died before it was ready for input, `14` the window-list
+/// readback never appeared. The prelude's `quit_app` ends the run, with its own 241 and 242.
 const PACKAGED_PREVIEW_SCENARIO: &str = r#"
 set -eu
 
 # SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
-QUIT_TRIES=75
 FILE_TRIES=100
 # PREVIEW_SETTLE -- budgeted FROM THE CALL, not from the web view's Started event.
 # PREVIEW_SCENARIO's doc comment carries the measurement behind it. This is a cold
@@ -1389,30 +1354,7 @@ if [ ! -s "$WINS" ]; then
     exit 14
 fi
 
-wtype -- ":qa!"
-wtype -k Return
-
-tries=0
-gone=0
-while [ "$tries" -lt "$QUIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        gone=1
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-if [ "$gone" -ne 1 ]; then
-    echo "wolf-gnome packaged-preview smoke: app (pid $app_pid) still alive after :qa!." >&2
-    exit 12
-fi
-rc=0
-wait "$app_pid" || rc=$?
-if [ "$rc" -ne 0 ]; then
-    echo "wolf-gnome packaged-preview smoke: app (pid $app_pid) exited $rc, not 0." >&2
-    exit 13
-fi
-app_pid=
+quit_app "wolf-gnome packaged-preview smoke"
 
 exit 0
 "#;
@@ -1534,8 +1476,8 @@ fn the_packaged_binary_opens_a_preview_under_cage() {
     assert!(
         status.success(),
         "{SMOKE}: the cage scenario exited unsuccessfully ({status}) for the PACKAGED binary at \
-         {}. Exit 11: the app died before it was ready for input. Exit 12: still alive after `:qa!`. \
-         Exit 13: exited NON-ZERO, which is the one to read closely here — WebKit's mandatory \
+         {}. Exit 11: the app died before it was ready for input. {QUIT_APP_EXITS} A 242 is the \
+         one to read closely here — WebKit's mandatory \
          bubblewrap sandbox and its out-of-process helpers are what this smoke exists to \
          exercise, and a helper that cannot be spawned takes the process with it rather than \
          degrading. Exit 14: the window-list readback never appeared at {}. Any other status is \

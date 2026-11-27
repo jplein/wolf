@@ -79,25 +79,22 @@ const PM_EXITS: std::ops::RangeInclusive<i32> = 150..=153;
 
 /// What each of [`PM_BODY`]'s exit codes means, for failure messages.
 const PM_CODES: &str = "Exit 150: Neovim did not answer after the wheel, so keys went to the \
-     web view. 151: the app outlived `:WolfCloseWindow`. 152: the app exited non-zero. 153: no \
-     wolf.sqlite after the close.";
+     web view. 153: no wolf.sqlite after the quit.";
 
 /// Body of [`preview_margins_frame_and_scroll_the_page_under_cage`], appended to
 /// [`POINTER_PREAMBLE`] and [`EXTRAS_HELPERS`].
 ///
 /// Preview [`PM_FILE`] in place, park the pointer and capture A; `:WolfFullWidth`, capture C;
 /// `:WolfFullWidth` again, capture D. Then move to the side-margin probe and wheel
-/// [`PM_WHEEL_DETENTS`] detents, read Neovim's buffer name back, close the window and freeze
-/// the state, as `extras.rs`'s S2 does.
+/// [`PM_WHEEL_DETENTS`] detents, read Neovim's buffer name back, end the app with the prelude's
+/// `quit_app` and freeze the state.
 ///
 /// ## Exit codes it adds to [`POINTER_PREAMBLE`]'s 11-15
 ///
 /// | code | meaning |
 /// | --- | --- |
 /// | `150` | Neovim did not answer after the wheel |
-/// | `151` | the app was still alive after `:WolfCloseWindow` |
-/// | `152` | the app exited non-zero |
-/// | `153` | no `wolf.sqlite` to freeze after the close |
+/// | `153` | no `wolf.sqlite` to freeze after the quit |
 const PM_BODY: &str = r#"
 # A cold preview open, and the page's own layout; see PREVIEW_SETTLE in preview.rs.
 PREVIEW_SETTLE=3.0
@@ -124,7 +121,7 @@ nvim_ex "WolfFullWidth"
 sleep "$TOGGLE_SETTLE"
 grim "$OUT_PNG_D"
 
-# --- The wheel over the side margin, then the close ---------------------------
+# --- The wheel over the side margin, then the quit ----------------------------
 hsend motion "$PM_PROBE_X" "$PM_PROBE_Y"
 sleep "$SETTLE"
 detents=0
@@ -136,9 +133,7 @@ sleep "$SCROLL_SETTLE"
 wtype -- ":call writefile([bufname('%')], '$PM_READ')"
 wtype -k Return
 wait_file "$PM_READ" || exit 150
-wtype -- ":WolfCloseWindow"
-wtype -k Return
-reap_app 151 152
+quit_app "wolf-gnome preview margins smoke"
 freeze_or_exit "$PM_STATE" 153
 
 hsend quit
@@ -283,8 +278,8 @@ fn on_grid(extent: Option<SampleRect>, grid: GridRect, area_x: f64) -> bool {
 /// margin of over a hundred pixels. [`PM_BODY`] previews [`PM_FILE`] in place and takes
 /// capture A, toggles full width for capture C and back for capture D, then wheels
 /// [`PM_WHEEL_DETENTS`] detents of [`SCROLL_AXIS_VALUE`] at [`PmGeometry::margin_probe`],
-/// mid-way across the left side margin and outside the capped content. It closes the window
-/// with `:WolfCloseWindow` and freezes the state.
+/// mid-way across the left side margin and outside the capped content. It ends the app with
+/// the prelude's `quit_app` and freezes the state.
 ///
 /// Expected rects come from `editor_inset::grid_rect` at [`pm_cell`]'s cell, with the strip
 /// height derived as `strip_bands` in `preview.rs` derives it and the pane at
@@ -367,7 +362,7 @@ fn preview_margins_frame_and_scroll_the_page_under_cage() {
         SMOKE,
         status,
         &[&png_a, &png_c, &png_d, &read, &state],
-        "A to the close",
+        "A to the quit",
         PM_CODES,
     );
     let extents = read_output_extents(&cwd, SMOKE);
@@ -386,7 +381,7 @@ fn preview_margins_frame_and_scroll_the_page_under_cage() {
         "{SMOKE}: precondition: the probe x {probe_x} must lie left of the capped content at {}",
         area_x + geometry.capped.x
     );
-    let scroll = saved_preview_scroll(SMOKE, &state, "the state frozen after the close", PM_FILE);
+    let scroll = saved_preview_scroll(SMOKE, &state, "the state frozen after the quit", PM_FILE);
 
     let below = geometry.below_strip();
     let capture_a = decode_capture(&png_a, SMOKE, "capture A");
@@ -490,7 +485,7 @@ fn preview_margins_frame_and_scroll_the_page_under_cage() {
         scroll.is_some_and(|s| PM_SCROLL_RANGE.contains(&s)),
         || {
             format!(
-                "the close saved the preview's scroll as {scroll:?}, not a fraction in \
+                "the quit saved the preview's scroll as {scroll:?}, not a fraction in \
                  {PM_SCROLL_RANGE:?}, after {PM_WHEEL_DETENTS} detents at ({probe_x}, \
                  {probe_y}) in the left side margin. 0 or None means the wheel there never \
                  reached the page: the margin is the pane's, not the web view's. A value near 1 \

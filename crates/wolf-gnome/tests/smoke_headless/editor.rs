@@ -2284,10 +2284,9 @@ const CLIP_EXPECTED_OCCURRENCES: usize = 2;
 /// there is nothing to get wrong.
 ///
 /// Exit codes, each naming ONE cause and no two folded together: `11` the app died
-/// before it was ready for input; `12` the buffer readback never appeared (or was empty);
-/// `13` the app was still alive after `:qa!`; `14` the app exited non-zero. 13 and 14
-/// are separate because a process that panicked in the GTK main loop and one that
-/// shut down cleanly are equally GONE — only the status tells them apart.
+/// before it was ready for input; `12` the buffer readback never appeared (or was empty).
+/// The prelude's `quit_app` ends the run, with its own 241 and 242, and its discard is
+/// what lets Quit pass over the buffer this scenario modified.
 const CLIPBOARD_SCENARIO: &str = r#"
 set -eu
 
@@ -2304,7 +2303,6 @@ SETTLE=1.0
 # reports completion and there is no file to wait on until the buffer already holds
 # the text.
 PASTE_SETTLE=2.0
-QUIT_TRIES=75
 FILE_TRIES=100
 
 cleanup() {
@@ -2328,36 +2326,6 @@ wait_file() {
     done
     echo "wolf-gnome clipboard smoke: readback file $f never appeared (or stayed empty)." >&2
     return 1
-}
-
-# $1 is the exit code for "still alive after :qa!", $2 for "exited non-zero".
-quit_app() {
-    wtype -- ":qa!"
-    wtype -k Return
-
-    tries=0
-    gone=0
-    while [ "$tries" -lt "$QUIT_TRIES" ]; do
-        if ! kill -0 "$app_pid" 2>/dev/null; then
-            gone=1
-            break
-        fi
-        tries=$((tries + 1))
-        sleep "$WAIT_INTERVAL"
-    done
-    if [ "$gone" -ne 1 ]; then
-        echo "wolf-gnome clipboard smoke: app (pid $app_pid) still alive after :qa!." >&2
-        exit "$1"
-    fi
-    # `set -e` would abort before the status could be reported, so collect it
-    # through `||`, which is exempt from it.
-    rc=0
-    wait "$app_pid" || rc=$?
-    if [ "$rc" -ne 0 ]; then
-        echo "wolf-gnome clipboard smoke: app (pid $app_pid) exited $rc, not 0." >&2
-        exit "$2"
-    fi
-    app_pid=
 }
 
 "$WOLF_BIN" &
@@ -2411,7 +2379,7 @@ wtype -- ":call writefile(nvim_buf_get_lines(0, 0, -1, v:false), '$CLIP_READBACK
 wtype -k Return
 wait_file "$CLIP_READBACK" || exit 12
 
-quit_app 13 14
+quit_app "wolf-gnome clipboard smoke"
 
 exit 0
 "#;
@@ -2537,9 +2505,7 @@ fn copy_and_paste_round_trip_through_the_clipboard_under_cage() {
          the clipboard. Exit 12: the buffer readback never appeared at {}, so the app never got as \
          far as executing the final `:call writefile(...)` — a panic on the paste path (the async \
          clipboard callback runs on the GTK main thread and takes the core borrow) is the first \
-         thing to look at. Exit 13: still alive after `:qa!`. Exit 14: it went away, but not \
-         cleanly — a panic in the GTK main loop makes a process vanish exactly as a clean shutdown \
-         does, which is why these last two are separate codes.",
+         thing to look at. {QUIT_APP_EXITS}",
         readback.display()
     );
 

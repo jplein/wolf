@@ -1325,9 +1325,9 @@ fn preview_code_block_background_follows_the_configured_appearance_under_cage() 
         "{SMOKE}: the cage scenario, PREVIEW_THEME_SCENARIO run verbatim, exited unsuccessfully \
          ({status}); its stderr labels this smoke's launches \"preview-appearance\". Exit 11: run \
          1's app (`appearance: {APPEARANCE_FORCED_DARK}`) died before it was ready for input. \
-         Exit 12: run 1 was still alive after `:qa!`. Exit 13: run 1 exited non-zero. Exit 14: \
-         run 1's window-list readback never appeared at {}. Exit 15/16/17/18: the same four for \
-         run 2 (`appearance: {APPEARANCE_FORCED_LIGHT}`), whose readback is at {}. Any other \
+         Exit 14: run 1's window-list readback never appeared at {}. Exit 15/18: the same two \
+         for run 2 (`appearance: {APPEARANCE_FORCED_LIGHT}`), whose readback is at {}. \
+         {QUIT_APP_EXITS} Any other \
          status is `grim` or `wtype` failing under `set -eu`. This assertion says nothing about \
          whether a preview opened or what it painted.",
         wins_dark.display(),
