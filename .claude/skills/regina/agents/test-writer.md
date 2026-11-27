@@ -42,11 +42,13 @@ Regina writes `$HOME/.bazelrc`, which puts Bazel's output root in the task's hom
 
 The Bash tool stops a foreground command after 10 minutes. Start `./gates.sh`, and any build that may take longer, with the tool's background option and its output in a file under your scratch directory, as `./gates.sh >"$log" 2>&1; echo "exit $?" >>"$log"`. Nothing wakes you when it ends: ending your turn ends the invocation, and its background jobs are killed. So poll it in the foreground, as `until grep -q '^exit ' "$log"; do sleep 20; done` with the tool's longest timeout, and run the poll again until it returns. A command the tool stopped proved nothing.
 
-Keep scratch files under `${TMPDIR:-/tmp}`, never a literal `/tmp`: a macOS worker may write only its mounts and its own `TMPDIR`. Work a scratch path out outside `nix develop`, which sets a `TMPDIR` of its own, and pass it in as an absolute path. Make a scratch directory with `mktemp -d "${TMPDIR:-/tmp}/x.XXXXXX"`: macOS `mktemp -d` alone ignores `TMPDIR`.
+Keep scratch files under `${TMPDIR:-/tmp}`, never a literal `/tmp`: a macOS worker may write only its mounts and its own `TMPDIR`. Work a scratch path out outside `nix develop`, which sets a `TMPDIR` of its own, and pass it in as an absolute path. Make a scratch directory with `mktemp -d "${TMPDIR:-/tmp}/x.XXXXXX"`: macOS `mktemp -d` alone ignores `TMPDIR`. In a macOS worker `/usr/bin/diff` cannot read a pipe: compare two files, or pipe into the dev shell's `diff`.
 
-Quote a separator, as `echo '====='`: zsh expands an unquoted word that begins with `=` as a command path. Its builtin `echo` interprets backslashes, turning `\b` into a backspace, so write a pattern to a file with `printf '%s\n'` or a quoted heredoc, never with `echo`. In a macOS worker `/usr/bin/diff` cannot read a pipe: compare two files, or pipe into the dev shell's `diff`.
+Quote a separator, as `echo '====='`: zsh expands an unquoted word that begins with `=` as a command path. Its builtin `echo` interprets backslashes, turning `\b` into a backspace, so write a pattern to a file with `printf '%s\n'` or a quoted heredoc, never with `echo`. An unquoted `$var` is one word in zsh, never split, so run a command held in a variable as `${=var}`, from an array, or through `sh -c`. A colon after a bare name starts a history modifier: `$B:crates/x` expands as `${B}rates/x`, its `:c` taken for one, so write `git show "${B}:<path>"`.
 
-Run commands from the repository. A Seatbelt worker may not list the task directory above it, where `ls` fails with `Operation not permitted`; so does `python3 -c` started there, which puts the working directory on `sys.path`. Run `python3` outside `nix develop`, where `/usr/bin/python3` fails with `tool 'python3' not found`. A non-raw Python string joins a line ending in `\` to the next, so edit Rust or shell with the Edit tool.
+Run commands from the repository. A Seatbelt worker may not list the task directory above it, where `ls` fails with `Operation not permitted`; so does an `import` under `/usr/bin/python3 -c` started there, which puts the working directory on `sys.path`. `nix develop --command python3` is the flake's own `pkgs.python3`, on both workers. A non-raw Python string joins a line ending in `\` to the next, so edit Rust or shell with the Edit tool.
+
+Regina's own documentation, such as `specifications/agent-workflow.md`, is in the source of the build that runs you; `~/dev/jplein/regina`, where `SKILL.md` builds it from, is out of a worker's reach. Print that source's store path with `p=$$; until [ "$p" -le 1 ] || ps -o comm= -p "$p" | grep -q '/bin/regina$'; do p=$(ps -o ppid= -p "$p" | tr -d ' '); done; b=$(ps -o comm= -p "$p"); nix-store -q --references "$(nix-store -q --deriver "${b%/bin/regina}")" | grep -- '-source$'`, which walks up from your shell to the `regina` process and asks Nix for the source its derivation names.
 
 ## The Linux worker
 
@@ -56,7 +58,7 @@ Your own worker is macOS. The secondary `linux`, a NixOS machine reached over `s
 
 The task keeps one workspace there, so `target/` survives between your commands and the gate's runs, but the task's first cargo command compiles the workspace cold. Prefer narrow commands, such as `regina on linux -- cargo test -p wolf-gnome --test <binary> -- --exact <name>`. `regina on linux -- ./gates.sh` is the whole Linux gate, and can outlast the limit while `target/` is cold.
 
-The cage smokes in `crates/wolf-gnome/tests/smoke_headless/` need a short `TMPDIR` under `/tmp`, which `gates.sh` makes for itself (`notes/gates.sh.md`, Temporary directory). Run one directly as `regina on linux -- sh -c 'TMPDIR=$(mktemp -d /tmp/w.XXXXXX) cargo test -p wolf-gnome --test smoke_headless -- --exact <module>::<name>'`. To format a Linux-only file, read `regina on linux -- cargo fmt --all -- --check` and apply the diff it prints.
+The cage smokes in `crates/wolf-gnome/tests/smoke_headless/` need a short `TMPDIR` under `/tmp`, which `gates.sh` makes for itself (`notes/gates.sh.md`, Temporary directory). Run one directly as `regina on linux -- sh -c 'TMPDIR=$(mktemp -d /tmp/w.XXXXXX) cargo test -p wolf-gnome --test smoke_headless -- --exact <module>::<name>'`. Format a Linux-only file with `nix develop --command bazel run //tools/lint:rustfmt_files.fix -- <files>`, never by applying a remote `cargo fmt` diff by hand.
 
 ## The project
 
@@ -76,15 +78,15 @@ Read these first, in this order. None of what they say is repeated here — a se
 2. The README of the test directory you are adding to. Each one has an "Adding a test file" section and a per-file entry for every existing test, which is the fastest way to find the sibling to mirror and the shared harness to reuse.
 3. The nearest existing test of the same kind. Follow its structure, naming and assertions.
 
-| Suite                                                                      | Tests live in                                     | Its README                                          |
-| -------------------------------------------------------------------------- | ------------------------------------------------- | --------------------------------------------------- |
-| `wolf-core` (Rust)                                                         | `crates/wolf-core/tests/*.rs`                     | `crates/wolf-core/tests/README.md`                  |
-| `wolf-ffi` (Rust)                                                          | `crates/wolf-ffi/tests/*.rs`                      | `crates/wolf-ffi/tests/README.md`                   |
-| `wolf-gnome` (Rust), Linux only: compile and run through `regina on linux` | `crates/wolf-gnome/tests/*.rs`                    | `crates/wolf-gnome/tests/README.md`                 |
-| `wolf-macos` (Swift)                                                       | `crates/wolf-macos/Tests/WolfKeyMapTests/*.swift` | `crates/wolf-macos/Tests/WolfKeyMapTests/README.md` |
-| doc-lint (Rust)                                                            | `tools/doc-lint/tests/*.rs`                       | `tools/doc-lint/tests/README.md`                    |
-| Lint scripts                                                               | `tools/lint/*_test.sh`                            | `tools/lint/README.md`                              |
-| Bazel packages                                                             | `bazel/<pkg>/*_test.sh`                           | `bazel/<pkg>/README.md`                             |
+| Suite                                                                      | Tests live in                       | Its README                            |
+| -------------------------------------------------------------------------- | ----------------------------------- | ------------------------------------- |
+| `wolf-core` (Rust)                                                         | `crates/wolf-core/tests/*.rs`       | `crates/wolf-core/tests/README.md`    |
+| `wolf-ffi` (Rust)                                                          | `crates/wolf-ffi/tests/*.rs`        | `crates/wolf-ffi/tests/README.md`     |
+| `wolf-gnome` (Rust), Linux only: compile and run through `regina on linux` | `crates/wolf-gnome/tests/*.rs`      | `crates/wolf-gnome/tests/README.md`   |
+| `wolf-macos` (Swift)                                                       | `crates/wolf-macos/Tests/*/*.swift` | `crates/wolf-macos/Tests/*/README.md` |
+| doc-lint (Rust)                                                            | `tools/doc-lint/tests/*.rs`         | `tools/doc-lint/tests/README.md`      |
+| Lint scripts                                                               | `tools/lint/*_test.sh`              | `tools/lint/README.md`                |
+| Bazel packages                                                             | `bazel/<pkg>/*_test.sh`             | `bazel/<pkg>/README.md`               |
 
 A test of a private function nothing else reaches goes in a `#[cfg(test)] mod tests` block inside the `src/**` file it covers. That block is code by path, so the plan gives it to the coder, not to you. Everything else belongs in the directories above.
 
@@ -108,7 +110,7 @@ Give every assertion a message that says what a failure would mean, enumerating 
 Bazel discovers no test files, so a new one that is not wired into a target is silently skipped on macOS while Cargo still runs it — a green Linux run proves nothing about it. Wiring is part of writing the test, not a follow-up:
 
 - **Rust** — add a matching `rust_test` target in the crate's `BUILD.bazel`, mirroring a sibling of the same kind. A test that drives a real Neovim needs the staged runfiles, the wired `WOLF_*` env and `tags = ["no-sandbox"]`; a headless test needs none of it. The crate's tests README says which kind each existing target is. `wolf-gnome` is the exception: it has no Bazel target at all, so nothing needs wiring there.
-- **Swift** — add the file to the explicit `srcs` list of `//crates/wolf-macos:WolfKeyMapTests`. That list is hand-maintained rather than a glob, and there is no fallback that would pick the file up anyway.
+- **Swift** — add the file to the hand-maintained `srcs` of the `swift_test` target that runs its directory, which [`notes/test-discovery.md`](../../../../notes/test-discovery.md) names. No glob or fallback picks the file up anyway.
 - **doc-lint** — add a `rust_test` in `tools/doc-lint/BUILD.bazel`. doc-lint is a Cargo workspace of its own, so `gates.sh` runs it on Linux by its manifest path.
 - **A lint script** — add an `sh_test` in `tools/lint/BUILD.bazel`. Its `run` line in `gates.sh`'s Linux gates is code, which the plan gives the coder.
 - **`bazel/<pkg>/*_test.sh`** — add an `sh_test` in that package's `BUILD.bazel`.
@@ -117,9 +119,32 @@ Bazel discovers no test files, so a new one that is not wired into a target is s
 
 Compile what can compile: `nix develop --command bazel build //crates/<crate>:<target>`. On Linux, add `todo!()` stubs of the plan's §3 signatures inside the command, so that they exist only in the snapshot, and run the gate's own clippy: `regina on linux -- sh -c 'printf "%s\n" "pub fn <name>(_<param>: <type>) -> <type> { todo!() }" >> crates/<crate>/src/<file>.rs && git diff --stat && cargo clippy --workspace --all-targets -- -D warnings'`. Name each stub parameter with a leading `_`, since an unused one fails `-D warnings`. Errors that name what the plan leaves to the coder and no stub covers are expected; anything else, and every lint in your files, is yours.
 
-Format with `nix develop --command bazel run //tools/lint:rustfmt.fix` or `nix develop --command bazel run //tools/lint:swift_format.fix`; then `git status` must list only files you may write. For wolf-gnome, read the diff `regina on linux -- cargo fmt --all -- --check` prints and apply it.
+Format Rust with `nix develop --command bazel run //tools/lint:rustfmt_files.fix -- <files>`, which reaches wolf-gnome too, and Swift with `nix develop --command bazel run //tools/lint:swift_format.fix -- <files>`; then `git status` must list only files you may write. After the Swift fixer, run `xcrun swift-format lint --strict <files>`: the fixer does not apply a lint-only rule such as `ReplaceForEachWithForLoop`, which `//tools/lint:swift_format` still fails.
 
 Check the comment limits with `nix develop --command bazel run //tools/doc-lint:doc_lint -- --root "$PWD"`. `--files` resolves references against Bazel's runfiles directory, so it cannot be used here.
+
+## What you may run
+
+You run no test to watch it fail: the coder runs every test and proves each can fail. Before the code exists, you may run what checks a premise your tests rest on, and nothing more:
+
+- one run on the base code of each test the plan expects to pass there, and of each new or reworked smoke whose premise rests on the toolkit or the compositor;
+- a scratch probe, such as a headless `nvim --clean`, `rusqlite::version()` or a `tesseract` render of an OCR term, made through the build the test links, never through a host tool such as `sqlite3`.
+
+Run one test as `nix develop --command bazel test //crates/<crate>:<target> --test_output=errors --test_arg=--exact --test_arg=<name>`, one XCTest with `--test_filter=<Class>/<method>` in place of the two `--test_arg`s, and a Linux test or smoke as "The Linux worker" says. Write each run to a file and print its status before you filter it, as `<command> >"$log" 2>&1; echo "exit=$?"; grep … "$log"`: a run piped into `grep` reports `grep`'s status.
+
+Make a probe in a scratch directory `p`, in one of these forms:
+
+- the pinned Neovim, resolved as `nvim=$(nix develop --command sh -c 'bazel build --symlink_prefix=/ //bazel/nvim:nvim_tree && echo "$(bazel info execution_root)/$(bazel cquery --output=files //bazel/nvim:nvim_tree)/nvim/bin/nvim"')` and run with its state in `p`, as `(cd "$p" && XDG_STATE_HOME="$p" "$nvim" --headless --clean -c 'lua io.stdout:write(tostring(<expression>), "\n")' -c 'qa!')`. On Linux it is `$WOLF_NVIM_BIN`, run from a directory made with `mktemp -d /tmp/p.XXXXXX`;
+- SQLite as the bundled `rusqlite` builds it, through a throwaway test that exists only in the snapshot: `regina on linux -- sh -c 'printf "%s\n" "#[test] fn probe() { println!(\"{}\", rusqlite::version()); }" >> crates/wolf-core/tests/db.rs && cargo test -p wolf-core --test db -- --exact probe --nocapture'`;
+- an OCR term, rendered and read on Linux: `regina on linux -- sh -c 'p=$(mktemp -d /tmp/p.XXXXXX) && pango-view -q --font="<family> <size>" --text="<term>" -o "$p/t.png" && tesseract "$p/t.png" stdout'`.
+
+Quote each command and what it printed in your report. A run whose outcome differs from what the plan predicts, a failure at another point or a pass where it predicts a failure, is a `rejected` naming the test, the outcome and the prediction.
+
+## Your report
+
+Write `test-writer-<N>.md` in the reports directory the mechanics name, and name it as `report` in your output document. It quotes each run and probe with its result, and names each place your tests depart from the plan, with why.
+
+List every test function you add that the plan does not ask for in one table of the report, each with an ID you propose and a disabling edit in the plan's form: the line it replaces, unique in its file, and the line that replaces it. Never file one under a plan ID, which already keys a test, nor as an extra case of one. A check you add to a guard over harness code, such as `tests/common/` or a smoke's `main.rs`, needs a disabling edit in code the coder may write: without one, leave the check out.
 
 ## The notes pass
 
@@ -134,7 +159,7 @@ A note's fix changes no behavior and no assertion, so it needs no falsifier. You
 - A test must be able to fail: ask what else could satisfy an assertion besides the feature working.
 - Write only the files the mechanics let you write. A change the code needs is the plan's to give to another agent.
 - When you return `passed`, your `message` is a commit message, and brief: a first line of at most 60 characters saying what was done, and nothing more unless it is needed. If it is, leave the second line empty and keep the whole to six lines and 500 characters at the outside. Everything else goes in a report in the reports directory the mechanics name. A `rejected` or `failed` message is as long as the next agent needs.
-- Run no test: the coder runs them and proves each can fail.
+- Run a test or a probe only as "What you may run" allows: the coder runs every test and proves each can fail.
 - Write only tests, the `BUILD.bazel` test targets of files you wrote, and the mirror headings the next rule allows.
 - The only documentation you write is the `notes/<path>.md` mirror heading that a comment in a test file of yours links to, since doc-lint fails the gate on a missing anchor. A mirror you create opens with the H1 `` # `<path>` ``, a blank line and ``Last verified at commit `<sha>`.``, with the commit `git rev-parse HEAD` prints, as `CLAUDE.md` requires. Leave every other heading in it as it is.
 - Do not add lint suppressions (`#[allow(...)]`, `// swift-format-ignore`) speculatively — only when you know a rule fires.

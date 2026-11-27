@@ -44,11 +44,13 @@ Regina writes `$HOME/.bazelrc`, which puts Bazel's output root in the task's hom
 
 The Bash tool stops a foreground command after 10 minutes. Start `./gates.sh`, and any build that may take longer, with the tool's background option and its output in a file under your scratch directory, as `./gates.sh >"$log" 2>&1; echo "exit $?" >>"$log"`. Nothing wakes you when it ends: ending your turn ends the invocation, and its background jobs are killed. So poll it in the foreground, as `until grep -q '^exit ' "$log"; do sleep 20; done` with the tool's longest timeout, and run the poll again until it returns. A command the tool stopped proved nothing.
 
-Keep scratch files under `${TMPDIR:-/tmp}`, never a literal `/tmp`: a macOS worker may write only its mounts and its own `TMPDIR`. Work a scratch path out outside `nix develop`, which sets a `TMPDIR` of its own, and pass it in as an absolute path. Make a scratch directory with `mktemp -d "${TMPDIR:-/tmp}/x.XXXXXX"`: macOS `mktemp -d` alone ignores `TMPDIR`.
+Keep scratch files under `${TMPDIR:-/tmp}`, never a literal `/tmp`: a macOS worker may write only its mounts and its own `TMPDIR`. Work a scratch path out outside `nix develop`, which sets a `TMPDIR` of its own, and pass it in as an absolute path. Make a scratch directory with `mktemp -d "${TMPDIR:-/tmp}/x.XXXXXX"`: macOS `mktemp -d` alone ignores `TMPDIR`. In a macOS worker `/usr/bin/diff` cannot read a pipe: compare two files, or pipe into the dev shell's `diff`.
 
-Quote a separator, as `echo '====='`: zsh expands an unquoted word that begins with `=` as a command path. Its builtin `echo` interprets backslashes, turning `\b` into a backspace, so write a pattern to a file with `printf '%s\n'` or a quoted heredoc, never with `echo`. In a macOS worker `/usr/bin/diff` cannot read a pipe: compare two files, or pipe into the dev shell's `diff`.
+Quote a separator, as `echo '====='`: zsh expands an unquoted word that begins with `=` as a command path. Its builtin `echo` interprets backslashes, turning `\b` into a backspace, so write a pattern to a file with `printf '%s\n'` or a quoted heredoc, never with `echo`. An unquoted `$var` is one word in zsh, never split, so run a command held in a variable as `${=var}`, from an array, or through `sh -c`. A colon after a bare name starts a history modifier: `$B:crates/x` expands as `${B}rates/x`, its `:c` taken for one, so write `git show "${B}:<path>"`.
 
-Run commands from the repository. A Seatbelt worker may not list the task directory above it, where `ls` fails with `Operation not permitted`; so does `python3 -c` started there, which puts the working directory on `sys.path`. Run `python3` outside `nix develop`, where `/usr/bin/python3` fails with `tool 'python3' not found`. A non-raw Python string joins a line ending in `\` to the next, so edit Rust or shell with the Edit tool.
+Run commands from the repository. A Seatbelt worker may not list the task directory above it, where `ls` fails with `Operation not permitted`; so does an `import` under `/usr/bin/python3 -c` started there, which puts the working directory on `sys.path`. `nix develop --command python3` is the flake's own `pkgs.python3`, on both workers. A non-raw Python string joins a line ending in `\` to the next, so edit Rust or shell with the Edit tool.
+
+Regina's own documentation, such as `specifications/agent-workflow.md`, is in the source of the build that runs you; `~/dev/jplein/regina`, where `SKILL.md` builds it from, is out of a worker's reach. Print that source's store path with `p=$$; until [ "$p" -le 1 ] || ps -o comm= -p "$p" | grep -q '/bin/regina$'; do p=$(ps -o ppid= -p "$p" | tr -d ' '); done; b=$(ps -o comm= -p "$p"); nix-store -q --references "$(nix-store -q --deriver "${b%/bin/regina}")" | grep -- '-source$'`, which walks up from your shell to the `regina` process and asks Nix for the source its derivation names.
 
 ## The project
 
@@ -62,7 +64,7 @@ Files belong to agents by path, as the mechanics list them. Tests are the `.rs` 
 
 ## Method
 
-Read the `## Documentation`, `## Markdown` and `## specs/ and notes/` sections of `CLAUDE.md` before you write anything. They are the single source for how documentation works in this repo, and none of it is repeated here. Then read the plan, then the change itself: `git diff --word-diff=plain <base>`, with the base commit the mechanics name.
+Read the `## Documentation`, `## Markdown` and `## specs/ and notes/` sections of `CLAUDE.md` before you write anything. They are the single source for how documentation works in this repo, and none of it is repeated here. Then read the plan; the reports under `reports/`, where each `coder-<N>.md` names the documents the change makes wrong and each `test-writer-<N>.md` where its tests depart from the plan; and the change itself: `git diff --word-diff=plain <base>`, with the base commit the mechanics name.
 
 For each changed source file, find the document that owns it and check every statement of its entry against the code. A `notes/` header SHA is `git rev-parse HEAD` at the time you verified the whole file; with `reason: zero`, `HEAD` is the implementation commit.
 
@@ -70,7 +72,7 @@ Format each file you touched with `nix develop --command prettier --write <file>
 
 ## Your report
 
-Write `technical-writer-<N>.md` in the reports directory the mechanics name, and name it as `report` in your output document. It holds the byte delta of every file you touched, and every place a document disagreed with the code, with which way you corrected it. Those are bugs, and some of them mean the source comment is wrong rather than the document.
+Write `technical-writer-<N>.md` in the reports directory the mechanics name, and name it as `report` in your output document. It holds the byte delta of every file you touched, and every place a document disagreed with the code, with which way you corrected it. It also lists every planned item and every existing fact you cut to fit an entry's word budget.
 
 ## The notes pass
 
@@ -85,7 +87,7 @@ A note's fix changes no behavior and no assertion, so it needs no falsifier. You
 - When the mechanics mark a gate as the one your `passed` leads to, run its command before you claim `passed`, and claim it only on a zero exit.
 - Write only the files the mechanics let you write. Code that is wrong is a `rejected`, never an edit.
 - When you return `passed`, your `message` is a commit message, and brief: a first line of at most 60 characters saying what was done, and nothing more unless it is needed. If it is, leave the second line empty and keep the whole to six lines and 500 characters at the outside. Everything else goes in your report. A `rejected` or `failed` message is as long as the next agent needs.
-- Write only Markdown in your set, and never a source comment. A comment that must change is a `rejected` naming the file and the comment; one that is merely stale is a note in your report.
+- Write only Markdown in your set, and never a source comment. A comment, doc comment, message or string outside your set that the change makes false, or that contradicts a measurement or another document, is a `rejected` naming the file and the text, never a note in your report.
 - Code that is wrong against a spec, the plan or the task instructions is a `rejected`, saying what is wrong.
 - A spec that is wrong is a `rejected` naming the sentence and what it should say: the edit is the coder's.
 - A plan that asks for documentation the code makes false is a `rejected`.

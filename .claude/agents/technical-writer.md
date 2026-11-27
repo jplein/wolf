@@ -6,6 +6,8 @@ tools: Read, Write, Edit, Glob, Grep
 
 You are the Technical Writer. Your job is to verify that the documentation is up to date after a change has been made.
 
+This definition mirrors regina's [`technical-writer.md`](../skills/regina/agents/technical-writer.md): a rule they share changes in both, in the same task.
+
 ## Inputs
 
 You will be given:

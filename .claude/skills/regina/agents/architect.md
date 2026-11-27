@@ -43,11 +43,13 @@ The shell is for reading only. Git is for reading too: `git status`, `git diff`,
 
 No dev shell is entered and `direnv` is not available. Run each command of `build.md` through the flake from the repository root, as `nix develop --command <command>`; `./gates.sh` enters the shell by itself. Your worker is macOS under Seatbelt: `bazel` is the dev shell's bazelisk shim, and there is no `cargo`, `rustc` or `rustfmt`.
 
-Keep scratch files under `${TMPDIR:-/tmp}`, never a literal `/tmp`: a macOS worker may write only its mounts and its own `TMPDIR`. Work a scratch path out outside `nix develop`, which sets a `TMPDIR` of its own, and pass it in as an absolute path. Make a scratch directory with `mktemp -d "${TMPDIR:-/tmp}/x.XXXXXX"`: macOS `mktemp -d` alone ignores `TMPDIR`.
+Keep scratch files under `${TMPDIR:-/tmp}`, never a literal `/tmp`: a macOS worker may write only its mounts and its own `TMPDIR`. Work a scratch path out outside `nix develop`, which sets a `TMPDIR` of its own, and pass it in as an absolute path. Make a scratch directory with `mktemp -d "${TMPDIR:-/tmp}/x.XXXXXX"`: macOS `mktemp -d` alone ignores `TMPDIR`. In a macOS worker `/usr/bin/diff` cannot read a pipe: compare two files, or pipe into the dev shell's `diff`.
 
-Quote a separator, as `echo '====='`: zsh expands an unquoted word that begins with `=` as a command path. Its builtin `echo` interprets backslashes, turning `\b` into a backspace, so write a pattern to a file with `printf '%s\n'` or a quoted heredoc, never with `echo`. In a macOS worker `/usr/bin/diff` cannot read a pipe: compare two files, or pipe into the dev shell's `diff`.
+Quote a separator, as `echo '====='`: zsh expands an unquoted word that begins with `=` as a command path. Its builtin `echo` interprets backslashes, turning `\b` into a backspace, so write a pattern to a file with `printf '%s\n'` or a quoted heredoc, never with `echo`. An unquoted `$var` is one word in zsh, never split, so run a command held in a variable as `${=var}`, from an array, or through `sh -c`. A colon after a bare name starts a history modifier: `$B:crates/x` expands as `${B}rates/x`, its `:c` taken for one, so write `git show "${B}:<path>"`.
 
-Run commands from the repository. A Seatbelt worker may not list the task directory above it, where `ls` fails with `Operation not permitted`; so does `python3 -c` started there, which puts the working directory on `sys.path`. Run `python3` outside `nix develop`, where `/usr/bin/python3` fails with `tool 'python3' not found`. A non-raw Python string joins a line ending in `\` to the next, so edit Rust or shell with the Edit tool.
+Run commands from the repository. A Seatbelt worker may not list the task directory above it, where `ls` fails with `Operation not permitted`; so does an `import` under `/usr/bin/python3 -c` started there, which puts the working directory on `sys.path`. `nix develop --command python3` is the flake's own `pkgs.python3`, on both workers. A non-raw Python string joins a line ending in `\` to the next, so edit Rust or shell with the Edit tool.
+
+Regina's own documentation, such as `specifications/agent-workflow.md`, is in the source of the build that runs you; `~/dev/jplein/regina`, where `SKILL.md` builds it from, is out of a worker's reach. Print that source's store path with `p=$$; until [ "$p" -le 1 ] || ps -o comm= -p "$p" | grep -q '/bin/regina$'; do p=$(ps -o ppid= -p "$p" | tr -d ' '); done; b=$(ps -o comm= -p "$p"); nix-store -q --references "$(nix-store -q --deriver "${b%/bin/regina}")" | grep -- '-source$'`, which walks up from your shell to the `regina` process and asks Nix for the source its derivation names.
 
 ## The project
 
@@ -105,7 +107,9 @@ A rename or a change of behavior sweeps more than comments: strings and failure 
 
    A spec sentence the task does not open is designed around. When no design avoids it, return `failed` naming the sentence, so that the user settles it before any plan is handed off. Run `./tools/lint/markdown_check.sh --entry-words <file>` on every README whose entry the plan adds to, and give each such entry's count against the budget it prints: an entry within about 20 words of its budget gets a planned cut or another destination.
 
-6. **Implementation order**: the test writer runs no test, so a run that shows the new tests red before the code exists is the coder's, made before it writes the code. A plan that branches on a measurement has the coder carry out the fix the result selects, once its batch passes, whenever that fix lies in the coder's own write set, and return `rejected` only for a fix in a test writer's file, a bug in production code or a spec.
+6. **Implementation order**: the test writer runs a test only once, on the base code, and only when the plan expects it to pass there or it is a new or reworked smoke whose premise rests on the toolkit or the compositor. So the plan says which new tests pass on the base code, and where each such smoke fails there; any other run that shows the new tests red before the code exists is the coder's, made before it writes the code.
+
+   A plan that branches on a measurement has the coder carry out the fix the result selects, once its batch passes, whenever that fix lies in the coder's own write set, and return `rejected` only for a fix in a test writer's file, a bug in production code or a spec.
 
 7. **Dependencies**: a new crate moves `Cargo.lock`, `Cargo.Bazel.lock` and `MODULE.bazel.lock`. The macOS worker has no `cargo`, so say where `Cargo.lock` comes from; prefer a task of its own.
 

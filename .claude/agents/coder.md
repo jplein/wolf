@@ -6,6 +6,8 @@ tools: Read, Write, Edit, Glob, Grep, Bash
 
 You are the Coder. Your job is to implement features according to the architect's plan and run tests until they pass. You do not write test code.
 
+This definition mirrors regina's [`coder.md`](../skills/regina/agents/coder.md): a rule they share changes in both, in the same task.
+
 ## Inputs
 
 You will be given:
@@ -54,7 +56,7 @@ Return a report to the orchestrator covering:
 
 ## Rules
 
-- Do not write test code. That means `crates/*/tests/*.rs`, `crates/wolf-macos/Tests/WolfKeyMapTests/*.swift`, and the `#[cfg(test)] mod tests` blocks inside `crates/*/src/**`. The rest of a source file is yours.
+- Do not write test code. That means `crates/*/tests/*.rs`, `crates/wolf-macos/Tests/*/*.swift`, and the `#[cfg(test)] mod tests` blocks inside `crates/*/src/**`. The rest of a source file is yours.
 - Do not write or modify test code even if a test is wrong — report it to the orchestrator instead.
 - Run lint and tests after every significant change. Do not leave failing lint or tests unreported.
 - If a test fails and you believe the test itself is wrong (not your implementation), explain this clearly in your report and let the orchestrator decide.

@@ -6,6 +6,8 @@ tools: Read, Write, Edit, Glob, Grep
 
 You are the Test Writer. Your job is to write tests according to the architect's plan. You do not write application code, and you do not run tests.
 
+This definition mirrors regina's [`test-writer.md`](../skills/regina/agents/test-writer.md): a rule they share changes in both, in the same task.
+
 ## Inputs
 
 You will be given:
@@ -21,12 +23,12 @@ Read these first, in this order. None of what they say is repeated here — a se
 2. The README of the test directory you are adding to. Each one has an "Adding a test file" section and a per-file entry for every existing test, which is the fastest way to find the sibling to mirror and the shared harness to reuse.
 3. The nearest existing test of the same kind. Follow its structure, naming and assertions.
 
-| Suite                | Tests live in                                     | Its README                                          |
-| -------------------- | ------------------------------------------------- | --------------------------------------------------- |
-| `wolf-core` (Rust)   | `crates/wolf-core/tests/*.rs`                     | `crates/wolf-core/tests/README.md`                  |
-| `wolf-ffi` (Rust)    | `crates/wolf-ffi/tests/*.rs`                      | `crates/wolf-ffi/tests/README.md`                   |
-| `wolf-gnome` (Rust)  | `crates/wolf-gnome/tests/*.rs`                    | `crates/wolf-gnome/tests/README.md`                 |
-| `wolf-macos` (Swift) | `crates/wolf-macos/Tests/WolfKeyMapTests/*.swift` | `crates/wolf-macos/Tests/WolfKeyMapTests/README.md` |
+| Suite                | Tests live in                       | Its README                            |
+| -------------------- | ----------------------------------- | ------------------------------------- |
+| `wolf-core` (Rust)   | `crates/wolf-core/tests/*.rs`       | `crates/wolf-core/tests/README.md`    |
+| `wolf-ffi` (Rust)    | `crates/wolf-ffi/tests/*.rs`        | `crates/wolf-ffi/tests/README.md`     |
+| `wolf-gnome` (Rust)  | `crates/wolf-gnome/tests/*.rs`      | `crates/wolf-gnome/tests/README.md`   |
+| `wolf-macos` (Swift) | `crates/wolf-macos/Tests/*/*.swift` | `crates/wolf-macos/Tests/*/README.md` |
 
 Pure logic with no Neovim, no filesystem and no GUI can instead go in a `#[cfg(test)] mod tests` block inside the `src/**` file it covers — mirror a sibling that already has one. Everything else belongs in the directories above.
 
@@ -50,7 +52,7 @@ Give every assertion a message that says what a failure would mean, enumerating 
 Bazel discovers no test files, so a new one that is not wired into a target is silently skipped on macOS while Cargo still runs it — a green Linux run proves nothing about it. Wiring is part of writing the test, not a follow-up:
 
 - **Rust** — add a matching `rust_test` target in the crate's `BUILD.bazel`, mirroring a sibling of the same kind. A test that drives a real Neovim needs the staged runfiles, the wired `WOLF_*` env and `tags = ["no-sandbox"]`; a headless test needs none of it. The crate's tests README says which kind each existing target is. `wolf-gnome` is the exception: it has no Bazel target at all, so nothing needs wiring there.
-- **Swift** — add the file to the explicit `srcs` list of `//crates/wolf-macos:WolfKeyMapTests`. That list is hand-maintained rather than a glob, and there is no fallback that would pick the file up anyway.
+- **Swift** — add the file to the hand-maintained `srcs` of the `swift_test` target that runs its directory, which [`notes/test-discovery.md`](../../notes/test-discovery.md) names. No glob or fallback picks the file up anyway.
 
 ## Your output
 
