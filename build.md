@@ -184,6 +184,13 @@ bazel build //crates/wolf-core:wolf_core
 bazel build //crates/wolf-ffi:wolf_ffi
 ```
 
+The Darwin shell puts no `nvim` on `PATH` and exports no `WOLF_NVIM_BIN`. To run the pinned Neovim by hand, build its tree and print the binary's absolute path:
+
+```sh
+bazel build //bazel/nvim:nvim_tree
+echo "$(bazel info execution_root)/$(bazel cquery --output=files //bazel/nvim:nvim_tree)/nvim/bin/nvim"
+```
+
 ### Repinning Rust dependencies
 
 After changing a crate's Cargo dependencies, regenerate the `crate_universe` lock by repinning against any Rust target:
@@ -310,7 +317,13 @@ Let Bazel expand the pattern rather than naming targets one by one:
 bazel test //...              # everything
 bazel test //crates/...       # the Rust and Swift crate tests
 bazel test //bazel/...        # the vendored-asset tree tests
+bazel test //crates/wolf-core:state_unit --test_output=all \
+  --test_arg=--exact --test_arg=state_dir_honors_env_override   # one Rust test
+bazel test //crates/wolf-macos:WolfKeyMapTests --test_output=all \
+  --test_filter=FrameStatsTests/testIsEnabledTable              # one XCTest
 ```
+
+`--test_filter=<Class>/<method>` selects one XCTest method, and `--test_filter=<Class>` one class; `--test_arg=--exact` filters no XCTest. rules_swift treats the filter as a regular expression and runs every test whose `<Class>/<method>` contains a match, so `PaneTree` also selects `PaneTreeWeightsTests`. A comma-separated list matches nothing: it fails with `ERROR: No tests were executed` and exits 3. Select several classes with an alternation, as `'--test_filter=^(CellMetricsMathTests|FrameStatsTests)/'`.
 
 Targets tagged `manual` are excluded from wildcard expansion: the optimized `//crates/wolf-macos:WolfRelease` build with `:InstallWolf`, which is built on it, and the `//tools/lint` fix targets. A plain `bazel test //...` therefore never pulls in an opt rebuild or rewrites a file, while it does run every `//tools/lint` check. Run the `manual` targets explicitly.
 
