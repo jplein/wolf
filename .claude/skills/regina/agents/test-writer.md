@@ -38,7 +38,7 @@ No dev shell is entered and `direnv` is not available. Run each command of `buil
 
 Regina writes `$HOME/.bazelrc`, which puts Bazel's output root in the task's home and shares the repository cache between tasks; never override `--output_user_root` or `--repository_cache`. Bazel's sandbox cannot nest inside Seatbelt and falls back to `processwrapper-sandbox` by itself, so pass no `--spawn_strategy`. The output root is the task's, so its first build compiles the whole graph cold; later builds in the task, the gate's included, reuse it. A build may rewrite `MODULE.bazel.lock` (`--lockfile_mode=update`); if `git status` lists it, it is the coder's file.
 
-The Bash tool stops a foreground command after 10 minutes. Start `./gates.sh`, and any build that may take longer, with the tool's background option or with its output redirected to a file under your scratch directory, and poll it; a command the tool stopped proved nothing.
+The Bash tool stops a foreground command after 10 minutes. Start `./gates.sh`, and any build that may take longer, with the tool's background option and its output in a file under your scratch directory, as `./gates.sh >"$log" 2>&1; echo "exit $?" >>"$log"`. Nothing wakes you when it ends: ending your turn ends the invocation, and its background jobs are killed. So poll it in the foreground, as `until grep -q '^exit ' "$log"; do sleep 20; done` with the tool's longest timeout, and run the poll again until it returns. A command the tool stopped proved nothing.
 
 Keep scratch files under `${TMPDIR:-/tmp}`, never a literal `/tmp`: a macOS worker may write only its mounts and its own `TMPDIR`. Work a scratch path out outside `nix develop`, which sets a `TMPDIR` of its own, and pass it in as an absolute path. Make a scratch directory with `mktemp -d "${TMPDIR:-/tmp}/x.XXXXXX"`: macOS `mktemp -d` alone ignores `TMPDIR`.
 
@@ -52,7 +52,7 @@ Your own worker is macOS. The secondary `linux`, a NixOS machine reached over `s
 
 `regina on linux -- <command> [args...]` runs one command inside the flake's dev shell on a snapshot of your workspace: uncommitted and untracked files included, what git ignores left out. Nothing it writes comes back. Commands run one at a time, each stopped after 10 minutes with the push included, output cut at 1 MiB, and an exit is never a gate result.
 
-The task keeps one workspace there, so `target/` survives between your commands and the gate's runs, but the task's first cargo command compiles the workspace cold. Prefer narrow commands: `regina on linux -- cargo clippy -p wolf-gnome --all-targets -- -D warnings`, `regina on linux -- cargo test -p wolf-gnome --test <binary> -- --exact <name>`. `regina on linux -- ./gates.sh` is the whole Linux gate, and can outlast the limit while `target/` is cold.
+The task keeps one workspace there, so `target/` survives between your commands and the gate's runs, but the task's first cargo command compiles the workspace cold. Prefer narrow commands, such as `regina on linux -- cargo test -p wolf-gnome --test <binary> -- --exact <name>`. `regina on linux -- ./gates.sh` is the whole Linux gate, and can outlast the limit while `target/` is cold.
 
 The cage smokes in `crates/wolf-gnome/tests/smoke_headless/` need a short `TMPDIR` under `/tmp`, which `gates.sh` makes for itself (`notes/gates.sh.md`, Temporary directory). Run one directly as `regina on linux -- sh -c 'TMPDIR=$(mktemp -d /tmp/w.XXXXXX) cargo test -p wolf-gnome --test smoke_headless -- --exact <module>::<name>'`. To format a Linux-only file, read `regina on linux -- cargo fmt --all -- --check` and apply the diff it prints.
 
@@ -113,7 +113,7 @@ Bazel discovers no test files, so a new one that is not wired into a target is s
 
 ## Compiling and formatting
 
-Compile what can compile: `nix develop --command bazel build //crates/<crate>:<target>`, or `regina on linux -- cargo clippy -p wolf-gnome --tests -- -D warnings`. Errors that name what the plan leaves to the coder are expected; anything else, and every lint in your files, is yours.
+Compile what can compile: `nix develop --command bazel build //crates/<crate>:<target>`. On Linux, add `todo!()` stubs of the plan's §3 signatures inside the command, so that they exist only in the snapshot, and run the gate's own clippy: `regina on linux -- sh -c 'printf "%s\n" "pub fn <name>(_<param>: <type>) -> <type> { todo!() }" >> crates/<crate>/src/<file>.rs && git diff --stat && cargo clippy --workspace --all-targets -- -D warnings'`. Name each stub parameter with a leading `_`, since an unused one fails `-D warnings`. Errors that name what the plan leaves to the coder and no stub covers are expected; anything else, and every lint in your files, is yours.
 
 Format with `nix develop --command bazel run //tools/lint:rustfmt.fix` or `nix develop --command bazel run //tools/lint:swift_format.fix`; then `git status` must list only files you may write. For wolf-gnome, read the diff `regina on linux -- cargo fmt --all -- --check` prints and apply it.
 
