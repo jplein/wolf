@@ -19,7 +19,7 @@ The `smoke_headless` test binary, with [`main.rs`](#mainrs) as its crate root. I
 
 - `--exact` takes `<module>::<name>`, as in `editor::window_renders_typed_text_under_cage`; the guards here keep bare names.
 - Every `*_under_cage` test is a cage smoke and every other test a compositor-free guard; `passed` counts both.
-- The source-scanning guards read the crate's test sources at run time: a `cage` spawned under `tests/` outside `cage_command` fails one, and a declared module left unread fails both.
+- The source-scanning guards read the crate's test sources at run time: a `cage` spawned under `tests/` outside `cage_command` fails `cage_is_only_spawned_through_the_isolating_helper`, and a declared module left unread fails every source-scanning guard.
 - A failing smoke keeps its runtime directory, with its captures and `cage.log`, and prints its path and the log's tail.
 - Spell checking is off in every smoke, so OCR reads glyphs not undercurls; see `seed_smoke_spell_override`.
 
@@ -235,9 +235,9 @@ The cage slots and private runtime directories, the per-cage session bus that ac
 
 **A fixture must not be named after the term its smoke asserts on.** The sidebar renders every file in the working directory by name and nvim's `:e` echoes the filename, so a fixture carrying the asserted word satisfies the assertion whether or not the feature did anything — a permanent silent pass, not a flake. Fixture names and asserted terms are therefore deliberately unlike: a heading lives only in a file's content. The exceptions are the smokes whose subject is a tree row, such as the sidebar-population and launch-reveal smokes, where the rendered row is the feature under test; [`fixture_guards.rs`](#fixture_guardsrs) lists each such term.
 
-That rule has three mechanical guards, because the fixture and the assertion it can disarm sit in different files: one over the sidebar filler names, one over the temp working directory's fixed path components, which the header bar renders as page text, and one over the smoke-owned relaunch fixtures.
+That rule has mechanical guards, because the fixture and the assertion it can disarm sit in different files: one over the sidebar filler names, one over the temp working directory's fixed path components, which the header bar renders as page text, and one over the smoke-owned relaunch fixtures.
 
-The third reaches past names to the fixture bodies an assertion's line, column or rendered text is derived from, and to the crossed pairs behind every exemption, in which neither member may carry the other's term. Each guard's tables are built from the assertion constants rather than retyped, so they cannot drift, and every term is checked lowercase because the OCR output is lowercased before comparison.
+`restore_fixture_names_cannot_satisfy_their_own_assertions` reaches past names to the fixture bodies an assertion's line, column or rendered text is derived from, and to the crossed pairs behind every exemption, in which neither member may carry the other's term. Each guard's tables are built from the assertion constants rather than retyped, so they cannot drift, and every term is checked lowercase because the OCR output is lowercased before comparison.
 
 **A fixture must not sit where something other than the feature would answer for it.** The preview-link smoke's source and target live in a subdirectory, not at the project root, because the captive Neovim resolves a relative path against its working directory: with both at the root, a missing base URI resolves the raw href to the same file the correct base does, and the smoke stays green with the feature reverted. Moving either fixture back to the root silently disarms it, which is why a guard asserts the subdirectory.
 
@@ -249,7 +249,7 @@ The third reaches past names to the fixture bodies an assertion's line, column o
 
 **A scenario whose quit only ends its run calls `quit_app "<label>"`.** Quit refuses while a tab holds a modified buffer ([§9](../../../../specs/application-state.md#9-closing-a-window-and-quitting)) and `:qa` closes one tab, so the helper clears `modified` on every buffer of the Neovim the keys reach and types `:WolfQuitApplication`; another tab's modified buffer still refuses it. It exits 241 when the app outlives its wait and 242 on a non-zero exit, and its stderr label names the launch. A one-window app's Quit commits the tree its last window's close would, so a relaunch smoke may use it.
 
-**A smoke closes a tab by its close button or a middle-click only once the tab is unmodified.** The close asks the tab's Neovim, which refuses while any of its buffers is modified, so `panes.rs`'s native-tabs smoke and `titlebar_tabs.rs`'s first smoke type `:set nomodified` in the closing tab first.
+**A smoke closes a tab by its close button or a middle-click only once the tab is unmodified.** The close asks the tab's Neovim, which refuses while any of its buffers is modified, so `panes.rs`'s native-tabs smoke and `titlebar_tabs.rs`'s `tabs_join_the_header_bar_from_the_second_tab_under_cage` type `:set nomodified` in the closing tab first.
 
 **A message smoke may press no key after the one that produced the message.** Any `Key`, `Mouse` or `Scroll` is dismissing input for a non-prompt toast in `wolf_core`, and so are the drawer toggle, a focus move into a terminal pane and input to one, so a stray keystroke or chord between the command and the capture clears the surface the smoke exists to read. The completion popup has the same shape for a different reason: the next key closes it.
 

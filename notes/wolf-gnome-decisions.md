@@ -174,7 +174,7 @@ A Markdown preview follows the configured appearance through a chain whose links
 
 `appearance::apply_at_launch` calls `AdwStyleManager::set_color_scheme`; libadwaita sets `GtkSettings:gtk-application-prefer-dark-theme` from it; WebKitGTK reads exactly that property and reports it to the page as `prefers-color-scheme`; the theme's light block takes. `libwebkitgtk-6.0.so` carries exactly two GTK settings notifications — `notify::gtk-application-prefer-dark-theme` and `notify::gtk-theme-name` — and neither `gtk-interface-color-scheme` nor `org.freedesktop.appearance` appears in it at all, so those two properties are its whole idea of the system preference.
 
-**libadwaita propagates that property only while the running GTK is older than 4.23.1.** The flake pins 4.20/4.22, so the chain is live. Raising GTK past that version removes it, and the preview stops following the configured appearance with nothing in this repository changed.
+**libadwaita propagates that property only while the running GTK is older than 4.23.1.** The flake pins GTK 4.22, so the chain is live. Raising GTK past that version removes it, and the preview stops following the configured appearance with nothing in this repository changed.
 
 **The write is silent.** libadwaita carries a warning string for exactly this property and suppresses its own warning while it performs the write; zero occurrences reached stderr across six `cage` runs. Nothing logs it, so `preview_document_follows_the_configured_appearance_under_cage` in [`preview.rs`](../crates/wolf-gnome/tests/smoke_headless/README.md#previewrs) is the only tripwire.
 

@@ -18,7 +18,7 @@ Moving any of the three records a document that was loaded into nothing, leaving
 
 The whole press, drag and release sequence is one `gtk::GestureDrag` rather than a `GestureClick` plus another controller. A gesture takes an implicit grab on its sequence and keeps delivering after the pointer leaves the widget, which drag-past-the-edge selection needs, where an `EventControllerMotion` stops at the pane edge. One gesture rather than two also removes any question of the pair fighting over sequence claiming.
 
-The press path relies on `drag-begin` firing for a plain press with no movement. Checked against the GTK 4.22.4 C source, the version the devShell builds against: `GtkGestureDrag` installs `gesture_class->begin`, and `GtkGesture::handle_event` emits `begin` straight from `GDK_BUTTON_PRESS` once the point count matches `n-points` (default 1). So `drag-begin` is not motion-gated, and focus plus `MouseAction::Press` on it is sound.
+The press path relies on `drag-begin` firing for a plain press with no movement. Checked against the GTK 4.22.4 C source: `GtkGestureDrag` installs `gesture_class->begin`, and `GtkGesture::handle_event` emits `begin` straight from `GDK_BUTTON_PRESS` once the point count matches `n-points` (default 1). So `drag-begin` is not motion-gated, and focus plus `MouseAction::Press` on it is sound.
 
 ## Terminal restore
 

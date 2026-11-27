@@ -274,6 +274,7 @@ The Mono face is the one cascaded because it is drawn unscaled, and every Mono g
 - Only windows opened via the overridden split commands (`<C-w>s`/`v`, `:split`/`:vsplit`, Split Horizontal and Split Vertical) become panes. Help, quickfix, preview, and `:diffsplit` windows do not, and floating or external windows are ignored.
 - Content is capped at `PaneContainerView.maxGridCols` columns and centered in a wider pane, with an editor's margins painted in the grid's own background and a preview's in the page's.
 - Scrollbar thumbs are non-interactive; thumb-drag is deferred.
+- Appearance flows one way only: the colorscheme reaches the cursor and the titlebar, but no OS colour reaches Neovim's highlight groups, and the OS reaches Neovim only as the resolved `background` ([Theming](../specs/architecture.md#theming)).
 - Markdown preview ships one theme. Cursor-follow anchors to the containing block's top inside a fenced code block, an HTML block or a table, and inside a paragraph hard-wrapped across several short source lines; an image's alt text collapses to a single anchor just after the image. The marker rules are in [the preview position-marker contract](wolf-core-decisions.md).
 - A symbols-face icon draws unscaled, about one em wide, over part of the cell after it, rather than fitted to its own cell as Ghostty fits it.
 - In a terminal pane, the cursor and blinking text draw steady, and double, dotted and dashed underlines draw as the single straight line.
