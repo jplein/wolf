@@ -1,6 +1,6 @@
 # `gates.sh`
 
-Last verified at commit `6d34ea66995b255038a21c96d7a358d5b8bca136`.
+Last verified at commit `762b4b5b1915dd43dda8420daba32062db61a86e`.
 
 ## Dev shell entry
 
@@ -26,6 +26,8 @@ Every gate runs even after one fails, so one run reports every failure, and they
 
 Prettier's scope, on both platforms, is `**/*.md` minus `.prettierignore`. The glob is quoted so prettier expands it rather than the shell, whose `**` without `globstar` descends one directory only. Prettier 3.9.10 follows no symlinked directory while it expands that glob: with the ignore file disabled it reports nothing under `.direnv/` or the `bazel-*` links, whose Markdown it flags when named directly, and the check takes about a second on macOS.
 
+`prettier-claude` checks `claude_md`, the two globs `.claude/skills/regina/**/*.md` and `.claude/agents/**/*.md`, which `.prettierignore`'s `.claude/` entry keeps out of the `prettier` step: that entry is there for `/orchestrate`'s scratch, whose dirty copies must never fail a gate. With the default ignore files prettier 3.9.10 drops every match of those globs and still prints `All matched files use Prettier code style!` with exit 0, so the step passes `--ignore-path .gitignore`. A gitignored file there stays out, as it does from `markdown_all.sh`.
+
 `run` takes one command, so each platform's `wolf-core-deps` pipeline is a function, `core_deps_cargo` or `core_deps_bazel`, which the log's first line names. Under `pipefail` a producer that fails fails the gate, and the checker exits 2 on an empty listing, so a listing that never arrived cannot pass as clean.
 
 ## Linux gates
@@ -42,6 +44,8 @@ doc-lint is a Cargo workspace of its own, so `--workspace` never reaches it and 
 
 `dev-shell-test` runs [the dev shell check](../tools/lint/README.md#how-each-target-works) in the shell `gates.sh` runs in, so it asserts what that shell's `PATH` holds. On macOS it is a member of `//tools/lint:check` as well.
 
+`markdown-all-test` runs [the test of `markdown_all.sh`'s file list](../tools/lint/README.md#how-each-target-works), which on macOS is a member of `//tools/lint:check`.
+
 `rustdoc-links` denies `rustdoc::broken_intra_doc_links` alone, so an unresolved or ambiguous link fails. `private_intra_doc_links`, a public doc linking a private item, stays a warning: wolf-core and wolf-gnome carry over a hundred each. `env` scopes `RUSTDOCFLAGS` to this one step, since exported for the run it would also reach the rustdoc invocations of `cargo test`'s doctests. `--no-deps` documents only the workspace's own crates, whose links are the only ones this repository can fix.
 
 The gate is Linux only because only Cargo builds wolf-gnome, the macOS dev shell has no `cargo`, and no Bazel target runs rustdoc. It compiles nothing after `clippy`: on a warm `target/` it takes about a second, and documenting the workspace into an empty `target/doc` took 1.5 seconds. A cold `target/` was not measured.
@@ -54,7 +58,7 @@ After a relink, `commands.rs` and `drawer_last_pane.rs` run together failed 5 of
 
 ## macOS gates
 
-`bazel test //...` runs every target not tagged `manual`: the `//tools/lint` checks, the crate tests, and `:Wolf` through `bundle_layout_test`. Prettier has no Bazel target, so it is a gate of its own. The `:comments` target runs doc-lint per file, and its checkout-wide rules — `md-link`, `md-anchor`, `notes-orphan`, `notes-unlinked`, `bazel-coverage` — run only from the `doc-lint` gate's `--root`.
+`bazel test //...` runs every target not tagged `manual`: the `//tools/lint` checks, the crate tests, and `:Wolf` through `bundle_layout_test`. Prettier has no Bazel target, so `prettier` and `prettier-claude` are gates of their own. The `:comments` target runs doc-lint per file, and its checkout-wide rules — `md-link`, `md-anchor`, `notes-orphan`, `notes-unlinked`, `bazel-coverage` — run only from the `doc-lint` gate's `--root`.
 
 `lint` runs `//tools/lint:check` alone, so a lint failure is named as one, and `build` separates a compile failure from a test failure; `test` reuses both. `WolfRelease` and `InstallWolf` stay out: both are `manual`, and the first rebuilds the whole graph at `-c opt`.
 

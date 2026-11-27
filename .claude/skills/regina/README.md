@@ -2,7 +2,7 @@
 
 This directory runs wolf's tasks through regina, checked out at `~/dev/jplein/regina`, with this Mac as the primary worker and `mugatu` as a Linux secondary. [`SKILL.md`](SKILL.md) is the procedure; [build.md](../../../build.md#under-regina) has what `gates.sh` needs from a regina environment.
 
-**Nothing under `.claude/` is gated.** Prettier, the Markdown checker and doc-lint all skip it, so formatting and the comment limits are kept by hand: format a file here with `prettier --ignore-path /dev/null --write <file>`.
+The Markdown here and under `.claude/agents/` gates on both workers: prettier, the markdown checker, and doc-lint's `md-link` and `md-anchor`. Prettier reaches it through `gates.sh`'s `prettier-claude` step and the same command in the documentation gate, since `.prettierignore` keeps the rest of `.claude/` out. Nothing checks the comment limits of `regina-run.sh`, `flow.yaml` and `regina.conf.template`, nor any file of the rest of `.claude/`. Format a file here with `prettier --ignore-path /dev/null --write <file>`.
 
 #### `SKILL.md`
 

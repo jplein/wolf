@@ -75,7 +75,7 @@ Purpose: `bazel-coverage`, reported against each package's `BUILD.bazel`.
 
 #### `walk.rs`
 
-Purpose: the sorted, root-relative file list for `--root`. Symlinks, to files or directories, are never followed, so a `result` link into the Nix store is never walked.
+Purpose: the sorted, root-relative file list for `--root`. Symlinks, to files or directories, are never followed, so a `result` link into the Nix store is never walked. Under each `WalkConfig::markdown_prefixes` entry it then lists `.md` files only, even inside a skipped directory, and never starts there when any component of the prefix is a symlink.
 
 #### `strip.rs`
 

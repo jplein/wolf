@@ -24,7 +24,7 @@ A sidecar has one `LINE RULE` pair per line, such as `7 comment-lines`, and an e
 
 **Decisions**
 
-- No fixture is named `BUILD.bazel`, `BUILD`, `MODULE.bazel`, `Cargo.toml`, `flake.nix`, `.envrc` or `.gitignore`, and no fixture directory is named `target`, because Bazel, Cargo, Nix, direnv or git would treat it as a real file. `api.rs` tests those mappings instead.
+- No fixture is named `BUILD.bazel`, `BUILD`, `MODULE.bazel`, `Cargo.toml`, `flake.nix`, `.envrc` or `.gitignore`, and no fixture directory is named `target` or `.claude`, because Bazel, Cargo, Nix, direnv, git or Claude Code would treat it as a real one. `api.rs` tests those mappings instead.
 - A fixture file cannot carry trailing whitespace, which editors and formatters strip, so `fixtures.rs` builds that case in code.
 - Fixtures reach their tests through the `:fixtures` and `:files_mode_fixtures` filegroups in [`../BUILD.bazel`](../BUILD.bazel), never a glob in `data`, because [`:rustfmt.fix`](../../lint/README.md#how-each-target-works) rewrites every `.rs` file a Rust target lists directly, and a fixture's bytes are test input. A new test that reads fixtures takes them the same way.
 
@@ -37,14 +37,14 @@ Purpose: the data-driven runner over `fixtures/`, plus the repo-mode, `same-code
 **Covers**
 
 - Every `lang/` fixture against its sidecar through `lint_source`. It fails when there are no fixtures, a fixture lacks a sidecar, a sidecar is stray, a `Language` variant has no fixture, or the `notes.txt` control is missing.
-- `check_root` over `repo/`: the exact `(path, line, rule)` set and the wording of the `doc-ref`, `doc-anchor`, `notes-orphan`, `notes-unlinked` and `workflow-ref` messages.
+- `check_root` over `repo/`: the exact `(path, line, rule)` set and the wording of the `doc-ref`, `doc-anchor`, `notes-orphan`, `notes-unlinked` and `workflow-ref` messages. Under `.claude/`, only the `.md` files of `.claude/skills/regina/` and `.claude/agents/` report, and a `markdown_prefixes` walk never starts through a symlinked prefix or component of one.
 - `strip_comments` and the `same-code` subcommand over `same_code/`; `run()` exit codes, the exact finding line, and path order.
 - `--files` running `workflow-ref` over `cli/workflow_ref.rs`, quoting each match in its source case.
 
 **Gotchas**
 
 - The fixture root comes from `DOC_LINT_FIXTURES` under Bazel, relative to the runfiles root, and from `CARGO_MANIFEST_DIR` otherwise. The CLI tests pass cwd-relative paths, relying on Cargo running tests from the package root.
-- The repo test copies `repo/` to a scratch directory first, because Bazel runfiles are symlinks and the walk never follows them. It creates `docs/dir with space/`, `node_modules/`, `.workspace/`, `crates/wolf-ffi/generated/` and two symlinks there at run time, which Bazel runfiles or a global gitignore could not carry.
+- The repo test copies `repo/` to a scratch directory first, because Bazel runfiles are symlinks and the walk never follows them. It creates `docs/dir with space/`, `node_modules/`, `.workspace/`, `crates/wolf-ffi/generated/`, a `.claude/` tree and two symlinks there at run time. Bazel runfiles or a global gitignore could not carry the others, and Claude Code would load a committed `.claude/skills/` as a skill.
 
 #### `files_mode.rs`
 

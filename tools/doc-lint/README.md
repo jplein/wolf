@@ -81,7 +81,7 @@ A file with no language is never read. Text inside a string is string content, s
 
 ## Exclusions
 
-The walk never follows symlinks. It skips directories named `.git`, `target`, `.direnv`, `.worktrees`, `.workspace`, `.claude`, `node_modules`, `.wolf`, `bazel-*` and `*.xcodeproj`, and the prefixes `crates/wolf-ffi/generated/`, `tools/doc-lint/tests/fixtures/` and `tools/lint/testdata/`, which are not references either. `WalkConfig::repo_default()` holds both lists.
+The walk never follows symlinks. It skips directories named `.git`, `target`, `.direnv`, `.worktrees`, `.workspace`, `.claude`, `node_modules`, `.wolf`, `bazel-*` and `*.xcodeproj`, and the prefixes `crates/wolf-ffi/generated/`, `tools/doc-lint/tests/fixtures/` and `tools/lint/testdata/`, which are not references either. The walk still lists the `.md` files under `.claude/skills/regina/` and `.claude/agents/`, never through a symlink, so `md-link` and `md-anchor` check them; nothing else under `.claude/` is read. `WalkConfig::repo_default()` holds the three lists.
 
 ## Building and testing
 
