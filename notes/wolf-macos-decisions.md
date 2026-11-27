@@ -137,7 +137,7 @@ A tab Open Folder opens is a folder tab whatever `StateSeam.launchDecision` woul
 
 Every Open Folder, a focus included, records the folder through `record_recent_dir` on the core of the tab that lands on it. That tab's Neovim starts in the folder, and core never records a launch directory.
 
-The palette lists every recent directory, the invoking tab's own included, whose row focuses that tab harmlessly. An Open Recent row for a folder open elsewhere focuses §4's tab, which can be a background tab, where a Switch to Window row raises a window as it stands.
+The palette lists every recent directory, the invoking tab's own included, whose row focuses that tab harmlessly. An Open Recent row for a folder open elsewhere focuses §4's tab, which can be a background tab, while a Switch to Window row raises a window as it stands.
 
 ## Opening files from outside Wolf
 
@@ -243,6 +243,8 @@ Input methods reach a terminal pane through `NSTextInputClient`, and only a term
 
 `syncTerminalFocus` sets each `TerminalPaneView`'s `focused`, which picks the cursor's shape under [the render contract](../specs/terminal-panes.md#the-render-contract). The painter decides rather than core, because focus belongs to a pane and a frame to a session, and the container knows its active pane at once, where core would learn it a wake late and publish a frame although no cell changed.
 
+A terminal pane's focus loss is what makes core rescan the project ([The file-tree rescan](../specs/terminal-panes.md#the-file-tree-rescan)), so `resetAfterRestart()` ends with `syncTerminalFocus()`, though no terminal view is left: it reports the loss of the session whose pane the restart dropped.
+
 Close Pane's menu item is always enabled, because on the tree's last leaf, even beside the drawer, only Neovim knows whether to close the tab or refuse unsaved changes ([`wolf_close_pane`](../runtime/nvim/README.md#wolf_close_pane)). `closeActivePane()` and `splitActivePane(_:)` send `focus_win` for the active pane's window first, on core's ordered input channel, so they act on the pane the view shows active even while a focus move is in flight. A picked file goes through `openPickedFile`, which sends it to `openFile` while the drawer is active, because `open` edits in Neovim's current window, the drawer's ([The drawer](../specs/terminal-panes.md#the-drawer)).
 
 The drawer is no `PaneTree` leaf, so the container hit-tests its top edge itself and holds its share outside `tree`, as the share belongs to the window, not to Neovim: a restart keeps it, and the window state saves it as the tab's drawer. After a crash-restart, `TabCore.respawnNeovim` hands the view its [`terminalRestore`](../crates/wolf-macos/Sources/WolfKeyMap/README.md#livenessseamswift) steps, which run once the view is ready ([why](crates/wolf-macos/Sources/WolfMacOS/PaneContainerView.swift.md#terminal-restore)).
@@ -251,7 +253,7 @@ The drawer is no `PaneTree` leaf, so the container hit-tests its top edge itself
 
 [The intents contract](../specs/architecture.md#output-intents-core--front-end) owns what Zoom Pane does, and [`PaneZoom`](../crates/wolf-macos/Sources/WolfKeyMap/README.md#panezoomswift) every rule, so `PaneContainerView` holds one value, `zoomedPane`, and its comments say how each path treats it. The toggle considers the tree's leaves plus the drawer, so the drawer can be zoomed.
 
-Zoom is front-end geometry, and Neovim is never told. `:only` would close the hidden windows, and `<C-w>_`, `<C-w>|` or `:resize` would size Neovim's frames, which are not the pane geometry: the front-end sizes each grid with `ResizeGrid`. So the view never touches `tree`, its weights or `drawerWeight`, so an unzoom restores them exactly and the window state records the unzoomed tree.
+Zoom is front-end geometry, and Neovim is never told. `:only` would close the hidden windows, and `<C-w>_`, `<C-w>|` or `:resize` would size Neovim's frames, which are not the pane geometry: the front-end sizes each grid with `ResizeGrid`. The view therefore never touches `tree`, its weights or `drawerWeight`, so an unzoom restores them exactly and the window state records the unzoomed tree.
 
 A pane joining the layout, by a split or the drawer opening, unzooms, since it must show. Toggle Terminal unzooms first unless the drawer is the zoomed pane, whose zoom lasts until `.panesChanged` sees the drawer close: unzooming on the toggle would show the hidden panes for a round trip before the close.
 

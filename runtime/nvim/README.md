@@ -28,7 +28,7 @@ None of the notifications below is a redraw frame, so none bumps the snapshot `s
 
 #### `wolf_setup_current_file_tracking(chan)`
 
-Tracks the active buffer. A `BufEnter`/`BufWinEnter`/`BufFilePost`/`FileType` autocmd notifies **`wolf_current_file`** with four positional args: `expand('%:p')` (empty for an unnamed buffer), `vim.bo.filetype`, `is_preview`, and `is_full_width`, which core folds into `Snapshot.current_file` and its `current_*` siblings.
+Tracks the active buffer. A `BufEnter`/`BufWinEnter`/`BufFilePost`/`FileType` autocmd notifies **`wolf_current_file`** with four positional args: `expand('%:p')` (empty for an unnamed buffer), `vim.bo.filetype`, `is_preview`, and `is_full_width`. Core folds them into `Snapshot.current_file` and its `current_*` siblings.
 
 A preview scratch pane (carrying `b:wolf_preview_source`) reports `("", "", true, <source buffer's b:wolf_full_width>)`, so core never treats the `Preview: <name>` scratch name as a real file, and the full-width checkmark tracks the document. `FileType` is in the event list so the filetype follows the active buffer even when detection lands after the buffer switch. Exposes `_G.wolf_emit_current_file`.
 
@@ -340,7 +340,7 @@ The durable dictionary is the global `'spellfile'` at `WOLF_SPELL_DIR/en.utf-8.a
 
 **`init_user.lua` loads last, and its errors warn instead of failing startup**, so user settings override every Wolf default and a broken user file costs a `:messages` warning rather than the editor. Core seeds it once into an empty directory and never rewrites it, as [`state.rs`](../../crates/wolf-core/src/README.md#staters) describes.
 
-**A typed close reports no intent.** `<C-w>c`, `<C-w>q` and `:close` run a guarded `nvim_win_close` that refuses the tab's last pane, because the shell already observes `win_close`.
+**A typed close reports no intent.** `<C-w>c`, `<C-w>q` and `:close` run a guarded `nvim_win_close`, which refuses the tab's last pane, and report nothing: the shell observes `win_close`.
 
 **The `:q` family routes through internal user commands, not registry commands**, and closes the tab as [§5](../../specs/command-lifecycle.md#5-invocation--drain) gives. A failing write variant aborts the quit, as native `:wq` does: `:wqa` and `:xa` first run `:wall`, whose failure aborts. Unless forced, the tab closes only once [`wolf_refuse_unsaved`](#wolf_refuse_unsaved) finds nothing unsaved, hidden buffers included, because the tab's Neovim and all its buffers end when the tab closes. Normal-mode `ZZ` and `ZQ` map onto it too, because the native keys quit Neovim on a tab's last pane, a crash that ends every wait in the tab with `1` ([§6](../../specs/cli-and-file-open.md#6-waiting)).
 
