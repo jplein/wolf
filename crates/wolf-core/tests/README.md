@@ -222,7 +222,7 @@ Headless (`//crates/wolf-core:db`: real SQLite files in tempdirs, no nvim, no `W
 
 Real Neovim and the default shell, pinned to `/bin/sh`, in the drawer's pty (`//crates/wolf-core:drawer_last_pane`, as `terminal_drawer`, with `size = "medium"`).
 
-**Covers** — the tab's last pane beside the drawer, which [`runtime/nvim/README.md`](../../../runtime/nvim/README.md#decisions) defines with the drawer not counting:
+**Covers** — the tab's last pane beside the drawer, which [`wolf_setup_layout`](../../../runtime/nvim/README.md#wolf_setup_layoutchan) defines with the drawer not counting:
 
 - `:bd` and `:bw` in the only editor window keeping it, current, on the file shown before, or on a new unnamed listed buffer when no other is listed; `:bd %` deleting the shown buffer, not the replacement; the replacement being Neovim's own jumplist pick with the drawer closed; two windows on the buffer keeping one; a modified buffer refused with `E89` in the toast and nothing switched.
 - With the drawer closed, `:bd` keeping the window on the earlier file, and `:bd <n>` deleting only that hidden buffer.
@@ -934,12 +934,12 @@ The real `wolf` binary, against a real `OpenListener` or a raw `UnixListener` th
 
 #### `wolf_wait.rs`
 
-`wolf --wait` end to end, [§6](../../../specs/cli-and-file-open.md#6-waiting): the real `wolf` over a real `OpenListener`, core and Neovim (`//crates/wolf-core:wolf_wait`: the real-nvim runfiles and env, plus `:wolf` as `WOLF_TEST_WOLF_BIN`, `no-sandbox`, `size = "medium"`).
+`wolf --wait` end to end, [§6](../../../specs/cli-and-file-open.md#6-waiting): the real `wolf`, `OpenListener`, core and Neovim (`//crates/wolf-core:wolf_wait`: staged nvim runfiles, `WOLF_NVIM_BIN`, `no-sandbox`, `:wolf` as `WOLF_TEST_WOLF_BIN`).
 
-**Covers** — exit `0` after `:q` on the waited split, `:wq`, `ZZ`, `ZQ` or Close Pane on the tab's last pane, `:bd` and `:bw`, and `:bd` beside the drawer, keeping the pane; exit `1` after `:cq` in the waited window, beside the drawer too, which keeps Neovim alive, while `:cq` elsewhere quits Neovim; a hide by `:e other` still waiting, with the toast, and exit `0` once `:q` closes the tab; exit `1` when the tab closes, by Close Tab too, when Neovim crashes or a stalled Neovim restarts, and for a path no buffer shows; a file already shown waited on its buffer; a hung-up command leaving no toast and other waits alone; and `git commit` with `wolf --wait` as its editor, committing the typed message, or nothing after `:cq`.
+**Covers** — exit `0` after `:q` on the waited split; `:wq`, `ZZ`, `ZQ` or Close Pane on the tab's last pane; `:bd`, `:bw`, and `:bd` beside the drawer, keeping the pane; and `:q` after a hide by `:e other`, still waiting with the toast. Exit `1` after `:cq` in the waited window, beside the drawer too, keeping Neovim, while `:cq` elsewhere quits it; on any tab close, Close Tab's included; on a crash or a stalled Neovim's restart; and for a path no buffer shows. Also a shown file waited on its buffer; a hung-up command leaving no toast and other waits alone; and `git commit` with `wolf --wait` as editor, committing the typed message, or nothing after `:cq`.
 
 **Gotchas**
 
-- Each test is the front-end: it drains the wait with `drain_taken`, sends `InputEvent::Open`, then `wait_on`. A case that closes the last pane shuts the core down as soon as `CloseTab` drains, so the `0` must arrive first.
-- It enters a kept, canonical base dir and runs a copy of `wolf` at `bin/wolf`, for `wolf_command.rs`' reasons. Each state dir is relative to it.
-- The `git` cases run `git` from `PATH`, the system's on macOS and the dev shell's on Linux, with no system or global config.
+- Each test is the front-end: `drain_taken`, `InputEvent::Open`, then `wait_on`. A case closing the last pane shuts the core down once `CloseTab` drains, so the `0` must arrive first.
+- It enters a kept, canonical base dir and runs a copy of `wolf` at `bin/wolf`, for `wolf_command.rs`' reasons, each state dir relative to it.
+- `git` comes from `PATH`, the system's on macOS and the dev shell's on Linux, without system or global config.

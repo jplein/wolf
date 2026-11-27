@@ -31,7 +31,7 @@ use_repo(nvim, "nvim_macos_arm64", "nvim_macos_x86_64")
 
 ## Bumping the pinned Neovim version
 
-**`_VERSION` tracks the Neovim in the Linux flake lock.** Both platforms load the same captive `init.lua`, and [`runtime/nvim/README.md`](../../runtime/nvim/README.md) and the test comments state behaviour measured on one Neovim version, so a macOS pin that drifts from Linux leaves those claims true on one platform only. Read the Linux version with `nix eval --raw --inputs-from . nixpkgs#legacyPackages.x86_64-linux.neovim-unwrapped.version`.
+**`_VERSION` tracks the Neovim in the Linux flake lock.** Both platforms load the same captive `init.lua`, and [`runtime/nvim/README.md`](../../runtime/nvim/README.md), [the init.lua notes](../../notes/runtime/nvim/init.lua.md) and the test comments state behaviour measured on one Neovim version, so a macOS pin that drifts from Linux leaves those claims true on one platform only. Read the Linux version with `nix eval --raw --inputs-from . nixpkgs#legacyPackages.x86_64-linux.neovim-unwrapped.version`.
 
 Only `_VERSION` in `extensions.bzl` and `EXPECTED_VERSION` in `nvim_version_test.sh` name the pin. Other labels say "the pinned Neovim", and a measured claim names the version it was measured on, so a bump changes those two strings and the checksums, and each measurement keeps stating where it came from.
 

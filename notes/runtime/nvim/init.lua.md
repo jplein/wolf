@@ -1,6 +1,6 @@
 # `runtime/nvim/init.lua`
 
-Last verified at commit `cc60afb1257ee0c5474105e363d0d452ba050afb`.
+Last verified at commit `3a62e0a429331b259be6cf829d920fdd22556c56`.
 
 ## Spellfile is global
 
@@ -12,6 +12,8 @@ Left unset, nvim derives `'spellfile'` from the first writable runtimepath entry
 
 The environment fallback is the only thing that fires the treesitter gate on Linux, where no sibling tree exists. Deleting it removes the vendored queries, the parsers and the `FileType=markdown` autocmd, which costs fenced-block injections but not base markdown highlighting.
 
+Measured on the pinned Neovim, a markdown buffer under `--clean -u NONE`, with no plugin and no gate, already reports `vim.treesitter.highlighter.active[buf] ~= nil`. That expression therefore cannot witness the gate and must not be used as evidence for it; the discriminating readback is an injected child langtree for the fenced language.
+
 The fallback works because `vim.env` is a view over the process environment, which `--clean` does not touch. The captive nvim inherits that environment: `nvim.rs` overrides only its `NVIM_APPNAME`, `XDG_*` and `WOLF_*` variables on the child and calls no `env_clear`, and `cage` clears nothing either. The textobjects tree is a bare sibling probe on purpose; see the Limitations in [the runtime README](../../../runtime/nvim/README.md#limitations).
 
 ## User parser activation
@@ -20,17 +22,27 @@ The explicit `vim.cmd.runtime("plugin/nvim-treesitter.lua")` is what registers `
 
 Only that plugin file is sourced: the sibling `query_predicates.lua` registers predicates that no bundled language uses. The `pcall` around `setup()` degrades a version incompatibility to a missing `:TSInstall` instead of a startup error.
 
+`setup()` is a config merge that itself eagerly prepends `install_dir` by raw string concat. The explicit option-list prepend after it dedupes, so the entry lands once and at the front whether or not the `pcall`ed setup succeeded. `:TSInstall` compiling a parser depends on the user's own toolchain: Wolf guarantees only a durable install target that survives restarts.
+
 ## Buffer tracking emits
 
-Coalescing also collapses the two to four identical emits a plain `:e file` produces into one, which keeps stale in-flight notifications from racing a back or forward move. The one synchronous emit, `wolf_sync_buffers`, is safe for the history fold because it runs only once a rebuild is fully realized: it carries the settled state, and the scheduled emit that follows is identical. `WinClosed` fires while the closing window is still listed by `nvim_list_wins()`, which is harmless: core wholesale-replaces both per-window maps, so the next emit's survivor set drops it.
+A scripted `:terminal <cmd>` fires `BufEnter` with a brand-new unnamed buffer, then `BufFilePost` with a `term://` name, which emitted eagerly would be two history entries for one user action. Coalescing also collapses the two to four identical emits a plain `:e file` produces into one, which keeps stale in-flight notifications from racing a back or forward move. The one synchronous emit, `wolf_sync_buffers`, is safe for the history fold because it runs only once a rebuild is fully realized: it carries the settled state, and the scheduled emit that follows is identical. `WinClosed` fires while the closing window is still listed by `nvim_list_wins()`, which is harmless: core wholesale-replaces both per-window maps, so the next emit's survivor set drops it.
+
+Measured on Neovim 0.12.6, a background `nvim_win_set_buf` fires `BufEnter` and `BufWinEnter` with the target window and buffer temporarily current, and restores focus before the call returns. The one bind that fires nothing is a no-op rebind of the buffer a window already shows, which changes nothing to emit.
 
 ## Owner path matching
+
+`wolf_untitled_swap_exists` has two criteria. The first stats the `%`-mangled name `findswapname` derives from the full path, which the trailing `//` in `'directory'` selects: precisely the swap nvim checks first. The second scans `WOLF_SWAP_DIR` and compares each swap's recorded owner path, which is broader: a `.swo` leftover still holds recoverable edits without raising a dialog, and the scan is the fallback if the mangling ever drifts from nvim's.
+
+The owner path is normalized forward, never the query backward. nvim writes it `home_replace`d, so a plain equality against an absolute path silently never matches under `$HOME`, which is every real user project. `fnamemodify(fname, ":p")` expands it and is the identity for a path already absolute. Not `expand()`, which also performs wildcard expansion and would mangle a name containing one, and not `fnamemodify(abspath, ":~")`, which yields `~/…` rather than the `~<user>/…` form nvim stores.
 
 Measured on Linux, the swap for `/home/<user>/project/Untitled.md` records its owner as `~<user>/project/Untitled.md`, because nvim writes `b0_fname` through `home_replace`. The `fname == abspath` fast path is subsumed by the `fnamemodify(fname, ":p")` branch, and it stays because it is the only branch the fixtures outside `$HOME` (`/tmp`, `/private/var/folders`) exercise.
 
 nvim's own `findswapname` uses both identities in turn: it derives the swap name from `b_ffname`, then counts an existing `.swp` as this file's, the one `ATTENTION` and `SwapExists` concern, only when that swap's expanded `b0_fname` names the same file, inode included. A swap owned by a different file is skipped for the next suffix. The two criteria in `wolf_untitled_swap_exists` check each identity on its own, so either one counts as a collision.
 
 ## Swapfile stays on
+
+`nvim_buf_set_name` does not skip the swap check: the rename reaches `ml_setname`, which calls `ml_open_file` and creates the swap file right there, on a path where nvim has not armed the `SwapExists` choice machinery. Under `A` a stale swap there raises nothing, but the new swap lands on a `.swo`, which no later session offers. So every naming call site treats an existing swap for the candidate name as a collision.
 
 For a buffer whose swap name fits under the cut (see [Long-path swaps](#long-path-swaps)), `'swapfile'` stays on when it is named, so the swap is created eagerly at naming time. That atomically claims the name against a sibling nvim in the same project, and it is what makes an unsaved Untitled buffer crash-recoverable at all.
 
@@ -44,7 +56,9 @@ Past the cut, three things break. `recover_names` searches for the uncut name, s
 
 So a buffer whose full or resolved path exceeds `SWAP_NAME_MAX` gets `noswapfile`, with `b:wolf_long_path_noswap` recording that Wolf, not the user, turned it off. `BufNew` is the only per-buffer event early enough, because `check_need_swap` runs before `BufReadPre` and `BufNewFile`. The `BufReadPost`/`BufNewFile` backstop exists because, measured on 0.12.6, `:bdelete` then `:e F` resets `&l:swapfile` to the global value; by then a stale cut-name swap has been passed over under `A`, or, with `A` dropped by the user, answered `e` by the `SwapExists` callback's first branch, so it is never deleted.
 
-`BufFilePost` turns swap back on after a rename onto a short path, unless `wolf_untitled_swap_exists` finds a swap there: setting `'swapfile'` opens the swap at once, on a path where `SwapExists` is not armed. `wolf_name_untitled` runs the same sync directly, because `rename_buffer` applies `BufFilePost` unforced and the startup rename happens inside the non-nested `VimEnter` callback.
+So the `SwapExists` callback answers `e` for a long-path swap and never deletes it: recovering a cut name fails, and the delete would destroy the only copy.
+
+`BufFilePost` turns swap back on after a rename onto a short path, unless `wolf_untitled_swap_exists` finds a swap there: setting `'swapfile'` opens the swap at once, on a path where `SwapExists` is not armed, so it would land on a `.swo`. `wolf_name_untitled` runs the same sync directly, because `rename_buffer` applies `BufFilePost` unforced and the startup rename happens inside the non-nested `VimEnter` callback.
 
 Rejected fixes: dropping `//` (basenames collide across directories), a per-buffer or hashed `'directory'` (the option is global), and shortening paths only in tests (users would keep losing edits).
 

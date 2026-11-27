@@ -20,7 +20,7 @@ Purpose: Resolves one terminal cell's packed style, from [`FfiTerminalCell`](../
 **Decisions**
 
 - The colours swap when exactly one of inverse and selected holds, so a selected reverse-video cell draws plain.
-- Blink is ignored and every underline but curly draws straight; these are present limitations in [wolf-macos-decisions.md](../../../../../notes/wolf-macos-decisions.md#terminal-panes).
+- Blink is ignored and every underline but curly draws straight; these are present limitations in [wolf-macos-decisions.md](../../../../../notes/wolf-macos-decisions.md#present-limitations).
 
 #### `TerminalDamage.swift`
 
