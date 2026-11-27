@@ -132,14 +132,20 @@ core_deps_bazel() {
     | ./tools/lint/wolf_core_deps_check.sh
 }
 
+# .prettierignore keeps .claude/ out for its scratch; these are the files of it that gate.
+# See notes/gates.sh.md#gate-order
+claude_md=(".claude/skills/regina/**/*.md" ".claude/agents/**/*.md")
+
 # Fast to slow, so a formatting slip fails in seconds. See notes/gates.sh.md#gate-order
 if [ "$platform" = linux ]; then
   # See notes/gates.sh.md#linux-gates
   run fmt cargo fmt --all -- --check
   run fmt-doc-lint cargo fmt --manifest-path tools/doc-lint/Cargo.toml -- --check
   run prettier prettier --check "**/*.md"
+  run prettier-claude prettier --check --ignore-path .gitignore "${claude_md[@]}"
   run markdown ./tools/lint/markdown_all.sh
   run markdown-check-test ./tools/lint/markdown_check_test.sh
+  run markdown-all-test ./tools/lint/markdown_all_test.sh
   run wolf-core-deps-check-test ./tools/lint/wolf_core_deps_check_test.sh
   run wolf-gnome-wording ./tools/lint/wolf_gnome_wording_check.sh
   run wolf-gnome-wording-check-test ./tools/lint/wolf_gnome_wording_check_test.sh
@@ -164,6 +170,7 @@ else
   bazel_flags=(--keep_going --color=no --curses=no --show_progress_rate_limit=30)
   test_flags=(--test_output=errors --test_summary=short)
   run prettier prettier --check "**/*.md"
+  run prettier-claude prettier --check --ignore-path .gitignore "${claude_md[@]}"
   run doc-lint bazel run --color=no --curses=no //tools/doc-lint:doc_lint -- --root "$PWD"
   run wolf-core-deps core_deps_bazel
   run lint bazel test "${bazel_flags[@]}" "${test_flags[@]}" //tools/lint:check

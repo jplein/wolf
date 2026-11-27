@@ -10,20 +10,19 @@ Purpose: the `regina` skill, the procedure an interactive session follows to car
 
 #### `regina-run.sh`
 
-Purpose: starts and finishes a run with a tool fixed at its start, and removes the worktrees of merged branches.
+Purpose: starts and finishes a run with a tool fixed at its start, and removes merged branches' worktrees.
 
-**Public API** — `start BRANCH` creates or reuses `.worktrees/BRANCH`, writes the run directory `.workspace/BRANCH`, whose wrapper `regina` every later command goes through, and registers the project. `finish BRANCH LABEL` fast-forwards the branch to `regina/land/LABEL` and leaves its worktree. `clean [BRANCH...]`, by default every worktree under `.worktrees/`, expunges each qualifying worktree's Bazel output base, then removes it and its branch. It exits 1 on a refusal, a `failed` line or a named branch it did not remove; a sweep's skips leave it 0.
+**Public API** — `start BRANCH`, `finish BRANCH LABEL` and `clean [BRANCH...]`, as [`SKILL.md`](SKILL.md#workflow) steps 3, 8 and 9 use them; `clean` with no branch sweeps `.worktrees/`. It exits 1 on a refusal, a `failed` line or an unremoved named branch, never for a sweep's skips.
 
 **Decisions**
 
 - The state root, `~/.local/state/wolf-regina/KEY`, is outside the run directory: Bazel's `TEST_TMPDIR` nests under it, and `short_tempdir` (`crates/wolf-core/tests/common/mod.rs`) refuses one over `SHORT_TEMP_ROOT_MAX`. So `start` refuses a canonical root over `state_max` bytes, and `regina.conf` names the canonical path, never the `state` link.
 - `clean` compares physical paths, so a symlink under `.worktrees` cannot lead it outside.
-- Merged means an ancestor of local `main`, so a just-started branch that has not diverged from it qualifies. `git branch -d`, never `-D`, keeps git's own check, made against the branch's upstream or else the main checkout's `HEAD`, so a refusal can mean `HEAD` is off `main` or a stale upstream.
+- Merged means an ancestor of local `main`, which a just-started branch is. A `git branch -d` refusal can mean `HEAD` is off `main` or a stale upstream.
 - Untracked files count as changes; ignored ones such as `bazel-*` do not, or no built worktree would qualify.
-- Only a held `<state>/regina.lock` marks a live run, as the file outlives every command; a failing `status --open` skips. The probe takes a shared lock for an instant, so a regina command starting then fails with `state locked` and can be retried.
-- `clean` always expunges when `bazelisk` or `bazel` is on `PATH`, having no cheap test that a worktree never ran Bazel.
-- A worktree whose directory is missing is skipped and stays registered: `git worktree prune` would also drop records `clean` never chose.
-- The run directory and the state root stay for a later `start`; remove the state root after `chmod -R u+w`, as Bazel's output roots in it are read-only.
+- Only a held `<state>/regina.lock` marks a live run, as the file outlives every command; a failing `status --open` skips.
+- A worktree with a missing directory is skipped and stays registered: `git worktree prune` would also drop records `clean` never chose.
+- The run directory and state root stay for a later `start`; remove the state root after `chmod -R u+w`, as its Bazel output roots are read-only.
 
 #### `regina.conf.template`
 

@@ -333,13 +333,17 @@ const THREE_LINE_COMMENT: &str = "// one\n// two\n// three\nfn x() {}\n";
 /// comments (doc comments included, strings and placeholders excluded), notes-orphan and
 /// notes-unlinked for mirrors, md-link and md-anchor for Markdown, workflow-ref from a source
 /// comment but not from the Markdown in `docs/history.md`, and nothing from skipped dirs, skipped
-/// prefixes or symlinks.
+/// prefixes or symlinks. Under `.claude/`, only the Markdown of `.claude/skills/regina/` and
+/// `.claude/agents/` is checked: their `.md` files get md-link and md-anchor, while a `.rs` file
+/// there and the Markdown of `.claude/commands/`, `.claude/` itself and `.claude/skills/other/`
+/// report nothing.
 ///
 /// The fixture is copied to a scratch dir first, since Bazel's runfiles are symlinks and the
 /// walk never follows them. The space-named dir, `node_modules/`, `.workspace/`, the generated
-/// dir and the symlinks are created at run time. Bazel runfiles have historically rejected paths
-/// with spaces, and `node_modules/` is commonly ignored by a global gitignore, which would drop it
-/// from commits.
+/// dir, the `.claude/` tree and the symlinks are created at run time. Bazel runfiles have
+/// historically rejected paths with spaces, `node_modules/` is commonly ignored by a global
+/// gitignore, which would drop it from commits, and Claude Code loads skills from a nested
+/// `.claude/skills/`, which a committed fixture would plant in the repository.
 #[test]
 fn repo_mode_reports_exactly_the_planted_findings() {
     let scratch = scratch_dir("repo");
@@ -357,6 +361,21 @@ fn repo_mode_reports_exactly_the_planted_findings() {
     );
     write_file(&root.join("node_modules/x.rs"), THREE_LINE_COMMENT);
     write_file(&root.join(".workspace/x.rs"), THREE_LINE_COMMENT);
+    write_file(
+        &root.join(".claude/skills/regina/x.md"),
+        "# X\n\nMissing: [m](missing.md).\n\nAbsent: [a](#nope).\n\n\
+         Present: [p](../../../docs/x.md#x).\n",
+    );
+    for md in [
+        ".claude/skills/regina/agents/y.md",
+        ".claude/agents/z.md",
+        ".claude/commands/c.md",
+        ".claude/c.md",
+        ".claude/skills/other/o.md",
+    ] {
+        write_file(&root.join(md), "[m](missing.md)\n");
+    }
+    write_file(&root.join(".claude/skills/regina/x.rs"), THREE_LINE_COMMENT);
     write_file(
         &root.join("crates/wolf-ffi/generated/g.swift"),
         THREE_LINE_COMMENT,
@@ -376,6 +395,10 @@ fn repo_mode_reports_exactly_the_planted_findings() {
         .collect();
     got.sort();
     let mut want: Vec<(String, usize, String)> = [
+        (".claude/agents/z.md", 1, "md-link"),
+        (".claude/skills/regina/agents/y.md", 1, "md-link"),
+        (".claude/skills/regina/x.md", 3, "md-link"),
+        (".claude/skills/regina/x.md", 5, "md-anchor"),
         ("docs/x.md", 7, "md-link"),
         ("docs/x.md", 13, "md-anchor"),
         ("docs/x.md", 28, "md-link"),
@@ -399,11 +422,17 @@ fn repo_mode_reports_exactly_the_planted_findings() {
          scanned; anything under node_modules, .workspace, crates/wolf-ffi/generated, linked or \
          src/linked_file.rs means a skip rule or the no-symlink rule is broken; a missing \
          src/history.rs:2 means workflow-ref does not run in root mode, and any workflow-ref in \
-         docs/history.md means Markdown is scanned for it. Findings:\n{}",
+         docs/history.md means Markdown is scanned for it. A missing .claude/skills/regina or \
+         .claude/agents finding means that prefix's Markdown is not walked, and a md-link on \
+         .claude/skills/regina/x.md:7 means a link out of it resolves against the wrong \
+         directory; any finding under .claude/commands, .claude/c.md, .claude/skills/other or \
+         on .claude/skills/regina/x.rs means the rest of .claude/ is walked, or files other \
+         than Markdown under a prefix are. Findings:\n{}",
         render(&findings)
     );
 
     let messages = [
+        (".claude/skills/regina/x.md", 3, "missing.md does not exist"),
         ("src/a.rs", 10, "notes/src/missing.rs.md does not exist"),
         (
             "src/a.rs",
@@ -438,6 +467,61 @@ fn repo_mode_reports_exactly_the_planted_findings() {
             "message wording at {path}:{line} differs from the documented rule text"
         );
     }
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+/// No `markdown_prefixes` walk starts through a symlink. In root A, `.claude/skills/regina/` is
+/// real and `.claude/agents` links to a directory outside the root: only the real file's md-link
+/// is reported, which is the positive control. In root B, `.claude/skills` is itself the link,
+/// so nothing at all is reported. The symlinks are created at run time.
+#[test]
+fn repo_mode_never_follows_a_symlinked_markdown_prefix() {
+    let scratch = scratch_dir("prefix-symlink");
+    let cfg = WalkConfig::repo_default();
+    let broken = "[m](missing.md)\n";
+
+    let root_a = scratch.join("root-a");
+    write_file(&root_a.join(".claude/skills/regina/w.md"), broken);
+    let outside_a = scratch.join("outside-a/agents");
+    write_file(&outside_a.join("x.md"), broken);
+    std::os::unix::fs::symlink(&outside_a, root_a.join(".claude/agents"))
+        .expect("cannot create the .claude/agents symlink fixture");
+
+    let findings_a = check_root(&root_a, &cfg);
+    let got_a: Vec<(String, usize, String)> = findings_a
+        .iter()
+        .map(|f| (f.path.clone(), f.line, f.rule.id().to_string()))
+        .collect();
+    assert_eq!(
+        got_a,
+        vec![(
+            ".claude/skills/regina/w.md".to_string(),
+            1,
+            "md-link".to_string()
+        )],
+        "root A: want only the md-link in the real .claude/skills/regina/w.md. With it missing, \
+         the prefix is not walked at all, so the symlink case below proves nothing; with a \
+         .claude/agents/x.md finding, the walk followed the .claude/agents symlink. Findings:\n{}",
+        render(&findings_a)
+    );
+
+    let root_b = scratch.join("root-b");
+    fs::create_dir_all(root_b.join(".claude"))
+        .unwrap_or_else(|e| panic!("cannot create {}: {e}", root_b.display()));
+    let outside_b = scratch.join("outside-b/skills");
+    write_file(&outside_b.join("regina/y.md"), broken);
+    std::os::unix::fs::symlink(&outside_b, root_b.join(".claude/skills"))
+        .expect("cannot create the .claude/skills symlink fixture");
+
+    let findings_b = check_root(&root_b, &cfg);
+    assert!(
+        findings_b.is_empty(),
+        "root B: .claude/skills is a symlink, so .claude/skills/regina/ is reached only through \
+         it and must not be walked; a .claude/skills/regina/y.md finding means a prefix \
+         component's symlink was followed. Findings:\n{}",
+        render(&findings_b)
+    );
 
     let _ = fs::remove_dir_all(&scratch);
 }

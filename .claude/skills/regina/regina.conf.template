@@ -23,7 +23,7 @@ flow = @ORIGIN@/.claude/skills/regina/flow.yaml
 # Regina starts it inside nix develop, where gates.sh runs its gates directly.
 gate-implementation = ./gates.sh
 # Prettier, the Markdown rules and doc-lint's checkout-wide rules, each run whatever the last gave.
-gate-documentation = s=0; prettier --check "**/*.md" || s=1; bazel test --color=no --curses=no --test_output=errors //tools/lint:markdown || s=1; bazel run --color=no --curses=no //tools/doc-lint:doc_lint -- --root "$PWD" || s=1; exit $s
+gate-documentation = s=0; prettier --check "**/*.md" || s=1; prettier --check --ignore-path .gitignore ".claude/skills/regina/**/*.md" ".claude/agents/**/*.md" || s=1; bazel test --color=no --curses=no --test_output=errors //tools/lint:markdown || s=1; bazel run --color=no --curses=no //tools/doc-lint:doc_lint -- --root "$PWD" || s=1; exit $s
 
 [worker wolf linux]
 host = mugatu
@@ -39,4 +39,4 @@ profile = host
 # A cold image build after a flake change plus a cold gate; README.md has the measurements.
 timeout = 3600
 # The same checks without Bazel: every Markdown file git knows of, and doc-lint through Cargo.
-gate-documentation = s=0; prettier --check "**/*.md" || s=1; ./tools/lint/markdown_all.sh || s=1; cargo run --quiet --manifest-path tools/doc-lint/Cargo.toml -- --root . || s=1; exit $s
+gate-documentation = s=0; prettier --check "**/*.md" || s=1; prettier --check --ignore-path .gitignore ".claude/skills/regina/**/*.md" ".claude/agents/**/*.md" || s=1; ./tools/lint/markdown_all.sh || s=1; cargo run --quiet --manifest-path tools/doc-lint/Cargo.toml -- --root . || s=1; exit $s

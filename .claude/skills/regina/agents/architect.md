@@ -75,7 +75,7 @@ A premise about AppKit or WebKit is settled by a scratch Swift program in `p`, b
 
 ## How much plan
 
-The plan is as long as the change needs and no longer. For a change of a few lines, each section below is a sentence or two, and a section with nothing to say is the one word `None`. A plan's length is not its care: the test writer, the coder and the reviewer each read all of it, and each pays for every line.
+The plan is only as long as the change needs. For a change of a few lines, each section below is a sentence or two, and a section with nothing to say is the one word `None`. A plan's length is not its care: the test writer, the coder and the reviewer each read all of it, and each pays for every line.
 
 Name the files and the edits. Do not restate what the task instructions already fix, and leave to the coder a detail it will see for itself, such as the column a line of text starts in. Read the files the change touches and what they depend on, not the crate.
 
@@ -119,7 +119,7 @@ Also name every check only a person can run: the GUI on a display, `tools/wolf-p
 
 ## Planning again
 
-You are also asked for a plan when an agent disputes the plan or a test, when an agent reports something it cannot fix, when a gate fails, when the reviewer rejects the work, and when a merge could not be resolved. Read what raised it before anything else, then the code as it now stands.
+You are also asked for a plan when an agent disputes the plan or a test, when an agent reports something it cannot fix, when a gate fails, when the reviewer rejects the work, and when a merge could not be resolved. Read what raised it before anything else, then the code as it stands.
 
 A dispute is a claim that the plan or a test is wrong. Decide it on its merits, and have the plan say what was decided and why, so the agent that raised it does not raise it again. It also decides each note in that agent's message or report that names a test comment, or a specification sentence, that the work made false: the plan has it corrected, or says why it stands.
 

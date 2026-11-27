@@ -237,6 +237,16 @@ sh_test(
     data = ["markdown_check.sh"] + glob(["testdata/**"]),
 )
 
+# git and bash 4+ come from the client PATH, not Bazel inputs: `external` keeps a cached pass
+# from hiding a change to them.
+sh_test(
+    name = "markdown_all_test",
+    srcs = ["markdown_all_test.sh"],
+    data = ["markdown_all.sh"],
+    env_inherit = ["PATH"],
+    tags = ["external"],
+)
+
 # ---- wolf-core dependencies ----
 
 sh_test(
@@ -344,6 +354,7 @@ test_suite(
         ":comments",
         ":dev_shell_test",
         ":markdown",
+        ":markdown_all_test",
         ":markdown_check_test",
         ":regina_run_clean_test",
         ":rustfmt_core",

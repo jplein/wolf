@@ -131,13 +131,18 @@ pub fn language_for(path: &Path) -> Option<Language> {
     }
 }
 
-/// Which directories and path prefixes a walk skips, and which references are ignored.
+/// Which directories and path prefixes a walk skips, which references are ignored, and which
+/// Markdown it walks all the same.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WalkConfig {
     /// Directory names skipped wherever they occur; a leading or trailing `*` is a wildcard.
     pub skip_dir_names: Vec<String>,
     /// Root-relative prefixes, ending in `/`, that are neither walked nor checked as references.
     pub skip_prefixes: Vec<String>,
+    /// Root-relative prefixes, ending in `/`, whose `.md` files the walk lists even inside a
+    /// skipped directory; it lists no other file of theirs. A prefix reached through a symlink is
+    /// never walked.
+    pub markdown_prefixes: Vec<String>,
 }
 
 impl WalkConfig {
@@ -160,9 +165,11 @@ impl WalkConfig {
             "tools/doc-lint/tests/fixtures/",
             "tools/lint/testdata/",
         ];
+        let markdown = [".claude/skills/regina/", ".claude/agents/"];
         WalkConfig {
             skip_dir_names: names.iter().map(|s| s.to_string()).collect(),
             skip_prefixes: prefixes.iter().map(|s| s.to_string()).collect(),
+            markdown_prefixes: markdown.iter().map(|s| s.to_string()).collect(),
         }
     }
 

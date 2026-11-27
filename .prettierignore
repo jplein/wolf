@@ -6,8 +6,8 @@ target/
 bazel-*/
 node_modules/
 
-# Orchestration scratch, whose dirty files must never fail the Linux gate, and the regina harness,
-# committed and formatted by hand (.claude/skills/regina/README.md).
+# Orchestration scratch, whose dirty files must never fail the Linux gate. The regina skill's and
+# .claude/agents/ Markdown gates through gates.sh's prettier-claude step instead.
 .claude/
 
 # Formatted by the workflow it describes; notes/feat-list.md, which that workflow writes, stays in.

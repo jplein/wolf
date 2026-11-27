@@ -25,6 +25,9 @@ filegroup(
             "tools/*.md",
             "tools/wolf-pointer-inject/**/*.md",
             "resources/*.md",
+            # The rest of .claude/ is scratch and Claude Code's own files, so it stays out.
+            ".claude/skills/regina/**/*.md",
+            ".claude/agents/**/*.md",
         ],
         exclude = ["CLAUDE.md"],
         allow_empty = True,

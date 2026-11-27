@@ -5,10 +5,37 @@ use std::path::Path;
 
 use crate::WalkConfig;
 
-/// Every regular file under `root`, root-relative with `/` separators, sorted.
+/// Every regular file under `root`, then every `.md` file under each of `cfg.markdown_prefixes`,
+/// root-relative with `/` separators, sorted and deduplicated.
 pub(crate) fn walk(root: &Path, cfg: &WalkConfig) -> Vec<String> {
     let mut out = Vec::new();
-    let mut stack = vec![String::new()];
+    walk_from(root, String::new(), cfg, false, &mut out);
+    for prefix in &cfg.markdown_prefixes {
+        let rel_dir = prefix.trim_end_matches('/');
+        if is_real_dir(root, rel_dir) {
+            walk_from(root, rel_dir.to_string(), cfg, true, &mut out);
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Whether every component of `rel_dir` under `root` is a directory, none of them a symlink.
+fn is_real_dir(root: &Path, rel_dir: &str) -> bool {
+    let mut path = root.to_path_buf();
+    for component in rel_dir.split('/') {
+        path.push(component);
+        match fs::symlink_metadata(&path) {
+            Ok(meta) if meta.file_type().is_dir() => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
+fn walk_from(root: &Path, start: String, cfg: &WalkConfig, md_only: bool, out: &mut Vec<String>) {
+    let mut stack = vec![start];
     while let Some(rel_dir) = stack.pop() {
         let Ok(entries) = fs::read_dir(root.join(&rel_dir)) else {
             continue;
@@ -27,13 +54,14 @@ pub(crate) fn walk(root: &Path, cfg: &WalkConfig) -> Vec<String> {
                 if !skips_name(cfg, &name) && !cfg.skips_prefix(&format!("{rel}/")) {
                     stack.push(rel);
                 }
-            } else if kind.is_file() && !cfg.skips_prefix(&rel) {
+            } else if kind.is_file()
+                && !cfg.skips_prefix(&rel)
+                && (!md_only || name.ends_with(".md"))
+            {
                 out.push(rel);
             }
         }
     }
-    out.sort();
-    out
 }
 
 fn skips_name(cfg: &WalkConfig, name: &str) -> bool {
